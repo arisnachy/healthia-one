@@ -94,7 +94,8 @@ if (!window.__HEALTHIA_PROVIDER_INTEGRATIONS__) {
     }
 
     document.addEventListener("click", event => {
-      const target = event.target.closest('[data-open="devices"], #refreshDevices, #demoDeviceSync');
+      const element = event.target instanceof Element ? event.target : null;
+      const target = element?.closest('[data-open="devices"], #refreshDevices, #demoDeviceSync');
       if (target) setTimeout(() => { observeDeviceRoot(); renderCatalog(); }, 500);
     });
 
