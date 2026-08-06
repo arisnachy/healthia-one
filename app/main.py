@@ -10,12 +10,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from healthia_one.config import settings
-from healthia_one.continuity import (
-    build_timeline,
-    condition_pack_summary,
-    consultation_brief,
-    medication_summary,
-)
+from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
+from healthia_one.control import export_patient_state
 from healthia_one.documents import build_document, document_index
 from healthia_one.family import family_summary
 from healthia_one.models import (
@@ -26,6 +22,9 @@ from healthia_one.models import (
     HealthGoal,
     MedicationCheckIn,
     MedicationPlan,
+    MuteRuleRequest,
+    PatientConsent,
+    SnoozeRequest,
     VitalRecord,
     WeightRecord,
 )
@@ -53,7 +52,7 @@ async def lifespan(_: FastAPI):
             await background_task
 
 
-app = FastAPI(title="HealthIA ONE", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="HealthIA ONE", version="0.4.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 
 
@@ -90,10 +89,15 @@ async def readiness() -> dict:
             "appointments",
             "consultation_brief",
             "condition_packs",
+            "patient_consent",
+            "quiet_hours",
+            "snooze_and_mute",
+            "audit_log",
+            "patient_export",
         ],
         "truth_boundary": (
-            "Patient continuity demo using synthetic data. It does not diagnose, prescribe, change "
-            "medication, or replace emergency and professional care."
+            "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
+            "or replace emergency and professional care."
         ),
     }
 
@@ -108,13 +112,16 @@ async def bootstrap() -> dict:
     payload["medication_summary"] = medication_summary(state)
     payload["condition_packs"] = condition_pack_summary(state)
     payload["consultation_brief"] = consultation_brief(state)
+    payload["audit_summary"] = {
+        "count": len(state.audit_events),
+        "latest": [item.model_dump(mode="json") for item in state.audit_events[-20:]],
+    }
     return payload
 
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest) -> dict:
-    response = await service.add_patient_message(request.message)
-    return response.model_dump(mode="json")
+    return (await service.add_patient_message(request.message)).model_dump(mode="json")
 
 
 @app.post("/api/vitals")
@@ -233,6 +240,45 @@ async def add_goal(goal: HealthGoal) -> dict:
     return (await service.add_goal(goal)).model_dump(mode="json")
 
 
+@app.get("/api/consent")
+async def get_consent() -> dict:
+    return (await service.snapshot()).consent.model_dump(mode="json")
+
+
+@app.put("/api/consent")
+async def update_consent(consent: PatientConsent) -> dict:
+    return (await service.update_consent(consent)).model_dump(mode="json")
+
+
+@app.post("/api/consent/snooze")
+async def snooze(request: SnoozeRequest) -> dict:
+    until = await service.snooze(request.hours)
+    return {"snoozed_until": until.isoformat(), "hours": request.hours}
+
+
+@app.post("/api/consent/mute")
+async def mute_rule(request: MuteRuleRequest) -> dict:
+    consent = await service.mute_rule(request.prefix)
+    return consent.model_dump(mode="json")
+
+
+@app.get("/api/audit")
+async def audit_log(limit: int = 100) -> dict:
+    limit = min(max(limit, 1), 500)
+    state = await service.snapshot()
+    events = state.audit_events[-limit:]
+    return {"count": len(state.audit_events), "events": [item.model_dump(mode="json") for item in reversed(events)]}
+
+
+@app.get("/api/export")
+async def patient_export() -> JSONResponse:
+    payload = export_patient_state(await service.snapshot())
+    return JSONResponse(
+        content=payload,
+        headers={"Content-Disposition": "attachment; filename=healthia-one-patient-export.json"},
+    )
+
+
 @app.post("/api/results/upload")
 async def upload_result(file: UploadFile = File(...)) -> dict:
     content = await file.read(settings.max_upload_bytes + 1)
@@ -244,12 +290,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=422, detail=f"No se pudo interpretar el archivo: {exc}") from exc
     result.explanation = explain_result(result)
     result.explained = result.status == "parsed"
-    async with service._mutation_lock:
-        state = await service.store.load()
-        state.results.append(result)
-        await service.store.save(state)
-    await service.broker.publish({"type": "state", "section": "results"})
-    return result.model_dump(mode="json")
+    return (await service._append_and_publish("results", result, "results", action="upload_result")).model_dump(mode="json")
 
 
 @app.post("/api/demo/tick")
