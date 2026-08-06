@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from healthia_one.integrations import health_data_provider_catalog
 from healthia_one.models import (
     ActivityRecord,
     DeviceMetric,
@@ -137,6 +138,7 @@ def device_summary(state: PatientState) -> dict[str, Any]:
         "record_count": len(state.device_observations),
         "latest_by_metric": latest_by_metric,
         "supported_metrics": [item.value for item in DeviceMetric],
+        "provider_catalog": health_data_provider_catalog(),
         "truth_boundary": (
             "Health Connect is a consent-based synchronization layer. Availability and freshness depend on the "
             "device or source app. HealthIA does not infer that a missing metric was measured."
