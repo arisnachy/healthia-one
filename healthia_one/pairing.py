@@ -40,9 +40,9 @@ class DevicePairingManager:
         now = utc_now()
         expired = [code for code, session in self._sessions.items() if session.expires_at <= now]
         for code in expired:
-            session = self._sessions.pop(code)
-            if session.token_hash:
-                self._tokens.pop(session.token_hash, None)
+            # Pairing codes expire quickly, but a successfully claimed device token
+            # remains valid for the lifetime of this local server process.
+            self._sessions.pop(code)
 
     def create(self) -> dict:
         self._cleanup()
