@@ -46,7 +46,7 @@ try {
         Remove-Item Env:GOOGLE_API_KEY -ErrorAction SilentlyContinue
 
         if (-not $SkipApiCheck) {
-            Write-Host "Verificando SDK, clave, modelo e Interactions API…" -ForegroundColor DarkCyan
+            Write-Host "Verificando SDK, clave, cuota, modelo e Interactions API…" -ForegroundColor DarkCyan
             $probe = @'
 from importlib.metadata import version
 from google import genai
@@ -59,10 +59,11 @@ if major < 2:
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 model_name = os.environ["HEALTHIA_MODEL"]
-model = client.models.get(model=model_name)
 interaction = client.interactions.create(
     model=model_name,
-    input="Responde exactamente con la palabra OK.",
+    input="Responde únicamente con HEALTHIA_OK",
+    system_instruction="Prueba técnica mínima. No añadas ninguna otra palabra.",
+    store=False,
 )
 text = str(getattr(interaction, "output_text", "") or "").strip()
 if not text:
@@ -70,14 +71,14 @@ if not text:
     text = next((str(getattr(item, "text", "") or "").strip() for item in reversed(outputs) if str(getattr(item, "text", "") or "").strip()), "")
 if not text:
     raise RuntimeError("Gemini respondió sin texto utilizable")
-print(f"Google AI listo: {getattr(model, 'name', model_name)} · google-genai {sdk_version} · respuesta {text[:24]}")
+print(f"Google AI listo: {model_name} · google-genai {sdk_version} · solicitud real completada · store=false")
 '@
             & $venvPython -c $probe
             if ($LASTEXITCODE -ne 0) {
-                throw 'Google AI no superó la verificación. Actualiza dependencias con: .\.venv\Scripts\python.exe -m pip install -e ".[test]"'
+                throw 'Google AI no superó la verificación real. Revisa clave, cuota y modelo; luego actualiza con: .\.venv\Scripts\python.exe -m pip install -e ".[test]"'
             }
         }
-        Write-Host "HealthIA ONE · Gemini activo en el chat principal" -ForegroundColor Cyan
+        Write-Host "HealthIA ONE · Gemini activo en el chat principal · store=false" -ForegroundColor Cyan
     }
     else {
         $env:HEALTHIA_LLM_BACKEND = "mock"

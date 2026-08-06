@@ -3,6 +3,9 @@ if (!window.__HEALTHIA_RUNTIME_INTEGRATIONS__) {
 
   (() => {
     const $ = selector => document.querySelector(selector);
+    const APK_WORKFLOW_URL = "https://github.com/arisnachy/healthia-one/actions/workflows/android-bridge.yml";
+    const ANDROID_GUIDE_URL = "https://github.com/arisnachy/healthia-one/blob/main/docs/CONNECT_ANDROID.md";
+    const ANDROID_SOURCE_URL = "https://github.com/arisnachy/healthia-one/tree/main/android-health-bridge";
 
     function toast(message) {
       const node = $("#toast");
@@ -10,7 +13,7 @@ if (!window.__HEALTHIA_RUNTIME_INTEGRATIONS__) {
       node.textContent = message;
       node.hidden = false;
       clearTimeout(toast.timer);
-      toast.timer = setTimeout(() => { node.hidden = true; }, 3600);
+      toast.timer = setTimeout(() => { node.hidden = true; }, 4200);
     }
 
     async function json(path, options = {}) {
@@ -21,29 +24,80 @@ if (!window.__HEALTHIA_RUNTIME_INTEGRATIONS__) {
       return payload;
     }
 
-    async function verifyGoogleAi() {
+    function friendlyAiError(value) {
+      const text = String(value || "");
+      if (/429|resource_exhausted|quota/i.test(text)) return "La cuota de Google AI está agotada por ahora.";
+      if (/401|403|api.?key|permission|unauth/i.test(text)) return "La clave de Google AI es inválida o no tiene acceso al modelo.";
+      if (/not_configured|falta configurar/i.test(text)) return "Google AI no está configurado en este proceso.";
+      if (/model|not found|404/i.test(text)) return "El modelo configurado no está disponible para esta clave.";
+      return "Google AI no respondió. Revisa el detalle en la terminal.";
+    }
+
+    function setAiState(label, text, state, title) {
+      if (!label) return;
+      label.textContent = text;
+      label.dataset.aiState = state;
+      label.title = title || text;
+    }
+
+    async function loadGoogleAiState() {
       const label = $("#runtimeLabel");
       if (!label) return;
       try {
         const readiness = await json("/api/readiness");
         if (readiness.llm_backend !== "gemini_api") {
-          label.textContent = "Modo local · sin API";
+          setAiState(label, "Modo local · sin API", "off", "Iniciado con -Mock. Haz clic para revisar el estado.");
           return;
         }
         if (!readiness.ai_ready) {
-          label.textContent = "Gemini · falta API key";
-          label.title = "Inicia con deployment/run-local-secure.ps1 y proporciona tu clave.";
+          setAiState(label, "Gemini · falta API key", "error", "Inicia con deployment/run-local-secure.ps1 y proporciona la clave mediante entrada protegida.");
           return;
         }
-        label.textContent = `${readiness.model} · verificando Google AI…`;
+        setAiState(
+          label,
+          `${readiness.model} · clave detectada`,
+          "configured",
+          "El lanzador verifica una solicitud real al iniciar. Haz clic aquí para repetir la prueba.",
+        );
+      } catch (error) {
+        setAiState(label, "Gemini · sin estado", "error", error.message);
+      }
+    }
+
+    async function verifyGoogleAi(announce = true) {
+      const label = $("#runtimeLabel");
+      if (!label) return;
+      setAiState(label, "Gemini · probando…", "checking", "Ejecutando una solicitud mínima real.");
+      try {
         const result = await json("/api/ai/test", {method: "POST"});
         if (!result.ok) throw new Error(result.detail || result.status || "No disponible");
-        label.textContent = `${result.model || readiness.model} · Google AI conectado`;
-        label.title = result.sdk_version ? `google-genai ${result.sdk_version}` : "Google AI listo";
+        setAiState(
+          label,
+          `${result.model} · Google AI activo`,
+          "ready",
+          `Solicitud real completada · google-genai ${result.sdk_version || "—"} · store=false`,
+        );
+        if (announce) toast("Google AI respondió a una solicitud real. El chat está usando el modelo configurado.");
       } catch (error) {
-        label.textContent = "Gemini · conexión pendiente";
-        label.title = error.message;
+        setAiState(label, "Gemini · revisar", "error", error.message);
+        if (announce) toast(friendlyAiError(error.message));
       }
+    }
+
+    function setupGoogleAiControl() {
+      const label = $("#runtimeLabel");
+      if (!label) return;
+      label.classList.add("runtime-ai-control");
+      label.setAttribute("role", "button");
+      label.setAttribute("tabindex", "0");
+      label.setAttribute("aria-label", "Probar conexión real con Google AI");
+      label.addEventListener("click", () => verifyGoogleAi(true));
+      label.addEventListener("keydown", event => {
+        if (!["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        verifyGoogleAi(true);
+      });
+      loadGoogleAiState();
     }
 
     function setupRailReopen() {
@@ -51,13 +105,21 @@ if (!window.__HEALTHIA_RUNTIME_INTEGRATIONS__) {
       const reopen = $("#expandLeft");
       const collapse = $("#collapseLeft");
       if (!shell || !reopen) return;
+      reopen.textContent = "›";
       const sync = () => {
         const collapsed = shell.classList.contains("left-collapsed");
         reopen.setAttribute("aria-expanded", String(!collapsed));
         reopen.title = collapsed ? "Abrir barra lateral" : "Barra lateral abierta";
+        reopen.setAttribute("aria-label", collapsed ? "Abrir barra lateral" : "Barra lateral abierta");
       };
       reopen.addEventListener("click", () => requestAnimationFrame(sync));
       collapse?.addEventListener("click", () => requestAnimationFrame(sync));
+      document.addEventListener("keydown", event => {
+        if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "b") return;
+        event.preventDefault();
+        shell.classList.toggle("left-collapsed");
+        sync();
+      });
       sync();
     }
 
@@ -119,10 +181,60 @@ if (!window.__HEALTHIA_RUNTIME_INTEGRATIONS__) {
       });
     }
 
+    function enhanceDeviceConnection() {
+      const connect = $("#connectDevice");
+      if (connect) {
+        connect.textContent = "Conectar teléfono o reloj";
+        connect.title = "Instalar el puente Android, generar un código y autorizar Health Connect";
+      }
+
+      const dialog = $("#deviceConnectDialog");
+      if (!dialog || dialog.dataset.connectionEnhanced === "true") return Boolean(dialog);
+      dialog.dataset.connectionEnhanced = "true";
+
+      const actions = dialog.querySelector(".pairing-actions");
+      if (actions) {
+        const existing = actions.querySelector("a");
+        if (existing) {
+          existing.href = APK_WORKFLOW_URL;
+          existing.textContent = "Descargar APK de prueba ↗";
+        }
+        actions.insertAdjacentHTML(
+          "beforeend",
+          `<a href="${ANDROID_GUIDE_URL}" target="_blank" rel="noreferrer">Guía paso a paso ↗</a>` +
+          `<a href="${ANDROID_SOURCE_URL}" target="_blank" rel="noreferrer">Código Android ↗</a>`,
+        );
+      }
+
+      const firstStep = dialog.querySelector(".device-connect-steps article:first-child p");
+      if (firstStep) {
+        firstStep.textContent = "Abre Descargar APK de prueba, entra en la ejecución más reciente y baja el artefacto HealthIA-Bridge-debug.";
+      }
+
+      const panel = dialog.querySelector(".pairing-panel");
+      if (panel && !dialog.querySelector(".lan-help")) {
+        panel.insertAdjacentHTML(
+          "beforebegin",
+          '<div class="lan-help"><strong>Teléfono y computadora en la misma Wi‑Fi</strong><span>El teléfono no puede usar 127.0.0.1. Usa la dirección LAN que imprime el lanzador, por ejemplo http://192.168.1.25:8000.</span></div>',
+        );
+      }
+      return true;
+    }
+
+    function setupDeviceConnection() {
+      enhanceDeviceConnection();
+      [120, 350, 800, 1600].forEach(delay => setTimeout(enhanceDeviceConnection, delay));
+      document.addEventListener("click", event => {
+        const target = event.target.closest?.('[data-open="devices"], #connectDevice');
+        if (target) requestAnimationFrame(() => setTimeout(enhanceDeviceConnection, 0));
+      });
+    }
+
     function init() {
       setupRailReopen();
       setupVoiceInput();
-      verifyGoogleAi();
+      setupGoogleAiControl();
+      setupDeviceConnection();
     }
 
     if (document.readyState === "loading") {

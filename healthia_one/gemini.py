@@ -49,12 +49,9 @@ class GeminiResponder:
 
     @staticmethod
     def _interaction_text(interaction: Any) -> str:
-        """Extract text across current and early google-genai 2.x interaction shapes."""
-
         direct = getattr(interaction, "output_text", "")
         if isinstance(direct, str) and direct.strip():
             return direct.strip()
-
         outputs = getattr(interaction, "outputs", None) or []
         for output in reversed(outputs):
             text = getattr(output, "text", "")
@@ -122,7 +119,6 @@ class GeminiResponder:
         }
 
     def _generate(self, state: PatientState, patient_text: str, draft: ChatResponse) -> str:
-        client = self._get_client()
         payload = {
             "patient_message": patient_text,
             "authorized_context": self.authorized_context(state),
@@ -133,10 +129,11 @@ class GeminiResponder:
                 "action_target": draft.message.metadata.get("action_target"),
             },
         }
-        interaction = client.interactions.create(
+        interaction = self._get_client().interactions.create(
             model=self.settings.model,
             input=json.dumps(payload, ensure_ascii=False, default=str),
             system_instruction=SYSTEM_INSTRUCTION,
+            store=False,
         )
         text = self._interaction_text(interaction)
         if not text:
@@ -155,15 +152,11 @@ class GeminiResponder:
                 asyncio.to_thread(self._generate, state, patient_text, draft),
                 timeout=self.settings.llm_timeout_seconds,
             )
-        except Exception as exc:  # deterministic fallback is intentional
+        except Exception as exc:
             self.last_status = "fallback"
-            self.last_error = f"{type(exc).__name__}: {exc}"[:240]
+            self.last_error = f"{type(exc).__name__}: {exc}"[:500]
             draft.message.metadata.update(
-                {
-                    "llm_backend": "gemini_api",
-                    "llm_status": "fallback",
-                    "model": self.settings.model,
-                }
+                {"llm_backend": "gemini_api", "llm_status": "fallback", "model": self.settings.model}
             )
             return draft
 
@@ -174,22 +167,41 @@ class GeminiResponder:
                 "llm_backend": "gemini_api",
                 "llm_status": "completed",
                 "model": self.settings.model,
+                "store": False,
             }
         )
         self.last_status = "completed"
         self.last_error = ""
         return draft
 
+    def _live_probe(self) -> str:
+        interaction = self._get_client().interactions.create(
+            model=self.settings.model,
+            input="Responde únicamente con HEALTHIA_OK",
+            system_instruction="Prueba técnica mínima. No añadas ninguna otra palabra.",
+            store=False,
+        )
+        text = self._interaction_text(interaction)
+        if not text:
+            raise RuntimeError("Gemini respondió sin texto utilizable")
+        return text
+
     async def probe(self) -> dict[str, str | bool]:
         if self.settings.llm_backend != "gemini_api" or not self.settings.adk_ready:
-            return {"ok": False, "status": "not_configured", "model": self.settings.model}
+            return {
+                "ok": False,
+                "status": "not_configured",
+                "model": self.settings.model,
+                "live_request": False,
+                "detail": "Falta configurar GEMINI_API_KEY en el proceso local.",
+            }
         try:
             client = self._get_client()
             if not hasattr(client, "interactions"):
                 raise RuntimeError("google-genai 2.x con Interactions API no está instalado")
-            model = await asyncio.wait_for(
-                asyncio.to_thread(client.models.get, model=self.settings.model),
-                timeout=min(self.settings.llm_timeout_seconds, 20),
+            response = await asyncio.wait_for(
+                asyncio.to_thread(self._live_probe),
+                timeout=min(self.settings.llm_timeout_seconds, 30),
             )
             try:
                 sdk_version = version("google-genai")
@@ -197,11 +209,12 @@ class GeminiResponder:
                 sdk_version = "unknown"
         except Exception as exc:
             self.last_status = "probe_failed"
-            self.last_error = f"{type(exc).__name__}: {exc}"[:240]
+            self.last_error = f"{type(exc).__name__}: {exc}"[:500]
             return {
                 "ok": False,
                 "status": "probe_failed",
                 "model": self.settings.model,
+                "live_request": True,
                 "detail": self.last_error,
             }
         self.last_status = "ready"
@@ -209,6 +222,9 @@ class GeminiResponder:
         return {
             "ok": True,
             "status": "ready",
-            "model": str(getattr(model, "name", self.settings.model)),
+            "model": self.settings.model,
             "sdk_version": sdk_version,
+            "live_request": True,
+            "response": response,
+            "store": False,
         }
