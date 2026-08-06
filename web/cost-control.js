@@ -63,6 +63,30 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
       return ({local: 'Local seguro', guarded: 'Prueba controlada', cloud_demo: 'Demo Cloud'})[value] || value || 'Desconocido';
     }
 
+    function renderRuntimeLabel() {
+      const label = $('#runtimeLabel');
+      if (!label || !status) return;
+      if (status.mode === 'local') {
+        label.textContent = 'Modo local · cero llamadas';
+        label.dataset.aiState = 'off';
+        label.title = 'La interfaz y los flujos deterministas funcionan sin consumir Google AI.';
+        return;
+      }
+      if (!status.api_key_configured) {
+        label.textContent = 'Gemini · falta clave';
+        label.dataset.aiState = 'error';
+        label.title = 'Reinicia con -GuardedAi y proporciona la clave mediante entrada protegida.';
+        return;
+      }
+      label.textContent = status.enabled
+        ? `${status.model} · IA controlada activa`
+        : `${status.model} · IA controlada apagada`;
+      label.dataset.aiState = status.enabled ? 'ready' : 'configured';
+      label.title = status.enabled
+        ? `Quedan ${status.requests_remaining} solicitudes antes del bloqueo automático.`
+        : 'La clave está cargada, pero el control de costos impide llamadas hasta que lo actives.';
+    }
+
     function render() {
       ensureUi();
       if (!status) return;
@@ -76,6 +100,7 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
           ? `IA activa · ${remaining} restantes`
           : `IA apagada · ${remaining} restantes`;
       pill.title = 'Abrir control de consumo de Google AI';
+      renderRuntimeLabel();
 
       $('#costMode').textContent = modeLabel(status.mode);
       $('#costUsed').textContent = `${status.requests_used || 0} / ${status.request_limit || 0}`;
