@@ -6,12 +6,17 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from healthia_one.config import Settings
+from healthia_one.continuity import evaluate_continuity
 from healthia_one.models import (
     ActivityRecord,
+    Appointment,
     ChatMessage,
     ClinicalDocument,
     FamilyCondition,
     FamilyMember,
+    HealthGoal,
+    MedicationCheckIn,
+    MedicationPlan,
     PatientState,
     VitalRecord,
     WeightRecord,
@@ -49,9 +54,7 @@ def seed_state() -> PatientState:
         WeightRecord(measured_at=now - timedelta(days=12), weight_kg=78.0),
         WeightRecord(measured_at=now - timedelta(days=3), weight_kg=80.4, note="Misma balanza"),
     ]
-    state.vitals = [
-        VitalRecord(measured_at=now - timedelta(days=5), systolic=148, diastolic=92, pulse=78),
-    ]
+    state.vitals = [VitalRecord(measured_at=now - timedelta(days=5), systolic=148, diastolic=92, pulse=78)]
     state.activity = [
         ActivityRecord(measured_at=now - timedelta(days=3), steps=2400, active_minutes=12),
         ActivityRecord(measured_at=now - timedelta(days=2), steps=1800, active_minutes=8),
@@ -91,13 +94,45 @@ def seed_state() -> PatientState:
             conditions=[FamilyCondition(name="Hipertensión arterial", age_at_diagnosis=39, confirmed=True)],
         ),
     ]
+    medication = MedicationPlan(
+        name="Losartán",
+        strength="50 mg",
+        route="oral",
+        schedule="cada 24 horas",
+        purpose="Control de presión arterial",
+        instructions="Seguir únicamente el esquema indicado por el profesional.",
+        prescribed_by="Profesional tratante (dato sintético)",
+    )
+    state.medication_plans = [medication]
+    state.medication_checkins = [
+        MedicationCheckIn(medication_id=medication.id, recorded_at=now - timedelta(days=2), status="taken"),
+        MedicationCheckIn(medication_id=medication.id, recorded_at=now - timedelta(days=1), status="taken"),
+    ]
+    state.appointments = [
+        Appointment(
+            title="Consulta de medicina familiar",
+            specialty="Medicina familiar",
+            scheduled_at=now + timedelta(hours=40),
+            location="Centro de salud sintético",
+            required_documents=["Resultados recientes", "Lista de medicamentos"],
+            questions=["¿Qué objetivo de presión debo seguir?"],
+        )
+    ]
+    state.goals = [
+        HealthGoal(
+            title="Completar serie de presión",
+            metric="mediciones válidas",
+            target="2 mediciones por sesión durante 3 días",
+            review_at=now + timedelta(days=4),
+        )
+    ]
     state.messages = [
         ChatMessage(
             role="assistant",
             author="KIRA Health",
             content=(
-                "Hola, Ana. Mantengo tus mediciones, documentos, historia familiar y misiones de salud "
-                "en una sola conversación. Solo vigilo las señales que autorizaste y te explicaré por qué intervengo."
+                "Hola, Ana. Mantengo tus mediciones, tratamiento registrado, citas, documentos, historia familiar "
+                "y misiones de salud en una sola conversación. Solo vigilo las señales que autorizaste."
             ),
         )
     ]
@@ -138,59 +173,55 @@ class HealthIAService:
         await self.broker.publish({"type": "message", "message": response.message.model_dump(mode="json")})
         return response
 
-    async def add_vital(self, vital: VitalRecord) -> VitalRecord:
+    async def _append_and_publish(self, collection: str, item, section: str):
         async with self._mutation_lock:
             state = await self.store.load()
-            state.vitals.append(vital)
-            state.vitals.sort(key=lambda item: item.measured_at)
+            getattr(state, collection).append(item)
             await self.store.save(state)
-        await self.broker.publish({"type": "state", "section": "vitals"})
-        return vital
+        await self.broker.publish({"type": "state", "section": section})
+        return item
+
+    async def add_vital(self, vital: VitalRecord) -> VitalRecord:
+        item = await self._append_and_publish("vitals", vital, "vitals")
+        return item
 
     async def add_weight(self, weight: WeightRecord) -> WeightRecord:
-        async with self._mutation_lock:
-            state = await self.store.load()
-            state.weights.append(weight)
-            state.weights.sort(key=lambda item: item.measured_at)
-            await self.store.save(state)
-        await self.broker.publish({"type": "state", "section": "weight"})
-        return weight
+        return await self._append_and_publish("weights", weight, "weight")
 
     async def add_activity(self, activity: ActivityRecord) -> ActivityRecord:
-        async with self._mutation_lock:
-            state = await self.store.load()
-            state.activity.append(activity)
-            state.activity.sort(key=lambda item: item.measured_at)
-            await self.store.save(state)
-        await self.broker.publish({"type": "state", "section": "activity"})
-        return activity
+        return await self._append_and_publish("activity", activity, "activity")
 
     async def add_family_member(self, member: FamilyMember) -> FamilyMember:
-        async with self._mutation_lock:
-            state = await self.store.load()
-            state.family_members.append(member)
-            await self.store.save(state)
-        await self.broker.publish({"type": "state", "section": "family"})
-        return member
+        return await self._append_and_publish("family_members", member, "family")
 
     async def add_document(self, document: ClinicalDocument) -> ClinicalDocument:
-        async with self._mutation_lock:
-            state = await self.store.load()
-            state.documents.append(document)
-            state.documents.sort(key=lambda item: item.uploaded_at)
-            await self.store.save(state)
-        await self.broker.publish({"type": "state", "section": "documents"})
-        return document
+        return await self._append_and_publish("documents", document, "documents")
 
     async def get_document(self, document_id: str) -> ClinicalDocument | None:
         state = await self.store.load()
         return next((item for item in state.documents if item.id == document_id), None)
+
+    async def add_medication_plan(self, plan: MedicationPlan) -> MedicationPlan:
+        return await self._append_and_publish("medication_plans", plan, "medications")
+
+    async def add_medication_checkin(self, checkin: MedicationCheckIn) -> MedicationCheckIn:
+        state = await self.store.load()
+        if not any(item.id == checkin.medication_id for item in state.medication_plans):
+            raise ValueError("Medication plan not found")
+        return await self._append_and_publish("medication_checkins", checkin, "medications")
+
+    async def add_appointment(self, appointment: Appointment) -> Appointment:
+        return await self._append_and_publish("appointments", appointment, "appointments")
+
+    async def add_goal(self, goal: HealthGoal) -> HealthGoal:
+        return await self._append_and_publish("goals", goal, "goals")
 
     async def run_proactive_check(self) -> list[ChatMessage]:
         created: list[ChatMessage] = []
         async with self._mutation_lock:
             state = await self.store.load()
             findings = evaluate_state(state)
+            findings.extend(evaluate_continuity(state))
             for finding in findings:
                 if finding.key in state.emitted_rule_keys:
                     continue
@@ -226,5 +257,5 @@ class HealthIAService:
                 pass
             try:
                 await self.run_proactive_check()
-            except Exception as exc:  # pragma: no cover - runtime protection
+            except Exception as exc:  # pragma: no cover
                 await self.broker.publish({"type": "runtime_error", "message": str(exc)[:300]})
