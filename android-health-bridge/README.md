@@ -12,7 +12,7 @@ Android companion source for reading authorized records from Health Connect and 
 
 ## Obtain the test app
 
-Every verified GitHub Actions run builds the `HealthIA-Android-Bridge-debug` artifact. Download its `app-debug.apk` for an unsigned development installation, or open this folder in Android Studio and build the `app` module. The debug APK is for testing only; it is not a signed production release.
+Every verified Android bridge workflow run builds the `HealthIA-Bridge-debug` artifact. Download its `HealthIA-Bridge-debug.apk` for an unsigned development installation, or open this folder in Android Studio and build the `app` module. The debug APK is for testing only; it is not a signed production release.
 
 ## Connect a phone
 
