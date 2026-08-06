@@ -10,9 +10,25 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from healthia_one.config import settings
+from healthia_one.continuity import (
+    build_timeline,
+    condition_pack_summary,
+    consultation_brief,
+    medication_summary,
+)
 from healthia_one.documents import build_document, document_index
 from healthia_one.family import family_summary
-from healthia_one.models import ActivityRecord, ChatRequest, FamilyMember, VitalRecord, WeightRecord
+from healthia_one.models import (
+    ActivityRecord,
+    Appointment,
+    ChatRequest,
+    FamilyMember,
+    HealthGoal,
+    MedicationCheckIn,
+    MedicationPlan,
+    VitalRecord,
+    WeightRecord,
+)
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.service import HealthIAService
 
@@ -37,7 +53,7 @@ async def lifespan(_: FastAPI):
             await background_task
 
 
-app = FastAPI(title="HealthIA ONE", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="HealthIA ONE", version="0.3.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 
 
@@ -69,10 +85,15 @@ async def readiness() -> dict:
             "results",
             "family_genogram",
             "document_archive",
+            "unified_timeline",
+            "medication_checkins",
+            "appointments",
+            "consultation_brief",
+            "condition_packs",
         ],
         "truth_boundary": (
-            "Patient continuity demo using synthetic data. It does not diagnose, prescribe, or "
-            "replace emergency or professional care."
+            "Patient continuity demo using synthetic data. It does not diagnose, prescribe, change "
+            "medication, or replace emergency and professional care."
         ),
     }
 
@@ -83,6 +104,10 @@ async def bootstrap() -> dict:
     payload = state.model_dump(mode="json")
     payload["family_summary"] = family_summary(state)
     payload["document_index"] = document_index(state)
+    payload["timeline"] = build_timeline(state)
+    payload["medication_summary"] = medication_summary(state)
+    payload["condition_packs"] = condition_pack_summary(state)
+    payload["consultation_brief"] = consultation_brief(state)
     return payload
 
 
@@ -110,25 +135,18 @@ async def add_activity(activity: ActivityRecord) -> dict:
 @app.get("/api/family")
 async def get_family() -> dict:
     state = await service.snapshot()
-    return {
-        "members": [item.model_dump(mode="json") for item in state.family_members],
-        "summary": family_summary(state),
-    }
+    return {"members": [item.model_dump(mode="json") for item in state.family_members], "summary": family_summary(state)}
 
 
 @app.post("/api/family")
 async def add_family_member(member: FamilyMember) -> dict:
-    saved = await service.add_family_member(member)
-    return saved.model_dump(mode="json")
+    return (await service.add_family_member(member)).model_dump(mode="json")
 
 
 @app.get("/api/documents")
 async def list_documents() -> dict:
     state = await service.snapshot()
-    return {
-        "documents": [item.model_dump(mode="json") for item in state.documents],
-        "index": document_index(state),
-    }
+    return {"documents": [item.model_dump(mode="json") for item in state.documents], "index": document_index(state)}
 
 
 @app.post("/api/documents/upload")
@@ -150,12 +168,10 @@ async def upload_document(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
     destination = ROOT / document.storage_path
     destination.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(destination.write_bytes, content)
-    saved = await service.add_document(document)
-    return saved.model_dump(mode="json")
+    return (await service.add_document(document)).model_dump(mode="json")
 
 
 @app.get("/api/documents/{document_id}/download")
@@ -167,6 +183,54 @@ async def download_document(document_id: str) -> FileResponse:
     if ROOT.resolve() not in path.parents or not path.exists():
         raise HTTPException(status_code=404, detail="Archivo no disponible")
     return FileResponse(path, media_type=document.mime_type, filename=document.filename)
+
+
+@app.get("/api/timeline")
+async def timeline() -> dict:
+    state = await service.snapshot()
+    return {"events": build_timeline(state), "condition_packs": condition_pack_summary(state)}
+
+
+@app.get("/api/treatment")
+async def treatment() -> dict:
+    return medication_summary(await service.snapshot())
+
+
+@app.post("/api/treatment/plans")
+async def add_medication_plan(plan: MedicationPlan) -> dict:
+    return (await service.add_medication_plan(plan)).model_dump(mode="json")
+
+
+@app.post("/api/treatment/checkins")
+async def add_medication_checkin(checkin: MedicationCheckIn) -> dict:
+    try:
+        return (await service.add_medication_checkin(checkin)).model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/appointments")
+async def appointments() -> dict:
+    state = await service.snapshot()
+    return {
+        "appointments": [item.model_dump(mode="json") for item in state.appointments],
+        "consultation_brief": consultation_brief(state),
+    }
+
+
+@app.post("/api/appointments")
+async def add_appointment(appointment: Appointment) -> dict:
+    return (await service.add_appointment(appointment)).model_dump(mode="json")
+
+
+@app.get("/api/consultation-brief")
+async def get_consultation_brief(appointment_id: str | None = None) -> dict:
+    return consultation_brief(await service.snapshot(), appointment_id)
+
+
+@app.post("/api/goals")
+async def add_goal(goal: HealthGoal) -> dict:
+    return (await service.add_goal(goal)).model_dump(mode="json")
 
 
 @app.post("/api/results/upload")
@@ -205,5 +269,5 @@ async def events() -> StreamingResponse:
 
 
 @app.exception_handler(Exception)
-async def unhandled(_, exc: Exception) -> JSONResponse:  # pragma: no cover - final boundary
+async def unhandled(_, exc: Exception) -> JSONResponse:  # pragma: no cover
     return JSONResponse(status_code=500, content={"detail": "Error interno auditable", "type": type(exc).__name__})

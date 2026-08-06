@@ -77,6 +77,8 @@ class PatientProfile(BaseModel):
             "missions",
             "family_history",
             "documents",
+            "medications",
+            "appointments",
         ]
     )
 
@@ -123,6 +125,61 @@ class ClinicalDocument(BaseModel):
     source: SourceRef = Field(
         default_factory=lambda: SourceRef(source_type="patient_upload", source_id="documents")
     )
+
+
+class MedicationPlan(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("med"))
+    patient_id: str = "patient_demo"
+    name: str = Field(min_length=2, max_length=160)
+    strength: str = Field(default="", max_length=80)
+    route: str = Field(default="oral", max_length=60)
+    schedule: str = Field(default="", max_length=160)
+    purpose: str = Field(default="", max_length=220)
+    instructions: str = Field(default="", max_length=500)
+    prescribed_by: str = Field(default="", max_length=160)
+    active: bool = True
+    source: SourceRef = Field(
+        default_factory=lambda: SourceRef(source_type="patient_report", source_id="medication_form")
+    )
+
+
+class MedicationCheckIn(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("dose"))
+    patient_id: str = "patient_demo"
+    medication_id: str
+    recorded_at: datetime = Field(default_factory=utc_now)
+    status: Literal["taken", "late", "skipped", "unknown"]
+    note: str = Field(default="", max_length=500)
+    source: SourceRef = Field(
+        default_factory=lambda: SourceRef(source_type="patient_entry", source_id="medication_checkin")
+    )
+
+
+class Appointment(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("appt"))
+    patient_id: str = "patient_demo"
+    title: str = Field(min_length=2, max_length=180)
+    specialty: str = Field(default="", max_length=120)
+    scheduled_at: datetime
+    location: str = Field(default="", max_length=220)
+    status: Literal["scheduled", "completed", "cancelled"] = "scheduled"
+    required_documents: list[str] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=800)
+    source: SourceRef = Field(
+        default_factory=lambda: SourceRef(source_type="patient_entry", source_id="appointment_form")
+    )
+
+
+class HealthGoal(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("goal"))
+    patient_id: str = "patient_demo"
+    title: str = Field(min_length=2, max_length=180)
+    metric: str = Field(default="", max_length=100)
+    target: str = Field(default="", max_length=120)
+    status: Literal["active", "paused", "completed"] = "active"
+    review_at: datetime | None = None
+    notes: str = Field(default="", max_length=500)
 
 
 class VitalRecord(BaseModel):
@@ -240,6 +297,10 @@ class PatientState(BaseModel):
     results: list[HealthResult] = Field(default_factory=list)
     family_members: list[FamilyMember] = Field(default_factory=list)
     documents: list[ClinicalDocument] = Field(default_factory=list)
+    medication_plans: list[MedicationPlan] = Field(default_factory=list)
+    medication_checkins: list[MedicationCheckIn] = Field(default_factory=list)
+    appointments: list[Appointment] = Field(default_factory=list)
+    goals: list[HealthGoal] = Field(default_factory=list)
     missions: list[HealthMission] = Field(default_factory=list)
     messages: list[ChatMessage] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)
