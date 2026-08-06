@@ -141,6 +141,17 @@ class GeminiResponder:
         return text
 
     async def enhance(self, state: PatientState, patient_text: str, draft: ChatResponse) -> ChatResponse:
+        if draft.message.metadata.get("clinical_interview"):
+            self.last_status = "structured_clinical_workflow"
+            self.last_error = ""
+            draft.message.metadata.update(
+                {
+                    "llm_backend": self.settings.llm_backend,
+                    "llm_status": "structured_workflow",
+                    "model": self.settings.model,
+                }
+            )
+            return draft
         if self.settings.llm_backend != "gemini_api" or not self.settings.adk_ready:
             self.last_status = "not_configured"
             return draft

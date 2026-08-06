@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     data_path: Path = Path(".healthia-one/state.json")
     proactive_interval_seconds: int = 20
     max_upload_bytes: int = 5 * 1024 * 1024
-    llm_timeout_seconds: int = 45
+    llm_timeout_seconds: int = 18
 
     @property
     def adk_ready(self) -> bool:
