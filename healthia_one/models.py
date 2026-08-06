@@ -31,6 +31,18 @@ class MissionStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class DocumentCategory(StrEnum):
+    LABORATORY = "laboratory"
+    IMAGING = "imaging"
+    PRESCRIPTION = "prescription"
+    CONSULTATION = "consultation"
+    DISCHARGE = "discharge"
+    VACCINE = "vaccine"
+    INSURANCE = "insurance"
+    IDENTITY = "identity"
+    OTHER = "other"
+
+
 class SourceRef(BaseModel):
     source_type: str
     source_id: str
@@ -57,7 +69,59 @@ class PatientProfile(BaseModel):
     confirmed_conditions: list[str] = Field(default_factory=lambda: ["Hipertensión arterial"])
     care_plan: CarePlan = Field(default_factory=CarePlan)
     consented_signal_types: list[str] = Field(
-        default_factory=lambda: ["vitals", "weight", "activity", "results", "missions"]
+        default_factory=lambda: [
+            "vitals",
+            "weight",
+            "activity",
+            "results",
+            "missions",
+            "family_history",
+            "documents",
+        ]
+    )
+
+
+class FamilyCondition(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    age_at_diagnosis: int | None = Field(default=None, ge=0, le=120)
+    confirmed: bool = False
+    notes: str = Field(default="", max_length=500)
+
+
+class FamilyMember(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("family"))
+    display_name: str = Field(min_length=1, max_length=120)
+    relation: str = Field(min_length=2, max_length=80)
+    generation: Literal[-2, -1, 0, 1, 2] = 0
+    lineage: Literal["maternal", "paternal", "both", "unknown"] = "unknown"
+    sex_at_birth: Literal["female", "male", "unknown"] = "unknown"
+    biological_relative: bool = True
+    alive: bool | None = None
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+    death_year: int | None = Field(default=None, ge=1900, le=2100)
+    conditions: list[FamilyCondition] = Field(default_factory=list)
+    source: SourceRef = Field(
+        default_factory=lambda: SourceRef(source_type="patient_report", source_id="family_form")
+    )
+
+
+class ClinicalDocument(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("doc"))
+    patient_id: str = "patient_demo"
+    title: str = Field(min_length=1, max_length=220)
+    filename: str
+    category: DocumentCategory = DocumentCategory.OTHER
+    mime_type: str = "application/octet-stream"
+    size_bytes: int = Field(default=0, ge=0)
+    uploaded_at: datetime = Field(default_factory=utc_now)
+    document_date: date | None = None
+    storage_path: str = ""
+    status: Literal["stored", "parsed", "pending_review", "invalid"] = "stored"
+    summary: str = ""
+    tags: list[str] = Field(default_factory=list)
+    related_result_id: str | None = None
+    source: SourceRef = Field(
+        default_factory=lambda: SourceRef(source_type="patient_upload", source_id="documents")
     )
 
 
@@ -174,6 +238,8 @@ class PatientState(BaseModel):
     weights: list[WeightRecord] = Field(default_factory=list)
     activity: list[ActivityRecord] = Field(default_factory=list)
     results: list[HealthResult] = Field(default_factory=list)
+    family_members: list[FamilyMember] = Field(default_factory=list)
+    documents: list[ClinicalDocument] = Field(default_factory=list)
     missions: list[HealthMission] = Field(default_factory=list)
     messages: list[ChatMessage] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)

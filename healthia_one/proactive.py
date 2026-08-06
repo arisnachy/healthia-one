@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from statistics import mean
 
+from healthia_one.family import evaluate_family_history
 from healthia_one.models import AgentStep, PatientState, ProactiveFinding, RiskLevel
 from healthia_one.safety import assess_vital
 
@@ -149,4 +150,5 @@ def evaluate_state(state: PatientState, now: datetime | None = None) -> list[Pro
                 )
             )
 
+    findings.extend(evaluate_family_history(state))
     return findings

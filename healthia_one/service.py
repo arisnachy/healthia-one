@@ -9,6 +9,9 @@ from healthia_one.config import Settings
 from healthia_one.models import (
     ActivityRecord,
     ChatMessage,
+    ClinicalDocument,
+    FamilyCondition,
+    FamilyMember,
     PatientState,
     VitalRecord,
     WeightRecord,
@@ -54,13 +57,47 @@ def seed_state() -> PatientState:
         ActivityRecord(measured_at=now - timedelta(days=2), steps=1800, active_minutes=8),
         ActivityRecord(measured_at=now - timedelta(days=1), steps=2100, active_minutes=10),
     ]
+    state.family_members = [
+        FamilyMember(
+            display_name="Madre",
+            relation="madre",
+            generation=-1,
+            lineage="maternal",
+            sex_at_birth="female",
+            conditions=[FamilyCondition(name="Diabetes", age_at_diagnosis=52, confirmed=True)],
+        ),
+        FamilyMember(
+            display_name="Padre",
+            relation="padre",
+            generation=-1,
+            lineage="paternal",
+            sex_at_birth="male",
+            conditions=[FamilyCondition(name="Hipertensión arterial", age_at_diagnosis=44, confirmed=True)],
+        ),
+        FamilyMember(
+            display_name="Abuela materna",
+            relation="abuela materna",
+            generation=-2,
+            lineage="maternal",
+            sex_at_birth="female",
+            conditions=[FamilyCondition(name="Diabetes", age_at_diagnosis=48, confirmed=False)],
+        ),
+        FamilyMember(
+            display_name="Hermano",
+            relation="hermano",
+            generation=0,
+            lineage="both",
+            sex_at_birth="male",
+            conditions=[FamilyCondition(name="Hipertensión arterial", age_at_diagnosis=39, confirmed=True)],
+        ),
+    ]
     state.messages = [
         ChatMessage(
             role="assistant",
             author="KIRA Health",
             content=(
-                "Hola, Ana. Mantengo tus mediciones y misiones de salud en una sola conversación. "
-                "Solo vigilo las señales que autorizaste y te explicaré por qué intervengo."
+                "Hola, Ana. Mantengo tus mediciones, documentos, historia familiar y misiones de salud "
+                "en una sola conversación. Solo vigilo las señales que autorizaste y te explicaré por qué intervengo."
             ),
         )
     ]
@@ -127,6 +164,27 @@ class HealthIAService:
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": "activity"})
         return activity
+
+    async def add_family_member(self, member: FamilyMember) -> FamilyMember:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            state.family_members.append(member)
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "family"})
+        return member
+
+    async def add_document(self, document: ClinicalDocument) -> ClinicalDocument:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            state.documents.append(document)
+            state.documents.sort(key=lambda item: item.uploaded_at)
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "documents"})
+        return document
+
+    async def get_document(self, document_id: str) -> ClinicalDocument | None:
+        state = await self.store.load()
+        return next((item for item in state.documents if item.id == document_id), None)
 
     async def run_proactive_check(self) -> list[ChatMessage]:
         created: list[ChatMessage] = []

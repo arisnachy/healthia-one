@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from healthia_one.family import describe_genogram, family_summary
 from healthia_one.models import (
     AgentStep,
     ChatMessage,
@@ -37,7 +38,60 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
     profile = state.profile
     mission: HealthMission | None = None
 
-    if any(word in lower for word in ("resultado", "laboratorio", "analítica", "análisis")):
+    if any(word in lower for word in ("familia", "familiar", "genograma", "herencia", "hereditario", "antecedente familiar")):
+        plan = _plan(
+            ("HEREDITAS", "Leer el genograma autorizado", "Contexto familiar"),
+            ("HISTORIA", "Conectar familia y expediente", "Continuidad longitudinal"),
+            ("SENTINEL", "Bloquear inferencias diagnósticas", "Seguridad clínica"),
+            ("KIRA", "Preparar preguntas preventivas", "Próximo paso útil"),
+        )
+        summary = family_summary(state)
+        content = describe_genogram(state.family_members)
+        if summary["clusters"]:
+            cluster_names = ", ".join(item["condition"] for item in summary["clusters"][:4])
+            content += (
+                f"\n\n**Patrones que conviene contextualizar:** {cluster_names}. "
+                "Esto no confirma riesgo individual; sirve para preparar una conversación preventiva."
+            )
+        mission = HealthMission(
+            title="Revisar historia familiar",
+            mission_type="family_history",
+            status=MissionStatus.WAITING_PATIENT,
+            next_action="Confirmar parentescos, patologías y edades de diagnóstico",
+            evidence_ids=[item.id for item in state.family_members],
+            agent_plan=plan,
+        )
+    elif any(word in lower for word in ("documento", "archivo", "expediente", "papel", "informe", "receta")):
+        plan = _plan(
+            ("ARCHIVUM", "Indexar documentación clínica", "Encontrar y organizar"),
+            ("HISTORIA", "Relacionar con la línea de tiempo", "Evitar documentos aislados"),
+            ("LUMEN", "Preparar explicación si aplica", "Lenguaje comprensible"),
+            ("KIRA", "Definir siguiente acción", "Continuidad"),
+        )
+        if state.documents:
+            categories = {}
+            for document in state.documents:
+                categories[str(document.category)] = categories.get(str(document.category), 0) + 1
+            detail = ", ".join(f"{name}: {count}" for name, count in sorted(categories.items()))
+            content = (
+                f"Tu expediente tiene **{len(state.documents)} documentos organizados** ({detail}). "
+                "Puedo localizar el más reciente, abrir la sección Documentos o ayudarte a cargar uno nuevo."
+            )
+            evidence = [item.id for item in state.documents[-5:]]
+        else:
+            content = (
+                "Todavía no hay documentos organizados. Puedes cargar laboratorios, imágenes, recetas, "
+                "informes o notas; HealthIA conservará categoría, fecha, fuente y estado de revisión."
+            )
+            evidence = []
+        mission = HealthMission(
+            title="Organizar documentación del paciente",
+            mission_type="document_management",
+            next_action="Cargar o seleccionar el documento que necesitas",
+            evidence_ids=evidence,
+            agent_plan=plan,
+        )
+    elif any(word in lower for word in ("resultado", "laboratorio", "analítica", "análisis")):
         plan = _plan(
             ("LUMEN", "Localizar y explicar resultados", "Lenguaje comprensible"),
             ("HISTORIA", "Comparar con la línea de tiempo", "Evitar interpretación aislada"),

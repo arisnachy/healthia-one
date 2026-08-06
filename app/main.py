@@ -5,21 +5,27 @@ import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from healthia_one.config import settings
-from healthia_one.models import ActivityRecord, ChatRequest, VitalRecord, WeightRecord
+from healthia_one.documents import build_document, document_index
+from healthia_one.family import family_summary
+from healthia_one.models import ActivityRecord, ChatRequest, FamilyMember, VitalRecord, WeightRecord
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.service import HealthIAService
 
 service = HealthIAService(settings)
+ROOT = Path(__file__).resolve().parents[1]
+WEB_ROOT = ROOT / "web"
+UPLOAD_ROOT = ROOT / "uploads" / "patient_demo"
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await service.initialize()
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     stop_event = asyncio.Event()
     background_task = asyncio.create_task(service.background_loop(stop_event))
     try:
@@ -31,8 +37,7 @@ async def lifespan(_: FastAPI):
             await background_task
 
 
-app = FastAPI(title="HealthIA ONE", version="0.1.0", lifespan=lifespan)
-WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+app = FastAPI(title="HealthIA ONE", version="0.2.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 
 
@@ -55,6 +60,16 @@ async def readiness() -> dict:
         "adk_ready": settings.adk_ready,
         "store_backend": settings.store_backend,
         "proactive_interval_seconds": settings.proactive_interval_seconds,
+        "capabilities": [
+            "chat",
+            "proactive_followup",
+            "vitals",
+            "weight",
+            "activity",
+            "results",
+            "family_genogram",
+            "document_archive",
+        ],
         "truth_boundary": (
             "Patient continuity demo using synthetic data. It does not diagnose, prescribe, or "
             "replace emergency or professional care."
@@ -65,7 +80,10 @@ async def readiness() -> dict:
 @app.get("/api/bootstrap")
 async def bootstrap() -> dict:
     state = await service.snapshot()
-    return state.model_dump(mode="json")
+    payload = state.model_dump(mode="json")
+    payload["family_summary"] = family_summary(state)
+    payload["document_index"] = document_index(state)
+    return payload
 
 
 @app.post("/api/chat")
@@ -87,6 +105,68 @@ async def add_weight(weight: WeightRecord) -> dict:
 @app.post("/api/activity")
 async def add_activity(activity: ActivityRecord) -> dict:
     return (await service.add_activity(activity)).model_dump(mode="json")
+
+
+@app.get("/api/family")
+async def get_family() -> dict:
+    state = await service.snapshot()
+    return {
+        "members": [item.model_dump(mode="json") for item in state.family_members],
+        "summary": family_summary(state),
+    }
+
+
+@app.post("/api/family")
+async def add_family_member(member: FamilyMember) -> dict:
+    saved = await service.add_family_member(member)
+    return saved.model_dump(mode="json")
+
+
+@app.get("/api/documents")
+async def list_documents() -> dict:
+    state = await service.snapshot()
+    return {
+        "documents": [item.model_dump(mode="json") for item in state.documents],
+        "index": document_index(state),
+    }
+
+
+@app.post("/api/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    category: str | None = Form(default=None),
+    title: str | None = Form(default=None),
+) -> dict:
+    content = await file.read(settings.max_upload_bytes + 1)
+    if len(content) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+    try:
+        document = build_document(
+            filename=file.filename or "documento",
+            content_type=file.content_type or "application/octet-stream",
+            size_bytes=len(content),
+            category=category,
+            title=title,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    destination = ROOT / document.storage_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(destination.write_bytes, content)
+    saved = await service.add_document(document)
+    return saved.model_dump(mode="json")
+
+
+@app.get("/api/documents/{document_id}/download")
+async def download_document(document_id: str) -> FileResponse:
+    document = await service.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    path = (ROOT / document.storage_path).resolve()
+    if ROOT.resolve() not in path.parents or not path.exists():
+        raise HTTPException(status_code=404, detail="Archivo no disponible")
+    return FileResponse(path, media_type=document.mime_type, filename=document.filename)
 
 
 @app.post("/api/results/upload")
