@@ -1,8 +1,6 @@
 name: Apply Android Health Profile
 
 on:
-  push:
-    branches: [kira/android-health-profile]
   pull_request:
     branches: [main]
 
@@ -25,8 +23,8 @@ jobs:
           base64 --decode --ignore-garbage /tmp/healthia.b64 > /tmp/healthia.tar.gz
           echo "7936c9302e356269b8052edf17dd6e65b4c531fef85aac6eca29263a2be9bfa6  /tmp/healthia.tar.gz" | sha256sum --check --strict
           tar -xzf /tmp/healthia.tar.gz
+          git checkout HEAD -- .github/workflows/ci.yml .github/workflows/apply-health-profile-bundle.yml
           rm -rf .healthia-bundle
-          rm -f .github/workflows/apply-health-profile-bundle.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
