@@ -75,7 +75,7 @@ if (!window.__HEALTHIA_PRIVACY_CONTROLS__) {
     const section = document.createElement("section");
     section.id = "view-control";
     section.className = "view";
-    section.innerHTML = `<div class="page-body"><div class="page-kicker">BASTION · CONTROL DEL PACIENTE</div><h1>Permisos y privacidad</h1><p>Decide qué puede vigilar HealthIA, cuándo puede intervenir y qué queda registrado.</p><div id="controlRoot"></div></div>`;
+    section.innerHTML = `<div class="page-body"><div class="page-kicker">CONTROL DEL PACIENTE</div><h1>Permisos y privacidad</h1><p>Decide qué puede vigilar HealthIA, cuándo puede intervenir y qué queda registrado.</p><div id="controlRoot"></div></div>`;
     main.append(section);
   }
 
@@ -101,45 +101,25 @@ if (!window.__HEALTHIA_PRIVACY_CONTROLS__) {
   }
 
   async function saveConsent() {
-    const payload = {
-      ...snapshot.consent,
-      proactive_enabled: $("#proactiveEnabled").checked,
-      allow_urgent_safety_bypass: $("#urgentBypass").checked,
-      quiet_hours_start: $("#quietStart").value,
-      quiet_hours_end: $("#quietEnd").value,
-      signal_types: $$('[data-signal]:checked').map(input => input.dataset.signal),
-      updated_at: new Date().toISOString(),
-    };
-    try {
-      await api("/api/consent", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-      await refresh(); toast("Permisos actualizados.");
-    } catch (error) { toast(error.message); }
+    const payload = {...snapshot.consent, proactive_enabled:$("#proactiveEnabled").checked, allow_urgent_safety_bypass:$("#urgentBypass").checked, quiet_hours_start:$("#quietStart").value, quiet_hours_end:$("#quietEnd").value, signal_types:$$('[data-signal]:checked').map(input => input.dataset.signal), updated_at:new Date().toISOString()};
+    try { await api("/api/consent", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); await refresh(); toast("Permisos actualizados."); } catch (error) { toast(error.message); }
   }
 
   async function updateMuted(prefixes, message) {
     const payload = {...snapshot.consent, muted_rule_prefixes:prefixes, updated_at:new Date().toISOString()};
-    try {
-      await api("/api/consent", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-      await refresh(); toast(message);
-    } catch (error) { toast(error.message); }
+    try { await api("/api/consent", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); await refresh(); toast(message); } catch (error) { toast(error.message); }
   }
 
   function bindControlActions() {
     $("#saveConsent")?.addEventListener("click", saveConsent);
-    $("#snooze24")?.addEventListener("click", async () => {
-      try { await api("/api/consent/snooze", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hours:24})}); await refresh(); toast("Intervenciones pausadas por 24 horas."); }
-      catch (error) { toast(error.message); }
-    });
+    $("#snooze24")?.addEventListener("click", async () => { try { await api("/api/consent/snooze", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({hours:24})}); await refresh(); toast("Intervenciones pausadas por 24 horas."); } catch (error) { toast(error.message); } });
     $("#refreshAudit")?.addEventListener("click", () => refresh().catch(error => toast(error.message)));
     $$('[data-unmute]').forEach(button => button.addEventListener("click", () => updateMuted(snapshot.consent.muted_rule_prefixes.filter(item => item !== button.dataset.unmute), "Regla reactivada.")));
   }
 
   async function muteRule(ruleKey) {
     const prefix = `${String(ruleKey).split(":")[0]}:`;
-    try {
-      await api("/api/consent/mute", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prefix})});
-      await refresh(); toast(`Silenciadas las intervenciones ${prefix}`);
-    } catch (error) { toast(error.message); }
+    try { await api("/api/consent/mute", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prefix})}); await refresh(); toast(`Silenciadas las intervenciones ${prefix}`); } catch (error) { toast(error.message); }
   }
 
   function hydrateMessageControls() {
@@ -149,29 +129,14 @@ if (!window.__HEALTHIA_PRIVACY_CONTROLS__) {
       const message = byId.get(article.dataset.id);
       const needsControl = message?.metadata?.action_target === "control";
       const ruleKey = message?.metadata?.proactive ? message.metadata.rule_key : null;
-      const needsMute = Boolean(ruleKey);
-      if (!needsControl && !needsMute) return;
+      if (!needsControl && !ruleKey) return;
       let bar = article.querySelector(".message-actions");
-      if (!bar) {
-        bar = document.createElement("div");
-        bar.className = "message-actions";
-        article.querySelector(".message-content")?.append(bar);
-      }
+      if (!bar) { bar = document.createElement("div"); bar.className = "message-actions"; article.querySelector(".message-content")?.append(bar); }
       if (needsControl && !bar.querySelector(".open-control-button")) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "open-control-button";
-        button.textContent = "Abrir permisos y privacidad";
-        button.addEventListener("click", () => activateView("control"));
-        bar.append(button);
+        const button = document.createElement("button"); button.type = "button"; button.className = "open-control-button"; button.textContent = "Abrir permisos y privacidad"; button.addEventListener("click", () => activateView("control")); bar.append(button);
       }
-      if (needsMute && !bar.querySelector(".mute-rule-button")) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "mute-rule-button";
-        button.textContent = "Silenciar este tipo";
-        button.addEventListener("click", () => muteRule(ruleKey));
-        bar.append(button);
+      if (ruleKey && !bar.querySelector(".mute-rule-button")) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "mute-rule-button"; button.textContent = "Silenciar este tipo"; button.addEventListener("click", () => muteRule(ruleKey)); bar.append(button);
       }
     });
   }
@@ -189,5 +154,4 @@ if (!window.__HEALTHIA_PRIVACY_CONTROLS__) {
     refresh().catch(error => toast(error.message));
   });
 })();
-
 }

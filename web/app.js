@@ -37,15 +37,10 @@ function safeFocusComposer() {
 }
 
 
-const PUBLIC_NAMES = {
-  "KIRA Health": "HealthIA", "KIRA": "HealthIA",
-  "HISTORIA": "Health history", "SENTINEL": "Safety monitoring",
-  "LUMEN": "Results review", "VITA": "Healthy habits",
-  "NAVIGATOR": "Follow-up", "HEREDITAS": "Family history",
-  "ARCHIVUM": "Documents", "MEDSAFE": "Medication safety",
-  "ADVOCATE": "Visit preparation", "BASTION": "Privacy and consent"
-};
-function publicName(value) { return PUBLIC_NAMES[String(value || "").trim()] || String(value || "HealthIA").replace(/_/g, " "); }
+function publicName(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized.includes("healthia") ? "HealthIA" : "Módulo de salud";
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));

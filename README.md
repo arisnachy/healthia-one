@@ -12,7 +12,7 @@ This repository is a clean hackathon implementation. The public demo uses a synt
 
 - One conversational entry point for measurements, results, documents, treatment, appointments, family history, privacy and follow-up.
 - An always-visible ChatGPT-style composer with attachment, voice dictation and quick actions.
-- Contextual action buttons inside KIRA responses.
+- Contextual action buttons inside HealthIA responses.
 - Server-Sent Events for asynchronous interventions without a new patient message.
 
 ### Longitudinal patient record
@@ -27,7 +27,7 @@ This repository is a clean hackathon implementation. The public demo uses a synt
 
 - Multi-generation maternal and paternal family lines.
 - Biological relationship, sex at birth, condition, age at diagnosis, verification and provenance.
-- HEREDITAS identifies family aggregation only to prepare preventive questions.
+- The family-history module identifies aggregation only to prepare preventive questions.
 - Family patterns never become a diagnosis or a prediction that disease will occur.
 
 ### Patient document operating system
@@ -40,9 +40,9 @@ This repository is a clean hackathon implementation. The public demo uses a synt
 ### Treatment and consultation continuity
 
 - Structured medication plans and patient-reported check-ins: taken, late, skipped or unknown.
-- MEDSAFE prevents dose changes, duplication, substitution or unsafe compensation advice.
+- The treatment-safety module prevents dose changes, duplication, substitution or unsafe compensation advice.
 - Appointments with specialty, location, required documents and questions.
-- ADVOCATE generates a patient-controlled consultation brief from authorized data.
+- The consultation module generates a patient-controlled brief from authorized data.
 
 ### Patient control and audit
 
@@ -52,23 +52,9 @@ This repository is a clean hackathon implementation. The public demo uses a synt
 - Public operational audit log without private model reasoning.
 - Structured patient JSON export with internal storage paths removed.
 
-## Agent team
+## Internal agent architecture
 
-KIRA activates the minimum useful specialist instead of running every agent for every message.
-
-| Agent | Responsibility |
-|---|---|
-| KIRA Health | Coordinates the mission and final patient-facing response |
-| HISTORIA | Longitudinal context and timeline |
-| SENTINEL | Deterministic safety boundary and care urgency |
-| LUMEN | Result and health-information explanation |
-| VITA | Low-risk habits, barriers and micro-goals |
-| NAVIGATOR | Missions, next steps and closure conditions |
-| HEREDITAS | Pathological genogram and family-history context |
-| ARCHIVUM | Patient document organization and provenance |
-| MEDSAFE | Treatment organization and medication-safety boundary |
-| ADVOCATE | Patient-controlled consultation preparation |
-| BASTION | Consent, privacy, quiet hours and reversible controls |
+The runtime activates the minimum useful specialist instead of running every module for every message. Internal implementation names are documented for maintainers but are never exposed in the patient-facing interface.
 
 The Google ADK application lives in `healthia_agent/agent.py`. The local FastAPI demo remains deterministic and usable without an API key; a real Gemini run is a separate configured execution path.
 
@@ -137,10 +123,12 @@ The web application's deterministic safety and continuity routes do not depend o
 pytest
 python -m compileall -q app healthia_one healthia_agent tests scripts
 node --check web/app.js
-node --check web/ui-v2.js
-node --check web/ui-v3.js
-node --check web/ui-v4.js
-node --check web/ui-v5.js
+node --check web/patient-record.js
+node --check web/family-documents.js
+node --check web/continuity.js
+node --check web/privacy-controls.js
+node --check web/profile-devices.js
+node --check web/icons.js
 python scripts/smoke_test.py
 ```
 

@@ -8,15 +8,15 @@ flowchart TB
     UI[Chat-first patient OS]
     API[FastAPI clinical gateway]
     SAFE[Deterministic safety boundary]
-    KIRA[KIRA Health router]
-    AGENTS[Minimum specialist team]
+    ROUTER[HealthIA mission router]
+    MODULES[Minimum specialist modules]
     STATE[Typed PatientState]
     STORE[Memory / atomic JSON / Firestore boundary]
     EVAL[Clinical + continuity evaluators]
-    CONTROL[BASTION consent gate]
+    CONTROL[Consent and policy gate]
     SSE[Event broker + Server-Sent Events]
 
-    P --> UI --> API --> SAFE --> KIRA --> AGENTS --> STATE --> STORE
+    P --> UI --> API --> SAFE --> ROUTER --> MODULES --> STATE --> STORE
     STORE --> EVAL --> CONTROL --> SSE --> UI
     CONTROL -->|quiet, snooze, mute| STORE
     UI -->|explicit manual review| EVAL
@@ -53,19 +53,7 @@ Clinical safety does not depend on Gemini availability. The model is not allowed
 
 ## Agent topology
 
-```text
-KIRA Health
-├── HISTORIA    longitudinal context and timeline
-├── SENTINEL    safety and urgency
-├── LUMEN       result explanation
-├── VITA        barriers and low-risk micro-goals
-├── NAVIGATOR   missions and closure conditions
-├── HEREDITAS   pathological genogram
-├── ARCHIVUM    document organization
-├── MEDSAFE     treatment safety and check-ins
-├── ADVOCATE    patient-controlled consultation brief
-└── BASTION     consent, privacy and reversible control
-```
+The internal Google ADK graph uses specialist modules for longitudinal context, safety, result explanation, habits, follow-up, family history, document organization, treatment safety, consultation preparation and consent control. Internal implementation names are intentionally excluded from the patient-facing web surface.
 
 The public interface displays actions, evidence, uncertainty and next steps. It never renders private chain-of-thought.
 
@@ -76,7 +64,7 @@ Two evaluators remain separated:
 1. **Clinical evaluator**: missing measurements, material weight change, extreme vitals, low activity, unreviewed results and family-history context.
 2. **Continuity evaluator**: upcoming appointments and patient-reported medication omissions.
 
-Every finding passes through BASTION:
+Every finding passes through the patient-control policy:
 
 ```text
 finding
@@ -94,15 +82,17 @@ Explicit patient-requested reviews can run during quiet hours because they are n
 
 ## Patient interfaces
 
-The browser shell loads layered, reversible interface modules:
+The browser shell loads one visual system and semantic interface modules:
 
 - `app.js`: core chat, measurement forms, results and SSE;
-- `ui-v2.js`: fixed composer, voice, patient record and action buttons;
-- `ui-v3.js`: genogram and document archive;
-- `ui-v4.js`: timeline, treatment and appointments;
-- `ui-v5.js`: consent, privacy, audit and export.
+- `patient-record.js`: composer, voice, patient record and contextual actions;
+- `family-documents.js`: genogram and document archive;
+- `continuity.js`: timeline, treatment and appointments;
+- `privacy-controls.js`: consent, privacy, audit and export;
+- `profile-devices.js`: complete patient profile and Health Connect surfaces;
+- `icons.js`: dependency-free icon system.
 
-Each layer has static contracts and Node syntax checks in CI.
+Version-number UI patches are prohibited. Every semantic module has static contracts and Node syntax checks in CI.
 
 ## Storage
 
@@ -142,7 +132,9 @@ FastAPI publishes the generated OpenAPI interface at `/docs`.
 - a missing Gemini key does not break the deterministic local demo;
 - unread PDFs and images remain pending instead of being fabricated;
 - audit records contain public operational facts, not secrets or hidden reasoning;
-- patient export removes internal storage paths.
+- patient export removes internal storage paths;
+- frontend refreshes are serialized and only one event stream is created;
+- recursive identity-rewriting observers are prohibited.
 
 ## Current truth boundary
 
