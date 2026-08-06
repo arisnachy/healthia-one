@@ -39,6 +39,7 @@ jobs:
           node --check web/privacy-controls.js
           node --check web/profile-devices.js
           node --check web/icons.js
+          node --check web/connectivity.js
       - name: Reject version-number UI layers
         shell: bash
         run: |
