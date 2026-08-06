@@ -31,6 +31,7 @@ jobs:
       - run: node --check web/ui-v3.js
       - run: node --check web/ui-v4.js
       - run: node --check web/ui-v5.js
+      - run: node --check web/ui-v6.js
       - name: Parse secure PowerShell launcher
         shell: pwsh
         run: '[scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null'
