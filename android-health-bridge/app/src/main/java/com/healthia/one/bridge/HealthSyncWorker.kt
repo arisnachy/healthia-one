@@ -12,12 +12,16 @@ import java.util.concurrent.TimeUnit
 class HealthSyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = runCatching {
         val repository = HealthConnectRepository(applicationContext)
+        if (!repository.isAvailable || !repository.supportsBackgroundRead) return Result.success()
+
         val granted = repository.grantedPermissions()
         if (!granted.containsAll(repository.permissions)) return Result.success()
+
         val preferences = applicationContext.getSharedPreferences("healthia", Context.MODE_PRIVATE)
         val baseUrl = preferences.getString("base_url", BuildConfig.HEALTHIA_BASE_URL).orEmpty()
         val token = preferences.getString("access_token", "").orEmpty()
         if (baseUrl.isBlank() || token.isBlank()) return Result.success()
+
         val records = repository.readSince()
         HealthiaApi.sync(baseUrl, token, deviceId(), records, background = true)
         Result.success()
@@ -32,6 +36,8 @@ class HealthSyncWorker(appContext: Context, params: WorkerParameters) : Coroutin
 
     companion object {
         fun schedule(context: Context) {
+            val repository = HealthConnectRepository(context)
+            if (!repository.isAvailable || !repository.supportsBackgroundRead) return
             val work = PeriodicWorkRequestBuilder<HealthSyncWorker>(15, TimeUnit.MINUTES).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 "healthia-health-connect-sync",
