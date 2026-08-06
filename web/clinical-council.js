@@ -19,6 +19,14 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       BASTION: "Privacidad y consentimiento",
       KIRA: "Coordinación",
     };
+    const sidebarCouncil = [
+      ["EC", "Entrevista clínica", "Motivo, evolución y síntomas"],
+      ["SC", "Seguridad clínica", "Alarmas y nivel de atención"],
+      ["AL", "Archivo longitudinal", "Notas e historia completa"],
+      ["SF", "Seguridad farmacológica", "Medicamentos y alergias"],
+      ["ND", "Notas y documentos", "Resultados y procedencia"],
+      ["SG", "Seguimiento", "Siguiente paso y cierre"],
+    ];
 
     let snapshot = null;
     let hydrateTimer = null;
@@ -50,6 +58,26 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       return values.map(value => value[0]?.toUpperCase() || "").join("") || "P";
     }
 
+    function prepareIdentityShell() {
+      const account = $("#accountPill");
+      if (account) {
+        account.innerHTML = '<div class="patient-avatar">P</div><div><strong>Paciente</strong><span>Cargando perfil autorizado</span></div>';
+      }
+      $(".patient-chip")?.remove();
+    }
+
+    function renderSidebarCouncil() {
+      const section = $(".rail-section");
+      if (!section || section.dataset.clinicalCouncil === "true") return;
+      section.dataset.clinicalCouncil = "true";
+      section.innerHTML = `
+        <p>Junta de salud</p>
+        ${sidebarCouncil.map(([code, label, detail]) => `
+          <div class="agent-mini" title="${esc(label)}">
+            <span>${esc(code)}</span><div><strong>${esc(label)}</strong><small>${esc(detail)}</small></div>
+          </div>`).join("")}`;
+    }
+
     function consolidateIdentity() {
       const profile = snapshot?.profile;
       const account = $("#accountPill");
@@ -59,6 +87,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
         <div><strong>${esc(profile.display_name)}</strong><span>Paciente · datos autorizados</span></div>`;
       account.setAttribute("aria-label", `Perfil de ${profile.display_name}`);
       $(".patient-chip")?.remove();
+      renderSidebarCouncil();
       $$(".main-nav button").forEach(button => {
         const label = $("b", button)?.textContent?.trim();
         if (label) button.title = label;
@@ -94,9 +123,9 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
     function optionMarkup(question, interviewId) {
       const type = question.multiple ? "checkbox" : "radio";
       const name = `clinical_${interviewId}_${question.id}`;
-      return (question.options || []).map((option, index) => `
+      return (question.options || []).map(option => `
         <label class="clinical-option">
-          <input type="${type}" name="${esc(name)}" value="${esc(option)}" ${!question.multiple && index === 0 ? "" : ""}>
+          <input type="${type}" name="${esc(name)}" value="${esc(option)}">
           <span>${esc(option)}</span>
         </label>`).join("");
     }
@@ -219,6 +248,8 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
 
     async function boot() {
       ensureStylesheet();
+      prepareIdentityShell();
+      renderSidebarCouncil();
       setupChatFeedback();
       try {
         await loadSnapshot();
