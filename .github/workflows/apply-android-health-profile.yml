@@ -3,13 +3,15 @@ name: Apply Android Health Profile
 on:
   push:
     branches: [kira/android-health-profile]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'kira/android-health-profile'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
