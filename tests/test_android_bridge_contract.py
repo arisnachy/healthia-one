@@ -1,12 +1,14 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+BRIDGE = ROOT / "android-health-bridge"
+ANDROID_SOURCE = BRIDGE / "app/src/main/java/com/healthia/one/bridge"
 
 
 def test_android_health_bridge_declares_health_connect_and_background_access() -> None:
-    gradle = (ROOT / "android-health-bridge/app/build.gradle.kts").read_text(encoding="utf-8")
-    manifest = (ROOT / "android-health-bridge/app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
-    repository = (ROOT / "android-health-bridge/app/src/main/java/com/healthia/one/bridge/HealthConnectRepository.kt").read_text(encoding="utf-8")
+    gradle = (BRIDGE / "app/build.gradle.kts").read_text(encoding="utf-8")
+    manifest = (BRIDGE / "app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+    repository = (ANDROID_SOURCE / "HealthConnectRepository.kt").read_text(encoding="utf-8")
     assert 'androidx.health.connect:connect-client:1.1.0' in gradle
     for permission in (
         "READ_STEPS",
@@ -17,7 +19,12 @@ def test_android_health_bridge_declares_health_connect_and_background_access() -
         "READ_HEALTH_DATA_IN_BACKGROUND",
     ):
         assert permission in manifest
-    assert "HealthConnectClient.getOrCreate" in repository
+    assert 'package android:name="com.google.android.apps.healthdata"' in manifest
+    assert "androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" in manifest
+    assert "PermissionsRationaleActivity" in manifest
+    assert "HealthConnectClient.getSdkStatus" in repository
+    assert "FEATURE_READ_HEALTH_DATA_IN_BACKGROUND" in repository
+    assert "providerInstallIntent" in repository
     assert "sourcePackage" in repository
     assert "externalId" in repository
 
@@ -41,14 +48,30 @@ def test_profile_and_devices_ui_contract() -> None:
     assert ".device-grid" in css
 
 
-def test_android_bridge_has_pairing_and_runtime_backend_configuration() -> None:
-    root = ROOT / "android-health-bridge/app/src/main/java/com/healthia/one/bridge"
-    activity = (root / "MainActivity.kt").read_text(encoding="utf-8")
-    api = (root / "HealthiaApi.kt").read_text(encoding="utf-8")
-    worker = (root / "HealthSyncWorker.kt").read_text(encoding="utf-8")
-    assert "Pairing code" in activity
+def test_android_bridge_has_pairing_runtime_configuration_and_permission_guidance() -> None:
+    activity = (ANDROID_SOURCE / "MainActivity.kt").read_text(encoding="utf-8")
+    api = (ANDROID_SOURCE / "HealthiaApi.kt").read_text(encoding="utf-8")
+    worker = (ANDROID_SOURCE / "HealthSyncWorker.kt").read_text(encoding="utf-8")
+    rationale = (ANDROID_SOURCE / "PermissionsRationaleActivity.kt").read_text(encoding="utf-8")
+    assert "Código de seis dígitos" in activity
     assert "HealthiaApi.claim" in activity
     assert 'putString("access_token"' in activity
+    assert "Instalar o actualizar Health Connect" in activity
+    assert "Abrir configuración de Health Connect" in activity
+    assert "supportsBackgroundRead" in activity
     assert 'setRequestProperty("Authorization", "Bearer $token")' in api
     assert 'getString("base_url"' in worker
     assert 'getString("access_token"' in worker
+    assert "supportsBackgroundRead" in worker
+    assert "Cómo usa HealthIA tus datos" in rationale
+
+
+def test_repository_builds_a_downloadable_debug_apk_artifact() -> None:
+    workflow = (ROOT / ".github/workflows/android-bridge.yml").read_text(encoding="utf-8")
+    guide = (ROOT / "docs/CONNECT_ANDROID.md").read_text(encoding="utf-8")
+    assert "gradle :app:assembleDebug" in workflow
+    assert "HealthIA-Bridge-debug.apk" in workflow
+    assert "actions/upload-artifact@v4" in workflow
+    assert "HealthIA-Bridge-debug" in guide
+    assert "127.0.0.1" in guide
+    assert "ipconfig" in guide
