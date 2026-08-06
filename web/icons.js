@@ -35,8 +35,16 @@ if (!window.__HEALTHIA_ICONS__) {
       const panel=$('#collapseRight'); if(panel) panel.innerHTML=icon('panel');
       const top=$('.topbar-title'); if(top&&!$('.kira-mark',top)) top.insertAdjacentHTML('afterbegin',icon('sparkle','kira-mark'));
     }
+    function loadConnectivity(){
+      if(document.querySelector('script[data-healthia-connectivity]')) return;
+      const script=document.createElement('script');
+      script.src='/assets/connectivity.js';
+      script.defer=true;
+      script.dataset.healthiaConnectivity='true';
+      document.head.append(script);
+    }
     window.HealthIAIcons={decorate,icon};
-    window.addEventListener('DOMContentLoaded',()=>requestAnimationFrame(decorate));
+    window.addEventListener('DOMContentLoaded',()=>{requestAnimationFrame(decorate);loadConnectivity();});
     document.addEventListener('healthia:ui-updated',()=>requestAnimationFrame(decorate));
   })();
 }
