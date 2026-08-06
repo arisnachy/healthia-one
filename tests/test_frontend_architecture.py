@@ -140,7 +140,7 @@ def test_device_page_exposes_pairing_installer_guide_and_demo_paths() -> None:
         assert marker in devices
     for marker in (
         "Conectar teléfono o reloj",
-        "Android bridge APK",
+        "actions/workflows/android-bridge.yml",
         "HealthIA-Bridge-debug",
         "CONNECT_ANDROID.md",
         "Teléfono y computadora en la misma Wi‑Fi",
@@ -151,7 +151,7 @@ def test_device_page_exposes_pairing_installer_guide_and_demo_paths() -> None:
 def test_google_ai_has_visible_live_diagnostic_control() -> None:
     connectivity = (WEB / "connectivity.js").read_text(encoding="utf-8")
     interactions = (WEB / "interactions.css").read_text(encoding="utf-8")
-    for marker in ("googleAiCheck", 'api("/api/ai/test"', "Google AI · clave detectada", "Cuota"):
+    for marker in ("googleAiCheck", 'api("/api/ai/test"', "Google AI · clave detectada", "cuota"):
         assert marker in connectivity
     assert ".ai-status-button" in interactions
     assert 'data-state="ready"' in interactions
