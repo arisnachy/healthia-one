@@ -31,6 +31,8 @@ jobs:
       - run: pytest
       - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py
       - run: python scripts/smoke_test.py
+      - name: JUDGE OMEGA evidence review
+        run: python scripts/judge_omega.py
       - name: Validate semantic frontend modules
         run: |
           node --check web/app.js
