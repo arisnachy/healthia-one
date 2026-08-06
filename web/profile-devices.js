@@ -108,7 +108,7 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
             <article><span>3</span><div><strong>Autoriza y sincroniza</strong><p>Android mostrará cada permiso de Health Connect antes de enviar datos.</p></div></article>
           </div>
           <div class="pairing-panel">
-            <label>Dirección del backend<input id="pairingBackendUrl" readonly></label>
+            <label>Dirección del backend<input id="pairingBackendUrl" inputmode="url" autocomplete="off"></label>
             <label>Código temporal<input id="pairingCode" readonly value="------"></label>
             <div id="pairingStatus" class="pairing-status">Generando conexión segura…</div>
             <div class="pairing-actions"><button id="copyPairing" type="button">Copiar datos</button><a href="https://github.com/arisnachy/healthia-one/tree/main/android-health-bridge" target="_blank" rel="noreferrer">Abrir puente Android ↗</a></div>
@@ -230,15 +230,6 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
       toast("Datos sintéticos sincronizados.");
     }
 
-    function phoneReachableUrl(value) {
-      try {
-        const url = new URL(value);
-        return ["127.0.0.1", "localhost"].includes(url.hostname)
-          ? `${value} · cambia 127.0.0.1 por la IP local de tu PC en el teléfono`
-          : value;
-      } catch { return value; }
-    }
-
     async function startDevicePairing() {
       const dialog = $("#deviceConnectDialog");
       dialog?.showModal();
@@ -247,9 +238,16 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
       if (pairingPoll) clearInterval(pairingPoll);
       try {
         const pairing = await api("/api/devices/pairing", {method:"POST"});
-        $("#pairingBackendUrl").value = phoneReachableUrl(pairing.backend_url);
+        $("#pairingBackendUrl").value = pairing.backend_url;
         $("#pairingCode").value = pairing.code;
-        if (status) status.textContent = `Código válido hasta ${new Date(pairing.expires_at).toLocaleTimeString("es-DO", {hour:"2-digit", minute:"2-digit"})}. Esperando al puente Android.`;
+        let networkHint = "";
+        try {
+          const host = new URL(pairing.backend_url).hostname;
+          if (["127.0.0.1", "localhost"].includes(host)) {
+            networkHint = " En el teléfono sustituye 127.0.0.1 por la IP local de tu PC; el campo puede editarse.";
+          }
+        } catch {}
+        if (status) status.textContent = `Código válido hasta ${new Date(pairing.expires_at).toLocaleTimeString("es-DO", {hour:"2-digit", minute:"2-digit"})}. Esperando al puente Android.${networkHint}`;
         pairingPoll = setInterval(async () => {
           try {
             const current = await api(`/api/devices/pairing/${pairing.code}`);
@@ -282,11 +280,13 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
         <div class="connection-list">${connections.length ? connections.map(connection => `<article><strong>${esc(connection.display_name)}</strong><span>${esc(connection.status)} · background ${connection.background_read ? "on" : "off"}</span><small>${connection.last_sync_at ? new Date(connection.last_sync_at).toLocaleString("es-DO") : "Sin sincronización"}</small></article>`).join("") : '<article><strong>Sin dispositivo conectado</strong><span>Instala la app puente Android y concede permisos de Health Connect.</span></article>'}</div>`;
       $("#connectDevice")?.addEventListener("click", startDevicePairing);
       $("#demoDeviceSync")?.addEventListener("click", () => demoDeviceSync().catch(error => toast(error.message)));
-      $("#dialogDemoDeviceSync")?.addEventListener("click", () => demoDeviceSync().then(closeDeviceDialog).catch(error => toast(error.message)));
-      $("#copyPairing")?.addEventListener("click", async () => {
+      const dialogDemo = $("#dialogDemoDeviceSync");
+      if (dialogDemo) dialogDemo.onclick = () => demoDeviceSync().then(closeDeviceDialog).catch(error => toast(error.message));
+      const copyPairing = $("#copyPairing");
+      if (copyPairing) copyPairing.onclick = async () => {
         const value = `Backend: ${$("#pairingBackendUrl")?.value || ""}\nCódigo: ${$("#pairingCode")?.value || ""}`;
         try { await navigator.clipboard.writeText(value); toast("Datos de conexión copiados."); } catch { toast("Copia manualmente la dirección y el código."); }
-      });
+      };
       $("#refreshDevices")?.addEventListener("click", () => refresh().catch(error => toast(error.message)));
     }
 
