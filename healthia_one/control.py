@@ -27,10 +27,18 @@ def in_quiet_hours(consent: PatientConsent, local_now: datetime) -> bool:
     return current >= start or current < end
 
 
-def finding_allowed(state: PatientState, finding: ProactiveFinding, now: datetime | None = None) -> tuple[bool, str]:
+def finding_allowed(
+    state: PatientState,
+    finding: ProactiveFinding,
+    now: datetime | None = None,
+    *,
+    manual_requested: bool = False,
+) -> tuple[bool, str]:
     consent = state.consent
     if finding.risk_level == RiskLevel.URGENT and consent.allow_urgent_safety_bypass:
         return True, "urgent_safety_bypass"
+    if manual_requested:
+        return True, "manual_review_requested"
     if not consent.proactive_enabled:
         return False, "proactive_disabled"
     current = now or datetime.now(timezone.utc)
