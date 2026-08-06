@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,3 +31,7 @@ def test_patient_continuity_interface_contract() -> None:
         assert marker in html
     for marker in ["renderPatientOS", "setupVoice", "data-health-action", "has-history"]:
         assert marker in script
+
+
+def test_patient_ui_javascript_is_valid() -> None:
+    subprocess.run(["node", "--check", str(ROOT / "web" / "ui-v2.js")], check=True)
