@@ -12,7 +12,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 18
     env:
       HEALTHIA_LLM_BACKEND: mock
       HEALTHIA_STORE_BACKEND: memory
@@ -50,16 +50,6 @@ jobs:
       - name: Parse secure PowerShell launcher
         shell: pwsh
         run: '[scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null'
-
-  release:
-    needs: verify
-    runs-on: ubuntu-22.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Build verified release archive
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
       - name: Verify release archive
