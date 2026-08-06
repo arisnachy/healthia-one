@@ -4,7 +4,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
 
-SEMANTIC_SCRIPTS = (
+DIRECT_SCRIPTS = (
     "app.js",
     "patient-record.js",
     "family-documents.js",
@@ -13,6 +13,7 @@ SEMANTIC_SCRIPTS = (
     "profile-devices.js",
     "icons.js",
 )
+SEMANTIC_SCRIPTS = (*DIRECT_SCRIPTS, "connectivity.js")
 
 
 def test_frontend_has_no_version_layer_assets() -> None:
@@ -26,8 +27,10 @@ def test_frontend_has_no_version_layer_assets() -> None:
     assert html.count('rel="stylesheet"') == 2
     assert '/assets/styles.css' in html
     assert '/assets/interactions.css' in html
-    for script in SEMANTIC_SCRIPTS:
+    for script in DIRECT_SCRIPTS:
         assert f'/assets/{script}' in html
+    icons = (WEB / "icons.js").read_text(encoding="utf-8")
+    assert "'/assets/connectivity.js'" in icons
     assert not list(WEB.glob("ui-v*.js"))
     assert not list(WEB.glob("ui-v*.css"))
 
@@ -53,7 +56,13 @@ def test_chat_shell_logo_scroll_avatar_and_new_consultation_contract() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     css = (WEB / "styles.css").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    for marker in ('id="newConsultation"', 'class="left-rail-scroll"', 'id="accountPill"', 'class="brand-mark"', '<svg viewBox="0 0 48 48"'):
+    for marker in (
+        'id="newConsultation"',
+        'class="left-rail-scroll"',
+        'id="accountPill"',
+        'class="brand-mark"',
+        '<svg viewBox="0 0 48 48"',
+    ):
         assert marker in html
     assert ".left-rail-scroll" in css and "overflow-y: auto" in css
     assert ".user-pill" in css
@@ -86,27 +95,41 @@ def test_patient_record_family_continuity_privacy_and_devices_contracts() -> Non
 def test_visual_system_is_consolidated_and_icon_driven() -> None:
     css = (WEB / "styles.css").read_text(encoding="utf-8")
     icons = (WEB / "icons.js").read_text(encoding="utf-8")
-    for marker in (".genogram-board", ".document-grid", ".timeline-list", ".control-grid", ".vital-matrix", ".device-grid"):
+    for marker in (
+        ".genogram-board",
+        ".document-grid",
+        ".timeline-list",
+        ".control-grid",
+        ".vital-matrix",
+        ".device-grid",
+    ):
         assert marker in css
     assert "MutationObserver" not in icons
     assert '"Genograma familiar":"family"' in icons
     assert '"Dispositivos":"device"' in icons
     assert "healthia:ui-updated" in icons
+    assert "loadConnectivity" in icons
 
 
-def test_left_rail_reopens_and_composer_floats_inside_chat_surface() -> None:
+def test_left_rail_reopens_and_composer_is_part_of_chat_surface() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     interactions = (WEB / "interactions.css").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
+    connectivity = (WEB / "connectivity.js").read_text(encoding="utf-8")
     assert 'id="expandLeft"' in html
     assert ".left-collapsed .rail-reopen" in interactions
     assert 'refs.expandLeft?.addEventListener("click"' in app
-    assert "#view-chat .composer-wrap" in interactions and "position: absolute" in interactions
+    assert 'expand.textContent = "›"' in connectivity
+    assert "#view-chat .composer-wrap" in interactions
+    assert "position: absolute" in interactions
+    assert "background: transparent" in interactions
+    assert "pointer-events: none" in interactions
     assert 'class="composer-context"' not in html
 
 
-def test_device_page_exposes_real_pairing_and_no_hardware_demo_paths() -> None:
-    js = (WEB / "profile-devices.js").read_text(encoding="utf-8")
+def test_device_page_exposes_pairing_installer_guide_and_demo_paths() -> None:
+    devices = (WEB / "profile-devices.js").read_text(encoding="utf-8")
+    connectivity = (WEB / "connectivity.js").read_text(encoding="utf-8")
     for marker in (
         "Conectar dispositivo",
         "/api/devices/pairing",
@@ -114,4 +137,21 @@ def test_device_page_exposes_real_pairing_and_no_hardware_demo_paths() -> None:
         "Probar sin dispositivo",
         "IP local de tu PC",
     ):
-        assert marker in js
+        assert marker in devices
+    for marker in (
+        "Conectar teléfono o reloj",
+        "Android bridge APK",
+        "HealthIA-Bridge-debug",
+        "CONNECT_ANDROID.md",
+        "Teléfono y computadora en la misma Wi‑Fi",
+    ):
+        assert marker in connectivity
+
+
+def test_google_ai_has_visible_live_diagnostic_control() -> None:
+    connectivity = (WEB / "connectivity.js").read_text(encoding="utf-8")
+    interactions = (WEB / "interactions.css").read_text(encoding="utf-8")
+    for marker in ("googleAiCheck", 'api("/api/ai/test"', "Google AI · clave detectada", "Cuota"):
+        assert marker in connectivity
+    assert ".ai-status-button" in interactions
+    assert 'data-state="ready"' in interactions
