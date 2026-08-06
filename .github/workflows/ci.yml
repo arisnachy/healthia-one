@@ -44,6 +44,7 @@ jobs:
           node --check web/icons.js
           node --check web/runtime-integrations.js
           node --check web/provider-integrations.js
+          node --check web/clinical-council.js
       - name: Reject version-number UI layers
         shell: bash
         run: |
