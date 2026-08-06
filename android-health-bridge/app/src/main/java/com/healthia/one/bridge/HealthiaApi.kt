@@ -1,0 +1,48 @@
+package com.healthia.one.bridge
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.time.Instant
+
+object HealthiaApi {
+    fun sync(baseUrl: String, deviceId: String, records: List<HealthRecordDto>, background: Boolean): String {
+        val payload = JSONObject().apply {
+            put("device_id", deviceId)
+            put("source_package", "com.healthia.one.bridge")
+            put("synced_at", Instant.now().toString())
+            put("background_read", background)
+            put("records", JSONArray().apply {
+                records.forEach { record ->
+                    put(JSONObject().apply {
+                        put("external_id", record.externalId)
+                        put("metric", record.metric)
+                        put("observed_at", record.observedAt)
+                        put("value", record.value)
+                        if (record.secondaryValue != null) put("secondary_value", record.secondaryValue)
+                        put("unit", record.unit)
+                        put("source_package", record.sourcePackage)
+                        put("source_name", record.sourceName)
+                        put("device_manufacturer", record.manufacturer)
+                        put("device_model", record.model)
+                        put("device_type", record.deviceType)
+                        put("recording_method", record.recordingMethod)
+                    })
+                }
+            })
+        }
+        val connection = (URL("${baseUrl.trimEnd('/')}/api/devices/health-connect/sync").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+        }
+        connection.outputStream.use { it.write(payload.toString().toByteArray()) }
+        val body = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream)
+            .bufferedReader().use { it.readText() }
+        if (connection.responseCode !in 200..299) error("HealthIA sync failed: ${connection.responseCode} $body")
+        return body
+    }
+}

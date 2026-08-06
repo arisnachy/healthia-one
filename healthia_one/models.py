@@ -26,6 +26,8 @@ DEFAULT_SIGNAL_TYPES = [
     "documents",
     "medications",
     "appointments",
+    "device_data",
+    "reproductive_health",
 ]
 
 
@@ -71,15 +73,78 @@ class CarePlan(BaseModel):
     weight_change_watch_kg: float = 2.0
 
 
+class LifestyleHistory(BaseModel):
+    smoking_status: Literal["never", "former", "current", "unknown"] = "unknown"
+    cigarettes_per_day: float | None = Field(default=None, ge=0, le=200)
+    pack_years: float | None = Field(default=None, ge=0, le=500)
+    alcohol_status: Literal["never", "former", "current", "unknown"] = "unknown"
+    alcohol_notes: str = Field(default="", max_length=500)
+    drug_use_status: Literal["never", "former", "current", "unknown"] = "unknown"
+    drug_use_notes: str = Field(default="", max_length=500)
+    coffee_cups_per_day: float | None = Field(default=None, ge=0, le=30)
+    tea_cups_per_day: float | None = Field(default=None, ge=0, le=30)
+    physical_activity_notes: str = Field(default="", max_length=500)
+    nutrition_notes: str = Field(default="", max_length=500)
+
+
+class PersonalHistory(BaseModel):
+    chronic_conditions: list[str] = Field(default_factory=list)
+    transfusion_history: list[str] = Field(default_factory=list)
+    traumatic_history: list[str] = Field(default_factory=list)
+    surgical_history: list[str] = Field(default_factory=list)
+    hospitalizations: list[str] = Field(default_factory=list)
+    non_pathological_history: list[str] = Field(default_factory=list)
+    immunizations: list[str] = Field(default_factory=list)
+
+
+class ReproductiveHealth(BaseModel):
+    applicable: bool = False
+    menarche_age: int | None = Field(default=None, ge=7, le=25)
+    cycle_length_days: int | None = Field(default=None, ge=15, le=90)
+    last_menstrual_period: date | None = None
+    menstruation_notes: str = Field(default="", max_length=500)
+    menopause: bool = False
+    contraception: str = Field(default="", max_length=200)
+    pregnancies: int | None = Field(default=None, ge=0, le=30)
+    births: int | None = Field(default=None, ge=0, le=30)
+    cesareans: int | None = Field(default=None, ge=0, le=30)
+    miscarriages_or_losses: int | None = Field(default=None, ge=0, le=30)
+    pregnancy_status: Literal["not_pregnant", "pregnant", "postpartum", "unknown"] = "unknown"
+    estimated_due_date: date | None = None
+    delivery_date: date | None = None
+    breastfeeding: bool | None = None
+    pregnancy_notes: str = Field(default="", max_length=800)
+
+
+class EmergencyContact(BaseModel):
+    name: str = Field(default="", max_length=160)
+    relationship: str = Field(default="", max_length=100)
+    phone: str = Field(default="", max_length=80)
+
+
 class PatientProfile(BaseModel):
     id: str = "patient_demo"
     display_name: str = "Ana Martínez"
+    legal_name: str = ""
     birth_date: date = date(1982, 2, 20)
+    sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "female"
+    gender_identity: str = ""
+    preferred_pronouns: str = ""
+    blood_type: str = ""
+    height_cm: float | None = Field(default=165.0, ge=50, le=250)
+    email: str = ""
+    phone: str = ""
+    address: str = ""
+    occupation: str = ""
     locale: str = "es-DO"
     timezone: str = "America/Santo_Domingo"
     allergies: list[str] = Field(default_factory=list)
     medications: list[str] = Field(default_factory=lambda: ["Losartán 50 mg cada 24 horas"])
     confirmed_conditions: list[str] = Field(default_factory=lambda: ["Hipertensión arterial"])
+    lifestyle: LifestyleHistory = Field(default_factory=LifestyleHistory)
+    personal_history: PersonalHistory = Field(default_factory=PersonalHistory)
+    reproductive_health: ReproductiveHealth = Field(default_factory=ReproductiveHealth)
+    emergency_contact: EmergencyContact = Field(default_factory=EmergencyContact)
     care_plan: CarePlan = Field(default_factory=CarePlan)
     consented_signal_types: list[str] = Field(default_factory=lambda: list(DEFAULT_SIGNAL_TYPES))
 
@@ -161,13 +226,22 @@ class ClinicalDocument(BaseModel):
 class MedicationPlan(BaseModel):
     id: str = Field(default_factory=lambda: new_id("med"))
     patient_id: str = "patient_demo"
+    original_text: str = Field(default="", max_length=500)
     name: str = Field(min_length=2, max_length=160)
+    generic_name: str = Field(default="", max_length=160)
     strength: str = Field(default="", max_length=80)
+    dose_value: float | None = Field(default=None, ge=0)
+    dose_unit: str = Field(default="", max_length=30)
+    dosage_form: str = Field(default="", max_length=80)
     route: str = Field(default="oral", max_length=60)
     schedule: str = Field(default="", max_length=160)
+    frequency_times_per_day: float | None = Field(default=None, ge=0, le=24)
+    duration: str = Field(default="", max_length=100)
     purpose: str = Field(default="", max_length=220)
     instructions: str = Field(default="", max_length=500)
+    precautions: list[str] = Field(default_factory=list)
     prescribed_by: str = Field(default="", max_length=160)
+    verification_status: Literal["unverified", "patient_confirmed", "professional_confirmed"] = "unverified"
     active: bool = True
     source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_report", source_id="medication_form"))
 
@@ -214,8 +288,11 @@ class VitalRecord(BaseModel):
     systolic: int | None = None
     diastolic: int | None = None
     pulse: int | None = None
-    oxygen_saturation: float | None = None
-    temperature_c: float | None = None
+    respiratory_rate: float | None = Field(default=None, ge=1, le=100)
+    oxygen_saturation: float | None = Field(default=None, ge=1, le=100)
+    temperature_c: float | None = Field(default=None, ge=25, le=45)
+    blood_glucose_mg_dl: float | None = Field(default=None, ge=1, le=2000)
+    cholesterol_mg_dl: float | None = Field(default=None, ge=1, le=1500)
     symptoms: list[str] = Field(default_factory=list)
     source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_entry", source_id="web"))
 
@@ -247,9 +324,62 @@ class ActivityRecord(BaseModel):
     id: str = Field(default_factory=lambda: new_id("activity"))
     patient_id: str = "patient_demo"
     measured_at: datetime = Field(default_factory=utc_now)
-    steps: int = 0
-    active_minutes: int = 0
+    steps: int = Field(default=0, ge=0)
+    active_minutes: int = Field(default=0, ge=0)
     note: str = ""
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_entry", source_id="web"))
+
+
+class DeviceMetric(StrEnum):
+    STEPS = "steps"
+    HEART_RATE = "heart_rate"
+    BLOOD_PRESSURE = "blood_pressure"
+    WEIGHT = "weight"
+    HEIGHT = "height"
+    OXYGEN_SATURATION = "oxygen_saturation"
+    RESPIRATORY_RATE = "respiratory_rate"
+    BODY_TEMPERATURE = "body_temperature"
+    BLOOD_GLUCOSE = "blood_glucose"
+    CHOLESTEROL = "cholesterol"
+    MENSTRUATION_PERIOD = "menstruation_period"
+
+
+class DeviceObservation(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("device"))
+    patient_id: str = "patient_demo"
+    external_id: str = Field(min_length=1, max_length=240)
+    metric: DeviceMetric
+    observed_at: datetime
+    value: float
+    secondary_value: float | None = None
+    unit: str = Field(default="", max_length=40)
+    source_package: str = Field(default="", max_length=240)
+    source_name: str = Field(default="Health Connect", max_length=160)
+    device_manufacturer: str = Field(default="", max_length=120)
+    device_model: str = Field(default="", max_length=120)
+    device_type: str = Field(default="", max_length=80)
+    recording_method: str = Field(default="", max_length=80)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class HealthConnectSyncBatch(BaseModel):
+    device_id: str = Field(min_length=1, max_length=200)
+    source_package: str = Field(default="", max_length=240)
+    synced_at: datetime = Field(default_factory=utc_now)
+    background_read: bool = False
+    records: list[DeviceObservation] = Field(default_factory=list, max_length=5000)
+
+
+class DeviceConnection(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("connection"))
+    provider: Literal["health_connect", "wear_os", "manual", "other"] = "health_connect"
+    device_id: str
+    display_name: str = "Android Health Connect"
+    status: Literal["connected", "paused", "disconnected", "error"] = "connected"
+    permissions: list[str] = Field(default_factory=list)
+    background_read: bool = False
+    last_sync_at: datetime | None = None
+    last_error: str = ""
 
 
 class ResultItem(BaseModel):
@@ -319,6 +449,9 @@ class PatientState(BaseModel):
     documents: list[ClinicalDocument] = Field(default_factory=list)
     medication_plans: list[MedicationPlan] = Field(default_factory=list)
     medication_checkins: list[MedicationCheckIn] = Field(default_factory=list)
+    device_observations: list[DeviceObservation] = Field(default_factory=list)
+    device_connections: list[DeviceConnection] = Field(default_factory=list)
+    synced_external_ids: list[str] = Field(default_factory=list)
     appointments: list[Appointment] = Field(default_factory=list)
     goals: list[HealthGoal] = Field(default_factory=list)
     missions: list[HealthMission] = Field(default_factory=list)
@@ -326,6 +459,10 @@ class PatientState(BaseModel):
     audit_events: list[AuditEvent] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class MedicationNormalizeRequest(BaseModel):
+    text: str = Field(min_length=2, max_length=500)
 
 
 class ChatRequest(BaseModel):
