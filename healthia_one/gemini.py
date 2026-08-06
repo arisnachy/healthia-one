@@ -113,6 +113,7 @@ class GeminiResponder:
             model=self.settings.model,
             input=json.dumps(payload, ensure_ascii=False, default=str),
             system_instruction=SYSTEM_INSTRUCTION,
+            store=False,
         )
         text = str(getattr(interaction, "output_text", "") or "").strip()
         if not text:
@@ -133,7 +134,7 @@ class GeminiResponder:
             )
         except Exception as exc:  # deterministic fallback is intentional
             self.last_status = "fallback"
-            self.last_error = f"{type(exc).__name__}: {exc}"[:240]
+            self.last_error = f"{type(exc).__name__}: {exc}"[:500]
             draft.message.metadata.update(
                 {
                     "llm_backend": "gemini_api",
@@ -150,28 +151,56 @@ class GeminiResponder:
                 "llm_backend": "gemini_api",
                 "llm_status": "completed",
                 "model": self.settings.model,
+                "store": False,
             }
         )
         self.last_status = "completed"
         self.last_error = ""
         return draft
 
+    def _probe_live(self) -> str:
+        interaction = self._get_client().interactions.create(
+            model=self.settings.model,
+            input="Responde únicamente con HEALTHIA_OK",
+            system_instruction="Esta es una prueba técnica de disponibilidad. No uses herramientas ni añadas texto.",
+            store=False,
+        )
+        text = str(getattr(interaction, "output_text", "") or "").strip()
+        if not text:
+            raise RuntimeError("Gemini returned an empty probe response")
+        return text
+
     async def probe(self) -> dict[str, str | bool]:
         if self.settings.llm_backend != "gemini_api" or not self.settings.adk_ready:
-            return {"ok": False, "status": "not_configured", "model": self.settings.model}
+            return {
+                "ok": False,
+                "status": "not_configured",
+                "model": self.settings.model,
+                "live_request": False,
+                "error": "Falta configurar GEMINI_API_KEY en el proceso local.",
+            }
         try:
-            model = await asyncio.wait_for(
-                asyncio.to_thread(self._get_client().models.get, model=self.settings.model),
-                timeout=min(self.settings.llm_timeout_seconds, 20),
+            text = await asyncio.wait_for(
+                asyncio.to_thread(self._probe_live),
+                timeout=min(self.settings.llm_timeout_seconds, 30),
             )
         except Exception as exc:
             self.last_status = "probe_failed"
-            self.last_error = f"{type(exc).__name__}: {exc}"[:240]
-            return {"ok": False, "status": "probe_failed", "model": self.settings.model}
+            self.last_error = f"{type(exc).__name__}: {exc}"[:500]
+            return {
+                "ok": False,
+                "status": "probe_failed",
+                "model": self.settings.model,
+                "live_request": True,
+                "error": self.last_error,
+            }
         self.last_status = "ready"
         self.last_error = ""
         return {
             "ok": True,
             "status": "ready",
-            "model": str(getattr(model, "name", self.settings.model)),
+            "model": self.settings.model,
+            "live_request": True,
+            "response": text,
+            "store": False,
         }
