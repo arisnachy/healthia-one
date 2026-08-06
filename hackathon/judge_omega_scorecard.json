@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-08-06",
+  "primary_track": "The Taskmaster",
+  "target_score": 90,
+  "official_rubric": {
+    "innovation_operational_utility": 40,
+    "architectural_discipline_tech_stack": 30,
+    "demo_production_readiness": 30
+  },
+  "hard_gates": [
+    {
+      "id": "gemini_35_or_newer",
+      "label": "Gemini 3.5 or newer is used through Gemini API or Vertex AI",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "healthia_one/gemini.py"},
+        {"kind": "repo_path", "value": "pyproject.toml"}
+      ]
+    },
+    {
+      "id": "google_agent_framework",
+      "label": "At least one Google agent framework is present",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "healthia_agent/agent.py"},
+        {"kind": "repo_path", "value": "pyproject.toml"}
+      ]
+    },
+    {
+      "id": "google_cloud_infrastructure",
+      "label": "At least one Google Cloud infrastructure service is built and deployment is proven",
+      "status": "partial",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "Dockerfile"},
+        {"kind": "repo_path", "value": "healthia_one/store.py"}
+      ]
+    },
+    {
+      "id": "track_alignment",
+      "label": "The project clearly fits one official track",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "docs/HACKATHON_WIN_PLAN.md"}
+      ]
+    },
+    {
+      "id": "reproducible_spinup",
+      "label": "README contains reproducible local and cloud-oriented spin-up instructions",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "README.md"}
+      ]
+    },
+    {
+      "id": "architecture_diagram",
+      "label": "A clear architecture diagram is ready for judges",
+      "status": "partial",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "docs/ARCHITECTURE.md"}
+      ]
+    },
+    {
+      "id": "four_minute_demo",
+      "label": "A tight unedited approximately four-minute demo proves the product and cloud runtime",
+      "status": "missing",
+      "blocker_if_not_proven": true,
+      "evidence": []
+    },
+    {
+      "id": "cloud_runtime_proof",
+      "label": "Cloud Run, logs, persistent state and a real Gemini call are visibly proven",
+      "status": "missing",
+      "blocker_if_not_proven": true,
+      "evidence": []
+    }
+  ],
+  "criteria": [
+    {
+      "id": "innovation_operational_utility",
+      "label": "Innovation & Operational Utility",
+      "max_points": 40,
+      "awarded_points": 25,
+      "reason": "The patient-owned continuity problem is strong and differentiated, with consent-bound proactive logic and device ingestion. The current visible product still needs one agent-driven closed loop that executes tools and reaches a verified outcome with little hand-holding.",
+      "evidence": [
+        {"kind": "repo_path", "value": "healthia_one/service.py"},
+        {"kind": "repo_path", "value": "healthia_one/proactive.py"},
+        {"kind": "repo_path", "value": "healthia_one/continuity.py"},
+        {"kind": "repo_path", "value": "android-health-bridge"}
+      ]
+    },
+    {
+      "id": "architectural_discipline_tech_stack",
+      "label": "Architectural Discipline & Tech Stack",
+      "max_points": 30,
+      "awarded_points": 19,
+      "reason": "Typed state, deterministic safety, consent, auditability, ADK, Gemini, Firestore boundary and a clean frontend are strong. The ADK graph is not yet the main runtime, durable cloud execution is absent, identity isolation is incomplete and judge-visible observability is limited.",
+      "evidence": [
+        {"kind": "repo_path", "value": "healthia_agent/agent.py"},
+        {"kind": "repo_path", "value": "healthia_one/models.py"},
+        {"kind": "repo_path", "value": "healthia_one/store.py"},
+        {"kind": "repo_path", "value": "docs/ARCHITECTURE.md"}
+      ]
+    },
+    {
+      "id": "demo_production_readiness",
+      "label": "Demo & Production Readiness",
+      "max_points": 30,
+      "awarded_points": 8,
+      "reason": "The repository, local launcher, synthetic path and setup documentation are useful. There is no completed four-minute judge video, hosted proof, Cloud Run evidence, durable mission trace or final submission package yet.",
+      "evidence": [
+        {"kind": "repo_path", "value": "README.md"},
+        {"kind": "repo_path", "value": "docs/DEMO_SCRIPT.md"},
+        {"kind": "repo_path", "value": "scripts/smoke_test.py"}
+      ]
+    }
+  ],
+  "critical_blockers": [
+    {
+      "id": "adk_not_primary_runtime",
+      "statement": "The Google ADK coordinator must select and execute the same tools used by the visible chat and proactive workflow.",
+      "evidence_needed": "One correlated trace showing trigger, ADK decision, tool calls, public results and closure."
+    },
+    {
+      "id": "no_durable_cloud_trigger",
+      "statement": "The current process-local loop is not durable asynchronous Google Cloud execution.",
+      "evidence_needed": "Cloud Scheduler, Pub/Sub or Cloud Tasks invoking a Cloud Run worker, with logs and retry behavior."
+    },
+    {
+      "id": "no_closed_loop_mission",
+      "statement": "The product must prove an action completed from event to verified mission outcome, not only generate a message.",
+      "evidence_needed": "A synthetic end-to-end mission with evidence IDs, action result, patient feedback and closure state."
+    },
+    {
+      "id": "no_cloud_judge_proof",
+      "statement": "The submission lacks visible proof of Cloud Run, persistent state and a real Gemini execution.",
+      "evidence_needed": "Hosted URL or deployment evidence, Cloud Run revision, correlated logs, Firestore round trip and model call."
+    },
+    {
+      "id": "no_final_demo_package",
+      "statement": "The final architecture diagram, unedited demo, write-up and submission evidence are not assembled.",
+      "evidence_needed": "Final judge package matching the official submission checklist."
+    }
+  ],
+  "next_actions": [
+    "Make Google ADK the visible mission runtime and emit structured public tool results.",
+    "Add durable Cloud Scheduler or Pub/Sub execution on Cloud Run with Firestore and Secret Manager.",
+    "Record one closed-loop synthetic mission and expose its judge-visible execution timeline."
+  ]
+}
