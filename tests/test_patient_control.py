@@ -26,6 +26,21 @@ def test_disabled_proactivity_blocks_nonurgent_but_not_authorized_urgent():
     assert urgent_allowed and urgent_reason == "urgent_safety_bypass"
 
 
+def test_explicit_manual_review_bypasses_notification_silence():
+    state = seed_state()
+    state.consent.proactive_enabled = False
+    state.consent.snoozed_until = datetime.now(timezone.utc) + timedelta(days=1)
+    state.consent.muted_rule_prefixes = ["weight:"]
+    allowed, reason = finding_allowed(
+        state,
+        finding(key="weight:gain"),
+        datetime.now(timezone.utc),
+        manual_requested=True,
+    )
+    assert allowed
+    assert reason == "manual_review_requested"
+
+
 def test_quiet_hours_wrap_midnight():
     consent = PatientConsent(quiet_hours_start="22:00", quiet_hours_end="07:00")
     assert in_quiet_hours(consent, datetime(2026, 8, 5, 23, 0, tzinfo=timezone.utc))
