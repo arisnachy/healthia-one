@@ -1,7 +1,10 @@
 package com.healthia.one.bridge
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND
 import androidx.health.connect.client.records.*
@@ -10,26 +13,64 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-class HealthConnectRepository(context: Context) {
-    private val client = HealthConnectClient.getOrCreate(context)
+class HealthConnectRepository(private val context: Context) {
+    private val sdkStatus = HealthConnectClient.getSdkStatus(context)
+    val isAvailable: Boolean = sdkStatus == HealthConnectClient.SDK_AVAILABLE
+    val providerUpdateRequired: Boolean = sdkStatus == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED
 
-    val permissions: Set<String> = setOf(
-        HealthPermission.getReadPermission(StepsRecord::class),
-        HealthPermission.getReadPermission(HeartRateRecord::class),
-        HealthPermission.getReadPermission(BloodPressureRecord::class),
-        HealthPermission.getReadPermission(WeightRecord::class),
-        HealthPermission.getReadPermission(HeightRecord::class),
-        HealthPermission.getReadPermission(OxygenSaturationRecord::class),
-        HealthPermission.getReadPermission(RespiratoryRateRecord::class),
-        HealthPermission.getReadPermission(BodyTemperatureRecord::class),
-        HealthPermission.getReadPermission(BloodGlucoseRecord::class),
-        HealthPermission.getReadPermission(MenstruationPeriodRecord::class),
-        PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND,
-    )
+    private val client: HealthConnectClient by lazy {
+        check(isAvailable) { "Health Connect is not available on this device" }
+        HealthConnectClient.getOrCreate(context)
+    }
 
-    suspend fun grantedPermissions(): Set<String> = client.permissionController.getGrantedPermissions()
+    val supportsBackgroundRead: Boolean
+        get() = isAvailable && client.features.getFeatureStatus(
+            HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND
+        ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+
+    val permissions: Set<String>
+        get() = buildSet {
+            add(HealthPermission.getReadPermission(StepsRecord::class))
+            add(HealthPermission.getReadPermission(HeartRateRecord::class))
+            add(HealthPermission.getReadPermission(BloodPressureRecord::class))
+            add(HealthPermission.getReadPermission(WeightRecord::class))
+            add(HealthPermission.getReadPermission(HeightRecord::class))
+            add(HealthPermission.getReadPermission(OxygenSaturationRecord::class))
+            add(HealthPermission.getReadPermission(RespiratoryRateRecord::class))
+            add(HealthPermission.getReadPermission(BodyTemperatureRecord::class))
+            add(HealthPermission.getReadPermission(BloodGlucoseRecord::class))
+            add(HealthPermission.getReadPermission(MenstruationPeriodRecord::class))
+            if (supportsBackgroundRead) add(PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
+        }
+
+    fun availabilityMessage(): String = when {
+        isAvailable -> "Health Connect está disponible"
+        providerUpdateRequired -> "Health Connect debe instalarse o actualizarse"
+        else -> "Health Connect no está disponible en este dispositivo"
+    }
+
+    fun providerInstallIntent(): Intent = Intent(Intent.ACTION_VIEW).apply {
+        setPackage("com.android.vending")
+        data = Uri.parse(
+            "market://details?id=com.google.android.apps.healthdata&url=healthconnect%3A%2F%2Fonboarding"
+        )
+        putExtra("overlay", true)
+        putExtra("callerId", context.packageName)
+    }
+
+    fun manageDataIntent(): Intent = HealthConnectClient.getHealthConnectManageDataIntent(context)
+
+    suspend fun grantedPermissions(): Set<String> {
+        requireAvailable()
+        return client.permissionController.getGrantedPermissions()
+    }
 
     suspend fun readSince(start: Instant = Instant.now().minus(24, ChronoUnit.HOURS)): List<HealthRecordDto> {
+        requireAvailable()
+        val granted = grantedPermissions()
+        val missing = permissions - granted
+        require(missing.isEmpty()) { "Faltan permisos de Health Connect" }
+
         val end = Instant.now()
         val range = TimeRangeFilter.between(start, end)
         val output = mutableListOf<HealthRecordDto>()
@@ -72,6 +113,10 @@ class HealthConnectRepository(context: Context) {
             output += record.dto("menstruation_period", 1.0, "period", record.startTime)
         }
         return output
+    }
+
+    private fun requireAvailable() {
+        check(isAvailable) { availabilityMessage() }
     }
 
     private suspend inline fun <reified T : Record> read(range: TimeRangeFilter): List<T> =
