@@ -465,6 +465,12 @@ class MedicationNormalizeRequest(BaseModel):
     text: str = Field(min_length=2, max_length=500)
 
 
+class DevicePairingClaim(BaseModel):
+    code: str = Field(pattern=r"^\d{6}$")
+    device_id: str = Field(min_length=3, max_length=200)
+    display_name: str = Field(default="Android Health Connect", max_length=160)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 

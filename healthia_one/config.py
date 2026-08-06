@@ -9,11 +9,12 @@ class Settings(BaseSettings):
 
     env: str = "local"
     model: str = "gemini-3.6-flash"
-    llm_backend: str = "mock"
+    llm_backend: str = "gemini_api"
     store_backend: str = "json"
     data_path: Path = Path(".healthia-one/state.json")
     proactive_interval_seconds: int = 20
     max_upload_bytes: int = 5 * 1024 * 1024
+    llm_timeout_seconds: int = 45
 
     @property
     def adk_ready(self) -> bool:

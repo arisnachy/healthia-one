@@ -1,0 +1,59 @@
+/* Shared interaction components for navigation, chat composer and device pairing. */
+.rail-reopen { display: none; flex: 0 0 auto; }
+.left-collapsed .rail-reopen { display: grid; }
+
+#view-chat.is-active { position: relative; display: block; height: 100%; min-height: 0; overflow: hidden; }
+#view-chat .chat-scroll { height: 100%; padding-bottom: 154px; }
+#view-chat .composer-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 8;
+  padding: 34px 0 13px;
+  border: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.94) 35%, #fff 62%);
+}
+#view-chat .composer {
+  width: min(820px, calc(100% - 36px));
+  margin: 0 auto;
+  border-radius: 25px;
+  box-shadow: 0 8px 28px rgba(30,45,70,.11);
+}
+#view-chat .composer-wrap > small { width: min(820px, calc(100% - 36px)); margin: 8px auto 0; }
+
+.device-connect-dialog { width: min(680px, calc(100vw - 28px)); }
+.device-connect-shell { padding: 20px; }
+.device-connect-shell > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.device-connect-shell > header small, .device-connect-shell > header h2 { display: block; margin: 0; }
+.device-connect-shell > header small { color: var(--faint); font-size: 8px; letter-spacing: .12em; }
+.device-connect-shell > header h2 { margin-top: 5px; font-size: 20px; }
+.device-connect-shell > header button { border: 0; width: 32px; height: 32px; border-radius: 10px; background: var(--surface-soft); }
+.device-connect-lead { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.device-connect-steps { display: grid; gap: 8px; margin: 16px 0; }
+.device-connect-steps article { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; }
+.device-connect-steps article > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: var(--slate-soft); color: var(--slate-dark); font-weight: 850; }
+.device-connect-steps strong { font-size: 10px; }
+.device-connect-steps p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.pairing-panel { display: grid; grid-template-columns: minmax(0,1fr) 150px; gap: 10px; padding: 13px; border-radius: 15px; background: var(--surface-soft); }
+.pairing-panel label { color: var(--muted); font-size: 8px; font-weight: 750; }
+.pairing-panel input { width: 100%; margin-top: 5px; border: 1px solid var(--line); border-radius: 10px; padding: 9px; background: white; color: var(--ink); }
+#pairingCode { text-align: center; font-size: 18px; font-weight: 850; letter-spacing: .12em; }
+.pairing-status { grid-column: 1 / -1; color: var(--slate-dark); font-size: 9px; line-height: 1.45; }
+.pairing-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pairing-actions button, .pairing-actions a, .device-demo-path button { border: 0; border-radius: 10px; padding: 9px 11px; background: var(--slate); color: white; font-size: 9px; font-weight: 750; text-decoration: none; }
+.pairing-actions a { background: white; color: var(--slate-dark); border: 1px solid var(--line); }
+.device-demo-path { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px dashed #c7d2e0; border-radius: 14px; }
+.device-demo-path strong { font-size: 10px; }
+.device-demo-path p { margin: 4px 0 0; color: var(--muted); font-size: 9px; }
+.device-hero > div:last-child { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+#connectDevice { background: var(--slate-dark); color: white; }
+
+@media (max-width: 760px) {
+  .rail-reopen { display: none !important; }
+  #view-chat .chat-scroll { padding-bottom: 118px; }
+  #view-chat .composer-wrap { padding-top: 26px; }
+  .pairing-panel { grid-template-columns: 1fr; }
+  .pairing-status, .pairing-actions { grid-column: auto; }
+  .device-demo-path { align-items: stretch; flex-direction: column; }
+}

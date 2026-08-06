@@ -103,19 +103,17 @@ python -m pip install -e ".[test]"
 uvicorn app.main:app --reload --port 8000
 ```
 
-## Optional Google ADK / Gemini configuration
+## Google Gemini configuration
 
-Use a fresh secret in the local environment. Never commit or paste an API key into a repository, screenshot or chat.
+The normal secure launcher now starts the patient chat with Gemini and verifies the API key and model before opening the server. The key is held only in the launcher process and is removed when the server stops.
 
 ```powershell
-$env:HEALTHIA_LLM_BACKEND = "gemini_api"
-$env:HEALTHIA_MODEL = "gemini-3.6-flash"
-$env:GOOGLE_API_KEY = Read-Host -AsSecureString "Gemini API key"
+.\deployment\run-local-secure.ps1
 ```
 
-The secure PowerShell launcher prompts for the key without storing it in a file and removes process variables when the server stops.
+Use `-Mock` only when you intentionally want the deterministic offline mode. The chat keeps deterministic safety and consent gates; Gemini generates the patient-facing response from the authorized context and falls back safely if the API is unavailable.
 
-The web application's deterministic safety and continuity routes do not depend on a model call. A full Google ADK mission must be verified separately before claiming cloud AI execution.
+The device page now provides a real six-digit pairing flow for the Android bridge plus a synthetic path for demonstrations without hardware. A phone must use the computer's LAN address rather than `127.0.0.1`.
 
 ## Verification
 
