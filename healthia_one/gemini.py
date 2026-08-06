@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from healthia_one.config import Settings
@@ -39,8 +41,30 @@ class GeminiResponder:
             else:
                 from google import genai
 
-                self._client = genai.Client()
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                if not api_key:
+                    raise RuntimeError("GEMINI_API_KEY no está configurada para el proceso actual")
+                self._client = genai.Client(api_key=api_key)
         return self._client
+
+    @staticmethod
+    def _interaction_text(interaction: Any) -> str:
+        """Extract text across current and early google-genai 2.x interaction shapes."""
+
+        direct = getattr(interaction, "output_text", "")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+
+        outputs = getattr(interaction, "outputs", None) or []
+        for output in reversed(outputs):
+            text = getattr(output, "text", "")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+            if isinstance(output, dict):
+                text = output.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        return ""
 
     @staticmethod
     def authorized_context(state: PatientState) -> dict[str, Any]:
@@ -114,7 +138,7 @@ class GeminiResponder:
             input=json.dumps(payload, ensure_ascii=False, default=str),
             system_instruction=SYSTEM_INSTRUCTION,
         )
-        text = str(getattr(interaction, "output_text", "") or "").strip()
+        text = self._interaction_text(interaction)
         if not text:
             raise RuntimeError("Gemini returned an empty patient response")
         return text
@@ -160,18 +184,31 @@ class GeminiResponder:
         if self.settings.llm_backend != "gemini_api" or not self.settings.adk_ready:
             return {"ok": False, "status": "not_configured", "model": self.settings.model}
         try:
+            client = self._get_client()
+            if not hasattr(client, "interactions"):
+                raise RuntimeError("google-genai 2.x con Interactions API no está instalado")
             model = await asyncio.wait_for(
-                asyncio.to_thread(self._get_client().models.get, model=self.settings.model),
+                asyncio.to_thread(client.models.get, model=self.settings.model),
                 timeout=min(self.settings.llm_timeout_seconds, 20),
             )
+            try:
+                sdk_version = version("google-genai")
+            except PackageNotFoundError:
+                sdk_version = "unknown"
         except Exception as exc:
             self.last_status = "probe_failed"
             self.last_error = f"{type(exc).__name__}: {exc}"[:240]
-            return {"ok": False, "status": "probe_failed", "model": self.settings.model}
+            return {
+                "ok": False,
+                "status": "probe_failed",
+                "model": self.settings.model,
+                "detail": self.last_error,
+            }
         self.last_status = "ready"
         self.last_error = ""
         return {
             "ok": True,
             "status": "ready",
             "model": str(getattr(model, "name", self.settings.model)),
+            "sdk_version": sdk_version,
         }

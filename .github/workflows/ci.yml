@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: healthia-verification-${{ github.event.pull_request.number || github.ref }}
@@ -39,6 +40,7 @@ jobs:
           node --check web/privacy-controls.js
           node --check web/profile-devices.js
           node --check web/icons.js
+          node --check web/runtime-integrations.js
       - name: Reject version-number UI layers
         shell: bash
         run: |
