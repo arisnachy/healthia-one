@@ -7,6 +7,7 @@ from typing import AsyncIterator, Callable
 
 from healthia_one.config import Settings
 from healthia_one.continuity import evaluate_continuity
+from healthia_one.devices import ingest_health_connect_batch
 from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
 from healthia_one.models import (
     ActivityRecord,
@@ -15,10 +16,12 @@ from healthia_one.models import (
     ClinicalDocument,
     FamilyCondition,
     FamilyMember,
+    HealthConnectSyncBatch,
     HealthGoal,
     MedicationCheckIn,
     MedicationPlan,
     PatientConsent,
+    PatientProfile,
     PatientState,
     VitalRecord,
     WeightRecord,
@@ -97,14 +100,24 @@ def seed_state() -> PatientState:
             conditions=[FamilyCondition(name="Hipertensión arterial", age_at_diagnosis=39, confirmed=True)],
         ),
     ]
+    state.profile.personal_history.chronic_conditions = ["Hipertensión arterial"]
+    state.profile.lifestyle.smoking_status = "never"
+    state.profile.lifestyle.alcohol_status = "unknown"
     medication = MedicationPlan(
+        original_text="Losartán 50 mg por vía oral cada 24 horas",
         name="Losartán",
+        generic_name="losartán",
         strength="50 mg",
+        dose_value=50,
+        dose_unit="mg",
+        dosage_form="tableta",
         route="oral",
         schedule="cada 24 horas",
+        frequency_times_per_day=1,
         purpose="Control de presión arterial",
         instructions="Seguir únicamente el esquema indicado por el profesional.",
         prescribed_by="Profesional tratante (dato sintético)",
+        verification_status="professional_confirmed",
     )
     state.medication_plans = [medication]
     state.medication_checkins = [
@@ -132,11 +145,8 @@ def seed_state() -> PatientState:
     state.messages = [
         ChatMessage(
             role="assistant",
-            author="KIRA Health",
-            content=(
-                "Hola, Ana. Mantengo tus mediciones, tratamiento, citas, documentos, historia familiar "
-                "y misiones en una sola conversación. Tú controlas qué señales puedo vigilar y cuándo intervenir."
-            ),
+            author="HealthIA",
+            content="Hola, Ana. Ya revisé tus datos recientes. ¿Qué te gustaría revisar hoy?",
         )
     ]
     audit(
@@ -159,6 +169,7 @@ SORT_KEYS: dict[str, Callable] = {
     "medication_checkins": lambda item: item.recorded_at,
     "appointments": lambda item: item.scheduled_at,
     "missions": lambda item: item.updated_at,
+    "device_observations": lambda item: item.observed_at,
 }
 
 
@@ -185,6 +196,48 @@ class HealthIAService:
     async def snapshot(self) -> PatientState:
         return await self.store.load()
 
+    async def reset_demo(self) -> PatientState:
+        async with self._mutation_lock:
+            state = seed_state()
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "reset"})
+        return state
+
+    async def update_profile(self, profile: PatientProfile) -> PatientProfile:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            state.profile = profile
+            audit(
+                state,
+                actor="patient",
+                action="update_patient_profile",
+                resource_type="patient_profile",
+                resource_id=profile.id,
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "profile"})
+        return profile
+
+    async def ingest_health_connect(self, batch: HealthConnectSyncBatch) -> dict:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            result = ingest_health_connect_batch(state, batch)
+            audit(
+                state,
+                actor="android_health_connect",
+                action="sync_device_batch",
+                resource_type="device_connection",
+                resource_id=batch.device_id,
+                details={
+                    "accepted": result["accepted"],
+                    "duplicates": result["duplicates"],
+                    "background_read": batch.background_read,
+                },
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "devices"})
+        return result
+
     async def add_patient_message(self, content: str):
         async with self._mutation_lock:
             state = await self.store.load()
@@ -195,7 +248,7 @@ class HealthIAService:
             state.messages.append(response.message)
             audit(
                 state,
-                actor="kira_health",
+                actor="healthia",
                 action="respond_and_route",
                 resource_type="chat_message",
                 resource_id=response.message.id,
@@ -238,7 +291,16 @@ class HealthIAService:
         return next((item for item in state.documents if item.id == document_id), None)
 
     async def add_medication_plan(self, plan: MedicationPlan) -> MedicationPlan:
-        return await self._append_and_publish("medication_plans", plan, "medications", action="add_medication_plan")
+        async with self._mutation_lock:
+            state = await self.store.load()
+            state.medication_plans.append(plan)
+            label = " ".join(part for part in [plan.name, plan.strength, plan.schedule] if part).strip()
+            if label and label not in state.profile.medications:
+                state.profile.medications.append(label)
+            audit(state, actor="patient", action="add_medication_plan", resource_type="medications", resource_id=plan.id)
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "medications"})
+        return plan
 
     async def add_medication_checkin(self, checkin: MedicationCheckIn) -> MedicationCheckIn:
         state = await self.store.load()
@@ -325,7 +387,7 @@ class HealthIAService:
                 )
                 message = ChatMessage(
                     role="assistant",
-                    author="KIRA Health",
+                    author="HealthIA",
                     content=content,
                     risk_level=finding.risk_level,
                     agent_plan=finding.agent_plan,
@@ -334,7 +396,7 @@ class HealthIAService:
                 state.messages.append(message)
                 audit(
                     state,
-                    actor="kira_health",
+                    actor="healthia",
                     action="emit_proactive_intervention",
                     resource_type="chat_message",
                     resource_id=message.id,

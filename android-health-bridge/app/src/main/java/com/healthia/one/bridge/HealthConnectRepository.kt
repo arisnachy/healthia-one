@@ -1,0 +1,120 @@
+package com.healthia.one.bridge
+
+import android.content.Context
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND
+import androidx.health.connect.client.records.*
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+
+class HealthConnectRepository(context: Context) {
+    private val client = HealthConnectClient.getOrCreate(context)
+
+    val permissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(StepsRecord::class),
+        HealthPermission.getReadPermission(HeartRateRecord::class),
+        HealthPermission.getReadPermission(BloodPressureRecord::class),
+        HealthPermission.getReadPermission(WeightRecord::class),
+        HealthPermission.getReadPermission(HeightRecord::class),
+        HealthPermission.getReadPermission(OxygenSaturationRecord::class),
+        HealthPermission.getReadPermission(RespiratoryRateRecord::class),
+        HealthPermission.getReadPermission(BodyTemperatureRecord::class),
+        HealthPermission.getReadPermission(BloodGlucoseRecord::class),
+        HealthPermission.getReadPermission(MenstruationPeriodRecord::class),
+        PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND,
+    )
+
+    suspend fun grantedPermissions(): Set<String> = client.permissionController.getGrantedPermissions()
+
+    suspend fun readSince(start: Instant = Instant.now().minus(24, ChronoUnit.HOURS)): List<HealthRecordDto> {
+        val end = Instant.now()
+        val range = TimeRangeFilter.between(start, end)
+        val output = mutableListOf<HealthRecordDto>()
+        read<StepsRecord>(range).forEach { record ->
+            output += record.dto("steps", record.count.toDouble(), "count", record.startTime)
+        }
+        read<HeartRateRecord>(range).forEach { record ->
+            record.samples.forEachIndexed { index, sample ->
+                output += record.dto("heart_rate", sample.beatsPerMinute.toDouble(), "bpm", sample.time, suffix = index.toString())
+            }
+        }
+        read<BloodPressureRecord>(range).forEach { record ->
+            output += record.dto(
+                "blood_pressure",
+                record.systolic.inMillimetersOfMercury,
+                "mmHg",
+                record.time,
+                secondary = record.diastolic.inMillimetersOfMercury,
+            )
+        }
+        read<WeightRecord>(range).forEach { record ->
+            output += record.dto("weight", record.weight.inKilograms, "kg", record.time)
+        }
+        read<HeightRecord>(range).forEach { record ->
+            output += record.dto("height", record.height.inCentimeters, "cm", record.time)
+        }
+        read<OxygenSaturationRecord>(range).forEach { record ->
+            output += record.dto("oxygen_saturation", record.percentage.value, "%", record.time)
+        }
+        read<RespiratoryRateRecord>(range).forEach { record ->
+            output += record.dto("respiratory_rate", record.rate, "breaths/min", record.time)
+        }
+        read<BodyTemperatureRecord>(range).forEach { record ->
+            output += record.dto("body_temperature", record.temperature.inCelsius, "°C", record.time)
+        }
+        read<BloodGlucoseRecord>(range).forEach { record ->
+            output += record.dto("blood_glucose", record.level.inMilligramsPerDeciliter, "mg/dL", record.time)
+        }
+        read<MenstruationPeriodRecord>(range).forEach { record ->
+            output += record.dto("menstruation_period", 1.0, "period", record.startTime)
+        }
+        return output
+    }
+
+    private suspend inline fun <reified T : Record> read(range: TimeRangeFilter): List<T> =
+        client.readRecords(ReadRecordsRequest<T>(timeRangeFilter = range)).records
+
+    private fun Record.dto(
+        metric: String,
+        value: Double,
+        unit: String,
+        time: Instant,
+        secondary: Double? = null,
+        suffix: String = "",
+    ): HealthRecordDto {
+        val metadata = metadata
+        val device = metadata.device
+        return HealthRecordDto(
+            externalId = listOf(metadata.id, suffix).filter { it.isNotBlank() }.joinToString(":"),
+            metric = metric,
+            observedAt = time.toString(),
+            value = value,
+            secondaryValue = secondary,
+            unit = unit,
+            sourcePackage = metadata.dataOrigin.packageName,
+            sourceName = metadata.dataOrigin.packageName,
+            manufacturer = device?.manufacturer.orEmpty(),
+            model = device?.model.orEmpty(),
+            deviceType = device?.type?.toString().orEmpty(),
+            recordingMethod = metadata.recordingMethod.toString(),
+        )
+    }
+}
+
+data class HealthRecordDto(
+    val externalId: String,
+    val metric: String,
+    val observedAt: String,
+    val value: Double,
+    val secondaryValue: Double?,
+    val unit: String,
+    val sourcePackage: String,
+    val sourceName: String,
+    val manufacturer: String,
+    val model: String,
+    val deviceType: String,
+    val recordingMethod: String,
+)

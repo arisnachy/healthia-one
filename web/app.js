@@ -182,7 +182,7 @@ async function upload(file) {
 }
 
 const dialogDefinitions = {
-  vital: {title:"Registrar presión y signos", fields:[['systolic','Sistólica','number'],['diastolic','Diastólica','number'],['pulse','Pulso','number'],['oxygen_saturation','Saturación %','number'],['symptoms','Síntomas separados por coma','text']]},
+  vital: {title:"Registrar presión y signos", fields:[['systolic','Sistólica','number'],['diastolic','Diastólica','number'],['pulse','FC · lpm','number'],['respiratory_rate','FR · rpm','number'],['oxygen_saturation','Oximetría · %','number'],['temperature_c','Temperatura · °C','number'],['blood_glucose_mg_dl','Glicemia · mg/dL','number'],['cholesterol_mg_dl','Colesterol · mg/dL','number'],['symptoms','Síntomas separados por coma','text']]},
   weight: {title:"Registrar peso", fields:[['weight_kg','Peso en kg','number'],['note','Contexto o nota','text']]},
   activity: {title:"Registrar actividad", fields:[['steps','Pasos','number'],['active_minutes','Minutos activos','number'],['note','Barrera o contexto','text']]}
 };
@@ -199,7 +199,7 @@ async function saveDialog() {
   const form = new FormData(refs.dataForm);
   const payload = Object.fromEntries(form.entries());
   Object.keys(payload).forEach(key => { if (payload[key] === "") delete payload[key]; });
-  for (const key of ["systolic","diastolic","pulse","oxygen_saturation","weight_kg","steps","active_minutes"]) if (payload[key] !== undefined) payload[key] = Number(payload[key]);
+  for (const key of ["systolic","diastolic","pulse","respiratory_rate","oxygen_saturation","temperature_c","blood_glucose_mg_dl","cholesterol_mg_dl","weight_kg","steps","active_minutes"]) if (payload[key] !== undefined) payload[key] = Number(payload[key]);
   if (payload.symptoms) payload.symptoms = payload.symptoms.split(",").map(item => item.trim()).filter(Boolean);
   const endpoint = {vital:"/api/vitals", weight:"/api/weight", activity:"/api/activity"}[state.dialogType];
   try { await api(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}); refs.dialog.close(); await refresh(); showToast("Medición guardada."); }

@@ -12,18 +12,23 @@ from fastapi.staticfiles import StaticFiles
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
+from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
 from healthia_one.family import family_summary
+from healthia_one.profile import normalize_medication_text, profile_summary
 from healthia_one.models import (
     ActivityRecord,
     Appointment,
     ChatRequest,
     FamilyMember,
+    HealthConnectSyncBatch,
     HealthGoal,
     MedicationCheckIn,
+    MedicationNormalizeRequest,
     MedicationPlan,
     MuteRuleRequest,
     PatientConsent,
+    PatientProfile,
     SnoozeRequest,
     VitalRecord,
     WeightRecord,
@@ -94,6 +99,12 @@ async def readiness() -> dict:
             "snooze_and_mute",
             "audit_log",
             "patient_export",
+            "patient_profile",
+            "reproductive_health",
+            "pregnancy_and_postpartum",
+            "bmi_and_nutrition_context",
+            "health_connect_sync",
+            "device_medication_cross_check",
         ],
         "truth_boundary": (
             "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
@@ -112,11 +123,51 @@ async def bootstrap() -> dict:
     payload["medication_summary"] = medication_summary(state)
     payload["condition_packs"] = condition_pack_summary(state)
     payload["consultation_brief"] = consultation_brief(state)
+    payload["profile_summary"] = profile_summary(state)
+    payload["device_summary"] = device_summary(state)
+    payload["device_medication_cross_checks"] = medication_device_cross_checks(state)
     payload["audit_summary"] = {
         "count": len(state.audit_events),
         "latest": [item.model_dump(mode="json") for item in state.audit_events[-20:]],
     }
     return payload
+
+
+@app.get("/api/profile")
+async def get_profile() -> dict:
+    return profile_summary(await service.snapshot())
+
+
+@app.put("/api/profile")
+async def update_profile(profile: PatientProfile) -> dict:
+    await service.update_profile(profile)
+    return profile_summary(await service.snapshot())
+
+
+@app.post("/api/profile/medications/normalize")
+async def normalize_medication(request: MedicationNormalizeRequest) -> dict:
+    try:
+        plan = normalize_medication_text(request.text)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "suggestion": plan.model_dump(mode="json"),
+        "requires_confirmation": True,
+        "safety": "La normalización organiza el texto; no prescribe ni confirma que el medicamento sea correcto.",
+    }
+
+
+@app.get("/api/devices")
+async def devices() -> dict:
+    state = await service.snapshot()
+    payload = device_summary(state)
+    payload["medication_cross_checks"] = medication_device_cross_checks(state)
+    return payload
+
+
+@app.post("/api/devices/health-connect/sync")
+async def health_connect_sync(batch: HealthConnectSyncBatch) -> dict:
+    return await service.ingest_health_connect(batch)
 
 
 @app.post("/api/chat")
@@ -291,6 +342,54 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     result.explanation = explain_result(result)
     result.explained = result.status == "parsed"
     return (await service._append_and_publish("results", result, "results", action="upload_result")).model_dump(mode="json")
+
+
+@app.post("/api/demo/reset")
+async def demo_reset() -> dict:
+    state = await service.reset_demo()
+    return {"reset": True, "patient_id": state.profile.id}
+
+
+@app.post("/api/demo/device-sync")
+async def demo_device_sync() -> dict:
+    from datetime import datetime, timezone
+    from healthia_one.models import DeviceMetric, DeviceObservation
+
+    now = datetime.now(timezone.utc)
+    batch = HealthConnectSyncBatch(
+        device_id="android-demo",
+        source_package="com.healthia.one.demo",
+        background_read=True,
+        records=[
+            DeviceObservation(
+                external_id=f"demo-steps-{now.date().isoformat()}",
+                metric=DeviceMetric.STEPS,
+                observed_at=now,
+                value=3560,
+                unit="count",
+                source_name="Android Health Connect",
+                device_manufacturer="Demo",
+                device_model="Synthetic Wear",
+            ),
+            DeviceObservation(
+                external_id=f"demo-heart-{int(now.timestamp())}",
+                metric=DeviceMetric.HEART_RATE,
+                observed_at=now,
+                value=76,
+                unit="bpm",
+                source_name="Android Health Connect",
+            ),
+            DeviceObservation(
+                external_id=f"demo-weight-{now.date().isoformat()}",
+                metric=DeviceMetric.WEIGHT,
+                observed_at=now,
+                value=80.1,
+                unit="kg",
+                source_name="Smart scale via Health Connect",
+            ),
+        ],
+    )
+    return await service.ingest_health_connect(batch)
 
 
 @app.post("/api/demo/tick")
