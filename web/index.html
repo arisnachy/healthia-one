@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="HealthIA ONE — sistema agentico de continuidad de salud centrado en el paciente">
+  <title>HealthIA ONE · Tu salud nunca empieza de cero</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside id="leftRail" class="left-rail">
+      <div class="brand-row">
+        <div class="brand-mark">H1</div>
+        <div class="brand-copy"><strong>HealthIA ONE</strong><span>Patient continuity OS</span></div>
+        <button id="collapseLeft" class="icon-button" aria-label="Colapsar navegación">‹</button>
+      </div>
+
+      <button class="primary-action" data-open="chat"><span>＋</span><b>Nueva conversación</b></button>
+
+      <nav class="main-nav" aria-label="Navegación principal">
+        <button class="is-active" data-open="chat"><span>✦</span><b>HealthIA Chat</b></button>
+        <button data-open="today"><span>◷</span><b>Hoy</b><i id="todayBadge">0</i></button>
+        <button data-open="measurements"><span>⌁</span><b>Mediciones</b></button>
+        <button data-open="results"><span>▤</span><b>Resultados</b></button>
+        <button data-open="missions"><span>◎</span><b>Misiones de salud</b></button>
+      </nav>
+
+      <section class="rail-section">
+        <p>Equipo disponible</p>
+        <div class="agent-mini"><span>SE</span><div><strong>SENTINEL</strong><small>Seguridad y tendencias</small></div></div>
+        <div class="agent-mini"><span>LU</span><div><strong>LUMEN</strong><small>Explica resultados</small></div></div>
+        <div class="agent-mini"><span>VI</span><div><strong>VITA</strong><small>Hábitos y barreras</small></div></div>
+        <div class="agent-mini"><span>NA</span><div><strong>NAVIGATOR</strong><small>Seguimiento</small></div></div>
+      </section>
+
+      <div class="patient-chip">
+        <div class="patient-avatar">AM</div>
+        <div><strong id="patientName">Paciente</strong><span>Sintético · demo segura</span></div>
+      </div>
+    </aside>
+
+    <main class="conversation-column">
+      <header class="topbar">
+        <button id="mobileMenu" class="icon-button mobile-only" aria-label="Abrir navegación">☰</button>
+        <div class="topbar-title">
+          <span class="status-dot"></span>
+          <div><strong>KIRA Health</strong><small id="runtimeLabel">Preparando continuidad</small></div>
+        </div>
+        <div class="topbar-actions">
+          <span id="agentStatus" class="status-pill">Agentes en espera</span>
+          <button id="runCheck" class="secondary-button">Run agent check</button>
+          <button id="collapseRight" class="icon-button" aria-label="Ocultar contexto">⌘</button>
+        </div>
+      </header>
+
+      <section id="view-chat" class="view is-active">
+        <div id="chatScroll" class="chat-scroll">
+          <div class="chat-intro">
+            <div class="health-orb">✦</div>
+            <h1>Tu salud no vuelve a empezar desde cero.</h1>
+            <p>Habla conmigo. El equipo trabaja en segundo plano con los datos que autorizaste, explica por qué interviene y mantiene cada misión hasta un cierre seguro.</p>
+            <div class="suggestion-grid">
+              <button data-prompt="Quiero registrar mi presión arterial">Registrar presión</button>
+              <button data-prompt="Explícame mis resultados recientes">Explicar resultados</button>
+              <button data-prompt="He aumentado de peso y quiero entenderlo">Revisar mi peso</button>
+              <button data-prompt="No he tenido mucha actividad esta semana">Plan de actividad</button>
+            </div>
+          </div>
+          <div id="messageList" class="message-list"></div>
+        </div>
+
+        <div class="composer-wrap">
+          <form id="chatForm" class="composer">
+            <label class="attach-button" title="Cargar resultado">
+              <input id="resultFile" type="file" accept=".json,.csv,.txt,.pdf,.png,.jpg,.jpeg" hidden>
+              ＋
+            </label>
+            <textarea id="chatInput" rows="1" placeholder="Cuéntame qué cambió o registra algo de tu salud..."></textarea>
+            <button id="sendButton" class="send-button" type="submit" aria-label="Enviar">↑</button>
+          </form>
+          <small>HealthIA organiza y orienta; no diagnostica ni cambia tratamiento. En una urgencia, usa servicios humanos inmediatos.</small>
+        </div>
+      </section>
+
+      <section id="view-today" class="view"><div class="page-body"><h1>Hoy</h1><p>Intervenciones proactivas y asuntos que necesitan tu respuesta.</p><div id="todayList" class="card-grid"></div></div></section>
+      <section id="view-measurements" class="view"><div class="page-body"><h1>Mediciones</h1><p>Registra datos con contexto; una tendencia vale más que una cifra aislada.</p><div class="measurement-actions"><button data-dialog="vital">＋ Presión y signos</button><button data-dialog="weight">＋ Peso</button><button data-dialog="activity">＋ Actividad</button></div><div id="measurementList" class="card-grid"></div></div></section>
+      <section id="view-results" class="view"><div class="page-body"><h1>Resultados</h1><p>Carga un resultado para explicarlo sin inventar datos.</p><label class="drop-card"><input id="resultFilePage" type="file" accept=".json,.csv,.txt,.pdf,.png,.jpg,.jpeg" hidden><span>⇧</span><strong>Cargar resultado</strong><small>JSON, CSV, TXT, PDF o imagen · máximo 5 MB</small></label><div id="resultList" class="card-grid"></div></div></section>
+      <section id="view-missions" class="view"><div class="page-body"><h1>Misiones de salud</h1><p>Asuntos vivos que los agentes mantienen hasta un próximo paso o cierre verificable.</p><div id="missionList" class="card-grid"></div></div></section>
+    </main>
+
+    <aside id="contextPanel" class="context-panel">
+      <header><div><small>CONTEXTO AUTORIZADO</small><strong>Tu salud ahora</strong></div><button id="closeContext" class="icon-button">×</button></header>
+      <section class="context-card"><div class="context-heading"><strong>Última presión</strong><button data-dialog="vital">＋</button></div><div id="latestBp" class="metric-value">—</div><small id="latestBpMeta">Sin registro</small></section>
+      <section class="context-card"><div class="context-heading"><strong>Peso</strong><button data-dialog="weight">＋</button></div><div id="latestWeight" class="metric-value">—</div><small id="weightTrend">Sin tendencia</small></section>
+      <section class="context-card"><div class="context-heading"><strong>Actividad</strong><button data-dialog="activity">＋</button></div><div id="latestActivity" class="metric-value">—</div><small>Último registro</small></section>
+      <section class="context-card"><div class="context-heading"><strong>Misiones activas</strong><span id="missionCount">0</span></div><div id="missionPreview"></div></section>
+      <section class="context-card boundary-card"><strong>Límite clínico</strong><p>Hipótesis, explicaciones y recordatorios no son diagnósticos. Medicación y tratamiento requieren revisión profesional.</p></section>
+    </aside>
+  </div>
+
+  <dialog id="dataDialog">
+    <form id="dataForm" method="dialog" class="dialog-card">
+      <header><div><small>REGISTRO DEL PACIENTE</small><h2 id="dialogTitle">Nueva medición</h2></div><button value="cancel" aria-label="Cerrar">×</button></header>
+      <div id="dialogFields"></div>
+      <footer><button value="cancel" class="secondary-button">Cancelar</button><button id="saveData" value="default" class="primary-save">Guardar</button></footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
