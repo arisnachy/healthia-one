@@ -5,18 +5,28 @@ plugins {
 
 android {
     namespace = "com.healthia.one.bridge"
-    compileSdk = 36
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.healthia.one.bridge"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "HEALTHIA_BASE_URL", "\"http://10.0.2.2:8000\"")
     }
-    buildFeatures { compose = true; buildConfig = true }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
 }
 
 dependencies {
