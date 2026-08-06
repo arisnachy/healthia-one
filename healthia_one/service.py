@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from healthia_one.config import Settings
 from healthia_one.continuity import evaluate_continuity
+from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
 from healthia_one.models import (
     ActivityRecord,
     Appointment,
@@ -17,11 +18,13 @@ from healthia_one.models import (
     HealthGoal,
     MedicationCheckIn,
     MedicationPlan,
+    PatientConsent,
     PatientState,
     VitalRecord,
     WeightRecord,
 )
 from healthia_one.orchestrator import respond
+from healthia_one.patient_control import maybe_control_response
 from healthia_one.proactive import evaluate_state
 from healthia_one.store import FirestoreStore, JsonStore, MemoryStore, StateStore
 
@@ -131,12 +134,32 @@ def seed_state() -> PatientState:
             role="assistant",
             author="KIRA Health",
             content=(
-                "Hola, Ana. Mantengo tus mediciones, tratamiento registrado, citas, documentos, historia familiar "
-                "y misiones de salud en una sola conversación. Solo vigilo las señales que autorizaste."
+                "Hola, Ana. Mantengo tus mediciones, tratamiento, citas, documentos, historia familiar "
+                "y misiones en una sola conversación. Tú controlas qué señales puedo vigilar y cuándo intervenir."
             ),
         )
     ]
+    audit(
+        state,
+        actor="system",
+        action="initialize_synthetic_patient",
+        resource_type="patient_state",
+        resource_id=state.profile.id,
+        details={"synthetic": True},
+    )
     return state
+
+
+SORT_KEYS: dict[str, Callable] = {
+    "vitals": lambda item: item.measured_at,
+    "weights": lambda item: item.measured_at,
+    "activity": lambda item: item.measured_at,
+    "results": lambda item: item.uploaded_at,
+    "documents": lambda item: item.uploaded_at,
+    "medication_checkins": lambda item: item.recorded_at,
+    "appointments": lambda item: item.scheduled_at,
+    "missions": lambda item: item.updated_at,
+}
 
 
 class HealthIAService:
@@ -167,56 +190,121 @@ class HealthIAService:
             state = await self.store.load()
             patient_message = ChatMessage(role="patient", author=state.profile.display_name, content=content)
             state.messages.append(patient_message)
-            response = respond(state, content)
+            audit(state, actor="patient", action="send_chat_message", resource_type="chat_message", resource_id=patient_message.id)
+            response = maybe_control_response(state, content) or respond(state, content)
             state.messages.append(response.message)
+            audit(
+                state,
+                actor="kira_health",
+                action="respond_and_route",
+                resource_type="chat_message",
+                resource_id=response.message.id,
+                details={"mission_id": response.message.mission_id or "", "action_target": response.message.metadata.get("action_target")},
+            )
             await self.store.save(state)
         await self.broker.publish({"type": "message", "message": response.message.model_dump(mode="json")})
         return response
 
-    async def _append_and_publish(self, collection: str, item, section: str):
+    async def _append_and_publish(self, collection: str, item, section: str, *, actor: str = "patient", action: str = "create"):
         async with self._mutation_lock:
             state = await self.store.load()
-            getattr(state, collection).append(item)
+            values = getattr(state, collection)
+            values.append(item)
+            sort_key = SORT_KEYS.get(collection)
+            if sort_key:
+                values.sort(key=sort_key)
+            audit(state, actor=actor, action=action, resource_type=section, resource_id=getattr(item, "id", ""))
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": section})
         return item
 
     async def add_vital(self, vital: VitalRecord) -> VitalRecord:
-        item = await self._append_and_publish("vitals", vital, "vitals")
-        return item
+        return await self._append_and_publish("vitals", vital, "vitals", action="record_vital")
 
     async def add_weight(self, weight: WeightRecord) -> WeightRecord:
-        return await self._append_and_publish("weights", weight, "weight")
+        return await self._append_and_publish("weights", weight, "weight", action="record_weight")
 
     async def add_activity(self, activity: ActivityRecord) -> ActivityRecord:
-        return await self._append_and_publish("activity", activity, "activity")
+        return await self._append_and_publish("activity", activity, "activity", action="record_activity")
 
     async def add_family_member(self, member: FamilyMember) -> FamilyMember:
-        return await self._append_and_publish("family_members", member, "family")
+        return await self._append_and_publish("family_members", member, "family", action="add_family_member")
 
     async def add_document(self, document: ClinicalDocument) -> ClinicalDocument:
-        return await self._append_and_publish("documents", document, "documents")
+        return await self._append_and_publish("documents", document, "documents", action="upload_document")
 
     async def get_document(self, document_id: str) -> ClinicalDocument | None:
         state = await self.store.load()
         return next((item for item in state.documents if item.id == document_id), None)
 
     async def add_medication_plan(self, plan: MedicationPlan) -> MedicationPlan:
-        return await self._append_and_publish("medication_plans", plan, "medications")
+        return await self._append_and_publish("medication_plans", plan, "medications", action="add_medication_plan")
 
     async def add_medication_checkin(self, checkin: MedicationCheckIn) -> MedicationCheckIn:
         state = await self.store.load()
         if not any(item.id == checkin.medication_id for item in state.medication_plans):
             raise ValueError("Medication plan not found")
-        return await self._append_and_publish("medication_checkins", checkin, "medications")
+        return await self._append_and_publish("medication_checkins", checkin, "medications", action="record_medication_checkin")
 
     async def add_appointment(self, appointment: Appointment) -> Appointment:
-        return await self._append_and_publish("appointments", appointment, "appointments")
+        return await self._append_and_publish("appointments", appointment, "appointments", action="add_appointment")
 
     async def add_goal(self, goal: HealthGoal) -> HealthGoal:
-        return await self._append_and_publish("goals", goal, "goals")
+        return await self._append_and_publish("goals", goal, "goals", action="add_health_goal")
 
-    async def run_proactive_check(self) -> list[ChatMessage]:
+    async def update_consent(self, consent: PatientConsent) -> PatientConsent:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            previous = state.consent.model_dump(mode="json")
+            state.consent = consent
+            sync_consent_to_profile(state)
+            audit(
+                state,
+                actor="patient",
+                action="update_consent",
+                resource_type="consent",
+                resource_id=state.profile.id,
+                details={"previous_signal_types": previous.get("signal_types", []), "signal_types": state.consent.signal_types},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "consent"})
+        return consent
+
+    async def snooze(self, hours: int) -> datetime:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            until = snooze_consent(state, hours)
+            audit(
+                state,
+                actor="patient",
+                action="snooze_proactive_interventions",
+                resource_type="consent",
+                resource_id=state.profile.id,
+                details={"hours": hours, "until": until.isoformat()},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "consent"})
+        return until
+
+    async def mute_rule(self, prefix: str) -> PatientConsent:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            if prefix not in state.consent.muted_rule_prefixes:
+                state.consent.muted_rule_prefixes.append(prefix)
+            state.consent.updated_at = datetime.now(timezone.utc)
+            audit(
+                state,
+                actor="patient",
+                action="mute_rule_prefix",
+                resource_type="consent",
+                resource_id=state.profile.id,
+                details={"prefix": prefix},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "consent"})
+        return state.consent
+
+    async def run_proactive_check(self, *, manual_requested: bool = False) -> list[ChatMessage]:
         created: list[ChatMessage] = []
         async with self._mutation_lock:
             state = await self.store.load()
@@ -224,6 +312,9 @@ class HealthIAService:
             findings.extend(evaluate_continuity(state))
             for finding in findings:
                 if finding.key in state.emitted_rule_keys:
+                    continue
+                allowed, reason = finding_allowed(state, finding, manual_requested=manual_requested)
+                if not allowed:
                     continue
                 state.emitted_rule_keys.append(finding.key)
                 content = (
@@ -238,9 +329,22 @@ class HealthIAService:
                     content=content,
                     risk_level=finding.risk_level,
                     agent_plan=finding.agent_plan,
-                    metadata={"proactive": True, "rule_key": finding.key, "evidence_ids": finding.evidence_ids},
+                    metadata={"proactive": True, "rule_key": finding.key, "evidence_ids": finding.evidence_ids, "consent_reason": reason},
                 )
                 state.messages.append(message)
+                audit(
+                    state,
+                    actor="kira_health",
+                    action="emit_proactive_intervention",
+                    resource_type="chat_message",
+                    resource_id=message.id,
+                    details={
+                        "rule_key": finding.key,
+                        "risk_level": str(finding.risk_level),
+                        "consent_reason": reason,
+                        "manual_requested": manual_requested,
+                    },
+                )
                 created.append(message)
             await self.store.save(state)
         for message in created:

@@ -19,28 +19,18 @@ def patient_snapshot() -> dict:
     return {
         "patient": "Ana Martínez (synthetic)",
         "confirmed_conditions": ["Hipertensión arterial"],
-        "medications": [
-            {
-                "name": "Losartán",
-                "strength": "50 mg",
-                "schedule": "cada 24 horas",
-                "purpose": "Control de presión arterial",
-            }
-        ],
+        "medications": [{"name": "Losartán", "strength": "50 mg", "schedule": "cada 24 horas"}],
         "latest_weight_kg": 80.4,
-        "previous_weight_kg": 78.0,
         "latest_blood_pressure": "148/92",
-        "activity_last_3_days_steps": [2400, 1800, 2100],
         "next_appointment": "Consulta de medicina familiar in 40 hours (synthetic)",
-        "family_history": {
-            "maternal": ["madre con diabetes", "abuela con diabetes"],
-            "paternal": ["padre con hipertensión"],
-            "siblings": ["hermano con hipertensión"],
+        "family_history": {"maternal": ["madre y abuela con diabetes"], "paternal": ["padre con hipertensión"]},
+        "consent": {
+            "proactive_enabled": True,
+            "quiet_hours": "22:00-07:00",
+            "patient_controls_signals": True,
+            "export_available": True,
         },
-        "truth_boundary": (
-            "Synthetic demo data. The system may organize and explain but cannot diagnose, change "
-            "medication, or predict hereditary disease."
-        ),
+        "truth_boundary": "Synthetic demo data. The patient controls consent and sharing.",
     }
 
 
@@ -51,106 +41,72 @@ def allowed_patient_actions() -> dict:
             "record measurements and medication check-ins",
             "create a follow-up mission",
             "prepare questions and a consultation brief",
-            "organize patient-authorized documents",
-            "summarize authorized family history",
-            "recommend a level of human care using deterministic safety rules",
+            "organize patient-authorized documents and family history",
+            "change proactive permissions, quiet hours, snooze and mute preferences",
+            "show audit records and prepare a patient export",
         ],
         "requires_professional": [
             "confirm diagnosis",
             "prescribe, stop, duplicate, or change medication",
-            "predict that a hereditary disease will occur",
+            "predict hereditary disease",
             "interpret an emergency as safe",
             "sign clinical orders",
         ],
     }
 
 
-historian = LlmAgent(
-    name="historia",
-    model=model(),
-    description="Builds patient-authorized longitudinal context without inventing facts.",
-    instruction=(
-        "Use patient_snapshot. Separate confirmed facts, patient reports, inference, and missing data. "
-        "Never expose information outside the authorized synthetic snapshot."
+def make_agent(name: str, description: str, instruction: str, tools=None) -> LlmAgent:
+    return LlmAgent(name=name, model=model(), description=description, instruction=instruction, tools=tools or [])
+
+
+historian = make_agent(
+    "historia",
+    "Builds patient-authorized longitudinal context without inventing facts.",
+    "Separate confirmed facts, patient reports, inference and missing data. Never exceed authorized scope.",
+    [patient_snapshot],
+)
+sentinel = make_agent(
+    "sentinel",
+    "Checks safety signals and stops routine flow when human care is required.",
+    "Do not diagnose or permit medication changes. Escalate urgent symptoms to immediate human care.",
+    [allowed_patient_actions],
+)
+lumen = make_agent("lumen", "Explains results in plain language.", "Explain meaning, limits and questions. Never diagnose from one value.")
+vita = make_agent("vita", "Builds realistic low-risk lifestyle micro-plans.", "Ask about barriers first. Never shame or replace treatment.")
+navigator = make_agent("navigator", "Maintains missions and follow-up.", "Define next step, review point and closure condition.")
+hereditas = make_agent(
+    "hereditas",
+    "Organizes the pathological genogram.",
+    "Use authorized family history only. Never convert aggregation into diagnosis or prediction.",
+    [patient_snapshot, allowed_patient_actions],
+)
+archivum = make_agent(
+    "archivum",
+    "Indexes patient documents without fabricating unread content.",
+    "Preserve type, date, source and review state. Never invent PDF or image contents.",
+    [patient_snapshot],
+)
+medsafe = make_agent(
+    "medsafe",
+    "Organizes treatment and patient-reported adherence safely.",
+    "Never recommend doubling, stopping, substituting or changing a dose. Escalate uncertainty.",
+    [patient_snapshot, allowed_patient_actions],
+)
+advocate = make_agent(
+    "advocate",
+    "Prepares a patient-controlled consultation brief.",
+    "Summarize authorized context and questions. Patient review is required before sharing.",
+    [patient_snapshot],
+)
+bastion = make_agent(
+    "bastion",
+    "Enforces patient consent, privacy, quiet hours, auditability and reversible controls.",
+    (
+        "The patient owns the context. Explain each permission and its effect. Respect disabled signals, quiet "
+        "hours, snooze and muted rules. Urgent deterministic safety bypass is allowed only when explicitly "
+        "enabled. Never expose secrets, private chain-of-thought, other patients, or binary document paths."
     ),
-    tools=[patient_snapshot],
-)
-
-sentinel = LlmAgent(
-    name="sentinel",
-    model=model(),
-    description="Checks safety signals and stops routine flow when human care is required.",
-    instruction=(
-        "Apply safety conservatively. Do not diagnose. Do not permit medication changes. For urgent "
-        "symptoms, direct the patient to immediate human care and stop routine coaching."
-    ),
-    tools=[allowed_patient_actions],
-)
-
-lumen = LlmAgent(
-    name="lumen",
-    model=model(),
-    description="Explains results and health information in plain language.",
-    instruction="Explain meaning, limits, missing context, and questions. Never diagnose from one value.",
-)
-
-vita = LlmAgent(
-    name="vita",
-    model=model(),
-    description="Builds realistic low-risk lifestyle micro-plans around patient barriers.",
-    instruction="Ask about barriers before suggesting a small goal. Never shame or replace treatment.",
-)
-
-navigator = LlmAgent(
-    name="navigator",
-    model=model(),
-    description="Keeps missions, measurements, results, appointments, and follow-up from being lost.",
-    instruction="Define a next step, follow-up point, and closure condition for every active mission.",
-)
-
-hereditas = LlmAgent(
-    name="hereditas",
-    model=model(),
-    description="Organizes the pathological genogram and family-history questions.",
-    instruction=(
-        "Use only authorized family history. Organize lineage, relationship, conditions, age at diagnosis, "
-        "and confidence. Never present family aggregation as diagnosis or disease prediction."
-    ),
-    tools=[patient_snapshot, allowed_patient_actions],
-)
-
-archivum = LlmAgent(
-    name="archivum",
-    model=model(),
-    description="Indexes and relates patient documents without fabricating unread content.",
-    instruction=(
-        "Organize documents by type, date, source, provenance and review state. Never invent text from "
-        "an unread PDF or image and never expose documents outside patient scope."
-    ),
-    tools=[patient_snapshot],
-)
-
-medsafe = LlmAgent(
-    name="medsafe",
-    model=model(),
-    description="Organizes treatment and patient-reported adherence within strict medication safety limits.",
-    instruction=(
-        "Use the exact registered plan. You may record taken, late, skipped, or unknown status, explain the "
-        "documented purpose, and prepare questions. Never tell the patient to double, stop, substitute, or "
-        "change a dose. Escalate uncertainty to a pharmacist or prescribing professional."
-    ),
-    tools=[patient_snapshot, allowed_patient_actions],
-)
-
-advocate = LlmAgent(
-    name="advocate",
-    model=model(),
-    description="Prepares a concise patient-controlled consultation brief and prioritized questions.",
-    instruction=(
-        "Summarize changes, measurements, results, treatment, family context, documents, patient goals, "
-        "and questions. Mark source and uncertainty. The patient must review before sharing."
-    ),
-    tools=[patient_snapshot],
+    [patient_snapshot, allowed_patient_actions],
 )
 
 root_agent = LlmAgent(
@@ -158,14 +114,12 @@ root_agent = LlmAgent(
     model=model(),
     description="Patient health continuity coordinator that delegates to the minimum specialist team.",
     instruction=(
-        "You are KIRA Health. The patient owns the context. Select the minimum specialist: HISTORIA for "
-        "longitudinal context, SENTINEL for safety, LUMEN for results, VITA for barriers, NAVIGATOR for "
-        "continuity, HEREDITAS for family history, ARCHIVUM for documents, MEDSAFE for treatment safety, "
-        "and ADVOCATE for consultation preparation. Be proactive only with authorized data and explain why. "
-        "Do not diagnose, prescribe, change medication, or predict hereditary disease. Expose public actions, "
-        "evidence, uncertainty, and next steps—not private reasoning."
+        "The patient owns the context. Select the minimum specialist: HISTORIA, SENTINEL, LUMEN, VITA, "
+        "NAVIGATOR, HEREDITAS, ARCHIVUM, MEDSAFE, ADVOCATE or BASTION. Be proactive only with authorized "
+        "data and explain why. Never diagnose, prescribe, change medication or predict hereditary disease. "
+        "Expose public actions, evidence, uncertainty and next steps—not private reasoning."
     ),
-    sub_agents=[historian, sentinel, lumen, vita, navigator, hereditas, archivum, medsafe, advocate],
+    sub_agents=[historian, sentinel, lumen, vita, navigator, hereditas, archivum, medsafe, advocate, bastion],
     tools=[patient_snapshot, allowed_patient_actions],
 )
 

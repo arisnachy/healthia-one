@@ -16,6 +16,19 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+DEFAULT_SIGNAL_TYPES = [
+    "vitals",
+    "weight",
+    "activity",
+    "results",
+    "missions",
+    "family_history",
+    "documents",
+    "medications",
+    "appointments",
+]
+
+
 class RiskLevel(StrEnum):
     INFO = "info"
     WATCH = "watch"
@@ -68,19 +81,41 @@ class PatientProfile(BaseModel):
     medications: list[str] = Field(default_factory=lambda: ["Losartán 50 mg cada 24 horas"])
     confirmed_conditions: list[str] = Field(default_factory=lambda: ["Hipertensión arterial"])
     care_plan: CarePlan = Field(default_factory=CarePlan)
-    consented_signal_types: list[str] = Field(
-        default_factory=lambda: [
-            "vitals",
-            "weight",
-            "activity",
-            "results",
-            "missions",
-            "family_history",
-            "documents",
-            "medications",
-            "appointments",
-        ]
-    )
+    consented_signal_types: list[str] = Field(default_factory=lambda: list(DEFAULT_SIGNAL_TYPES))
+
+
+class PatientConsent(BaseModel):
+    proactive_enabled: bool = True
+    signal_types: list[str] = Field(default_factory=lambda: list(DEFAULT_SIGNAL_TYPES))
+    quiet_hours_start: str = "22:00"
+    quiet_hours_end: str = "07:00"
+    snoozed_until: datetime | None = None
+    muted_rule_prefixes: list[str] = Field(default_factory=list)
+    allow_urgent_safety_bypass: bool = True
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("quiet_hours_start", "quiet_hours_end")
+    @classmethod
+    def valid_clock(cls, value: str) -> str:
+        parts = value.split(":")
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            raise ValueError("quiet hours must use HH:MM")
+        hour, minute = map(int, parts)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("quiet hours must use HH:MM")
+        return f"{hour:02d}:{minute:02d}"
+
+
+class AuditEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("audit"))
+    patient_id: str = "patient_demo"
+    created_at: datetime = Field(default_factory=utc_now)
+    actor: str
+    action: str
+    resource_type: str
+    resource_id: str = ""
+    outcome: Literal["success", "blocked", "failed"] = "success"
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class FamilyCondition(BaseModel):
@@ -102,9 +137,7 @@ class FamilyMember(BaseModel):
     birth_year: int | None = Field(default=None, ge=1900, le=2100)
     death_year: int | None = Field(default=None, ge=1900, le=2100)
     conditions: list[FamilyCondition] = Field(default_factory=list)
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_report", source_id="family_form")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_report", source_id="family_form"))
 
 
 class ClinicalDocument(BaseModel):
@@ -122,9 +155,7 @@ class ClinicalDocument(BaseModel):
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
     related_result_id: str | None = None
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_upload", source_id="documents")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_upload", source_id="documents"))
 
 
 class MedicationPlan(BaseModel):
@@ -138,9 +169,7 @@ class MedicationPlan(BaseModel):
     instructions: str = Field(default="", max_length=500)
     prescribed_by: str = Field(default="", max_length=160)
     active: bool = True
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_report", source_id="medication_form")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_report", source_id="medication_form"))
 
 
 class MedicationCheckIn(BaseModel):
@@ -150,9 +179,7 @@ class MedicationCheckIn(BaseModel):
     recorded_at: datetime = Field(default_factory=utc_now)
     status: Literal["taken", "late", "skipped", "unknown"]
     note: str = Field(default="", max_length=500)
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_entry", source_id="medication_checkin")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_entry", source_id="medication_checkin"))
 
 
 class Appointment(BaseModel):
@@ -166,9 +193,7 @@ class Appointment(BaseModel):
     required_documents: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
     notes: str = Field(default="", max_length=800)
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_entry", source_id="appointment_form")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_entry", source_id="appointment_form"))
 
 
 class HealthGoal(BaseModel):
@@ -192,9 +217,7 @@ class VitalRecord(BaseModel):
     oxygen_saturation: float | None = None
     temperature_c: float | None = None
     symptoms: list[str] = Field(default_factory=list)
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_entry", source_id="web")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_entry", source_id="web"))
 
     @field_validator("systolic", "diastolic", "pulse")
     @classmethod
@@ -210,9 +233,7 @@ class WeightRecord(BaseModel):
     measured_at: datetime = Field(default_factory=utc_now)
     weight_kg: float
     note: str = ""
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_entry", source_id="web")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_entry", source_id="web"))
 
     @field_validator("weight_kg")
     @classmethod
@@ -249,9 +270,7 @@ class HealthResult(BaseModel):
     status: Literal["parsed", "pending_multimodal", "invalid"] = "parsed"
     explained: bool = False
     explanation: str = ""
-    source: SourceRef = Field(
-        default_factory=lambda: SourceRef(source_type="patient_upload", source_id="web")
-    )
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_upload", source_id="web"))
 
 
 class AgentStep(BaseModel):
@@ -291,6 +310,7 @@ class ChatMessage(BaseModel):
 
 class PatientState(BaseModel):
     profile: PatientProfile = Field(default_factory=PatientProfile)
+    consent: PatientConsent = Field(default_factory=PatientConsent)
     vitals: list[VitalRecord] = Field(default_factory=list)
     weights: list[WeightRecord] = Field(default_factory=list)
     activity: list[ActivityRecord] = Field(default_factory=list)
@@ -303,6 +323,7 @@ class PatientState(BaseModel):
     goals: list[HealthGoal] = Field(default_factory=list)
     missions: list[HealthMission] = Field(default_factory=list)
     messages: list[ChatMessage] = Field(default_factory=list)
+    audit_events: list[AuditEvent] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -325,3 +346,11 @@ class ProactiveFinding(BaseModel):
     next_action: str
     evidence_ids: list[str] = Field(default_factory=list)
     agent_plan: list[AgentStep] = Field(default_factory=list)
+
+
+class SnoozeRequest(BaseModel):
+    hours: int = Field(default=24, ge=1, le=720)
+
+
+class MuteRuleRequest(BaseModel):
+    prefix: str = Field(min_length=1, max_length=120)
