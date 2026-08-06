@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
+from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
 from healthia_one.family import family_summary
@@ -50,17 +51,20 @@ async def lifespan(_: FastAPI):
     await service.initialize()
     UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     stop_event = asyncio.Event()
-    background_task = asyncio.create_task(service.background_loop(stop_event))
+    background_task = None
+    if settings.proactive_enabled:
+        background_task = asyncio.create_task(service.background_loop(stop_event))
     try:
         yield
     finally:
         stop_event.set()
-        background_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await background_task
+        if background_task is not None:
+            background_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await background_task
 
 
-app = FastAPI(title="HealthIA ONE", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="HealthIA ONE", version="0.5.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 
 
@@ -85,6 +89,8 @@ async def readiness() -> dict:
         "ai_status": service.gemini.last_status,
         "store_backend": settings.store_backend,
         "proactive_interval_seconds": settings.proactive_interval_seconds,
+        "proactive_enabled": settings.proactive_enabled,
+        "cost_control": service.gemini.cost_status(),
         "capabilities": [
             "chat",
             "proactive_followup",
@@ -110,12 +116,29 @@ async def readiness() -> dict:
             "bmi_and_nutrition_context",
             "health_connect_sync",
             "device_medication_cross_check",
+            "cloud_cost_guard",
         ],
         "truth_boundary": (
             "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
             "or replace emergency and professional care."
         ),
     }
+
+
+@app.get("/api/cost-control")
+async def get_cost_control() -> dict:
+    return service.gemini.cost_status()
+
+
+@app.post("/api/cost-control")
+async def update_cost_control(enabled: bool, request: Request) -> dict:
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "testclient"}:
+        raise HTTPException(status_code=403, detail="El interruptor de costos solo puede cambiarse desde la computadora local.")
+    try:
+        return service.gemini.set_cost_enabled(enabled)
+    except CostGuardBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/bootstrap")
