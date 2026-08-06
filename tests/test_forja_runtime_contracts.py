@@ -14,12 +14,20 @@ def test_google_sdk_matches_interactions_api() -> None:
     assert 'genai.Client(api_key=api_key)' in gemini
 
 
-def test_secure_launcher_probes_real_interaction_and_prints_lan_url() -> None:
+def test_secure_launcher_uses_a_real_python_file_and_prints_lan_url() -> None:
     launcher = (ROOT / "deployment/run-local-secure.ps1").read_text(encoding="utf-8")
-    assert "client.interactions.create" in launcher
+    verifier = (ROOT / "deployment/verify_google_ai.py").read_text(encoding="utf-8")
+    assert 'Join-Path $PSScriptRoot "verify_google_ai.py"' in launcher
+    assert "& $venvPython $probeScript" in launcher
+    assert "-c $probe" not in launcher
+    assert "$env:PYTHONUTF8 = \"1\"" in launcher
     assert "Get-NetIPAddress" in launcher
-    assert "Teléfono en la misma Wi-Fi" in launcher
+    assert "Telefono en la misma Wi-Fi" in launcher
     assert "--host 0.0.0.0" in launcher
+    assert "client.interactions.create" in verifier
+    assert "HEALTHIA_GOOGLE_AI_READY" in verifier
+    assert "HEALTHIA_GOOGLE_AI_ERROR" in verifier
+    assert "store=False" in verifier
 
 
 def test_android_bridge_uses_supported_compose_toolchain() -> None:
