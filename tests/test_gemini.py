@@ -13,7 +13,9 @@ class FakeInteractions:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(output_text="Respuesta de Gemini basada en el contexto autorizado.")
+        return SimpleNamespace(
+            outputs=[SimpleNamespace(text="Respuesta de Gemini basada en el contexto autorizado.")]
+        )
 
 
 class FakeModels:
@@ -39,6 +41,11 @@ def test_gemini_enhances_the_real_patient_chat_boundary(monkeypatch) -> None:
     assert result.message.metadata["llm_status"] == "completed"
     assert client.interactions.calls[0]["model"] == "gemini-3.6-flash"
     assert "system_instruction" in client.interactions.calls[0]
+
+
+def test_interaction_text_keeps_output_text_compatibility() -> None:
+    interaction = SimpleNamespace(output_text="Texto directo", outputs=[])
+    assert GeminiResponder._interaction_text(interaction) == "Texto directo"
 
 
 def test_gemini_probe_uses_model_endpoint(monkeypatch) -> None:
