@@ -55,6 +55,7 @@
     <main class="conversation-column">
       <header class="topbar">
         <button id="mobileMenu" class="icon-button mobile-only" aria-label="Abrir navegación">☰</button>
+        <button id="expandLeft" class="icon-button rail-reopen" aria-label="Expandir navegación" title="Expandir navegación">☰</button>
         <div class="topbar-title"><span class="status-dot"></span><div><strong>HealthIA</strong><small id="runtimeLabel">Preparando continuidad</small></div></div>
         <div class="topbar-actions"><span id="agentStatus" class="status-pill">Equipo en segundo plano</span><button id="runCheck" class="secondary-button">Revisión agéntica</button><button id="collapseRight" class="icon-button" aria-label="Mostrar u ocultar contexto">▥</button></div>
       </header>
@@ -75,7 +76,6 @@
           <div id="messageList" class="message-list"></div>
         </div>
         <div class="composer-wrap">
-          <div class="composer-context"><span><i></i> Contexto longitudinal activo</span><div class="quick-records"><button type="button" data-dialog="vital">＋ Signos</button><button type="button" data-dialog="weight">＋ Peso</button><button type="button" data-dialog="activity">＋ Actividad</button><button type="button" data-open="results">⇧ Resultado</button></div></div>
           <form id="chatForm" class="composer"><label class="attach-button" title="Cargar resultado" aria-label="Adjuntar resultado"><input id="resultFile" type="file" accept=".json,.csv,.txt,.pdf,.png,.jpg,.jpeg" hidden>＋</label><textarea id="chatInput" rows="1" placeholder="Cuéntame qué cambió, pregunta por un resultado o registra algo..."></textarea><button id="voiceButton" class="voice-button" type="button" aria-label="Dictar mensaje" title="Dictar mensaje">◉</button><button id="sendButton" class="send-button" type="submit" aria-label="Enviar" disabled>↑</button></form>
           <small>HealthIA organiza, explica y acompaña. No confirma diagnósticos ni cambia tratamiento.</small>
         </div>

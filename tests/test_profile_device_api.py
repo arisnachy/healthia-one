@@ -20,8 +20,15 @@ def test_profile_and_device_endpoints() -> None:
         assert normalized.json()["requires_confirmation"] is True
         assert normalized.json()["suggestion"]["frequency_times_per_day"] == 2
 
+        pairing = client.post("/api/devices/pairing").json()
+        claim = client.post(
+            "/api/devices/pairing/claim",
+            json={"code": pairing["code"], "device_id": "api-test-phone", "display_name": "API test phone"},
+        )
+        assert claim.status_code == 200
         sync = client.post(
             "/api/devices/health-connect/sync",
+            headers={"Authorization": f"Bearer {claim.json()['access_token']}"},
             json={
                 "device_id": "api-test-phone",
                 "source_package": "com.healthia.test",

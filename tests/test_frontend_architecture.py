@@ -90,3 +90,26 @@ def test_visual_system_is_consolidated_and_icon_driven() -> None:
     assert '"Genograma familiar":"family"' in icons
     assert '"Dispositivos":"device"' in icons
     assert "healthia:ui-updated" in icons
+
+
+def test_left_rail_reopens_and_composer_floats_inside_chat_surface() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    css = (WEB / "styles.css").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert 'id="expandLeft"' in html
+    assert ".left-collapsed .rail-reopen" in css
+    assert 'refs.expandLeft?.addEventListener("click"' in app
+    assert "#view-chat .composer-wrap" in css and "position: absolute" in css
+    assert 'class="composer-context"' not in html
+
+
+def test_device_page_exposes_real_pairing_and_no_hardware_demo_paths() -> None:
+    js = (WEB / "profile-devices.js").read_text(encoding="utf-8")
+    for marker in (
+        "Conectar dispositivo",
+        "/api/devices/pairing",
+        "Código temporal",
+        "Probar sin dispositivo",
+        "IP local de tu PC",
+    ):
+        assert marker in js

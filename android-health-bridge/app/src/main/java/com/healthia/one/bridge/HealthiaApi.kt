@@ -7,7 +7,17 @@ import java.net.URL
 import java.time.Instant
 
 object HealthiaApi {
-    fun sync(baseUrl: String, deviceId: String, records: List<HealthRecordDto>, background: Boolean): String {
+    fun claim(baseUrl: String, code: String, deviceId: String, displayName: String): String {
+        val payload = JSONObject().apply {
+            put("code", code)
+            put("device_id", deviceId)
+            put("display_name", displayName)
+        }
+        val body = request(baseUrl, "/api/devices/pairing/claim", payload, token = null)
+        return JSONObject(body).getString("access_token")
+    }
+
+    fun sync(baseUrl: String, token: String, deviceId: String, records: List<HealthRecordDto>, background: Boolean): String {
         val payload = JSONObject().apply {
             put("device_id", deviceId)
             put("source_package", "com.healthia.one.bridge")
@@ -32,17 +42,22 @@ object HealthiaApi {
                 }
             })
         }
-        val connection = (URL("${baseUrl.trimEnd('/')}/api/devices/health-connect/sync").openConnection() as HttpURLConnection).apply {
+        return request(baseUrl, "/api/devices/health-connect/sync", payload, token)
+    }
+
+    private fun request(baseUrl: String, path: String, payload: JSONObject, token: String?): String {
+        val connection = (URL("${baseUrl.trimEnd('/')}$path").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
             readTimeout = 30_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
+            if (!token.isNullOrBlank()) setRequestProperty("Authorization", "Bearer $token")
         }
         connection.outputStream.use { it.write(payload.toString().toByteArray()) }
         val body = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream)
             .bufferedReader().use { it.readText() }
-        if (connection.responseCode !in 200..299) error("HealthIA sync failed: ${connection.responseCode} $body")
+        if (connection.responseCode !in 200..299) error("HealthIA request failed: ${connection.responseCode} $body")
         return body
     }
 }

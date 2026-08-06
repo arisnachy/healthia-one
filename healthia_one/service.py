@@ -8,6 +8,7 @@ from typing import AsyncIterator, Callable
 from healthia_one.config import Settings
 from healthia_one.continuity import evaluate_continuity
 from healthia_one.devices import ingest_health_connect_batch
+from healthia_one.gemini import GeminiResponder
 from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
 from healthia_one.models import (
     ActivityRecord,
@@ -178,6 +179,7 @@ class HealthIAService:
         self.settings = settings
         self.store = self._build_store()
         self.broker = EventBroker()
+        self.gemini = GeminiResponder(settings)
         self._mutation_lock = asyncio.Lock()
 
     def _build_store(self) -> StateStore:
@@ -244,7 +246,10 @@ class HealthIAService:
             patient_message = ChatMessage(role="patient", author=state.profile.display_name, content=content)
             state.messages.append(patient_message)
             audit(state, actor="patient", action="send_chat_message", resource_type="chat_message", resource_id=patient_message.id)
-            response = maybe_control_response(state, content) or respond(state, content)
+            controlled_response = maybe_control_response(state, content)
+            response = controlled_response or respond(state, content)
+            if controlled_response is None:
+                response = await self.gemini.enhance(state, content, response)
             state.messages.append(response.message)
             audit(
                 state,

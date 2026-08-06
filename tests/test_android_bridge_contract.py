@@ -39,3 +39,16 @@ def test_profile_and_devices_ui_contract() -> None:
         assert marker in js
     assert ".vital-matrix" in css
     assert ".device-grid" in css
+
+
+def test_android_bridge_has_pairing_and_runtime_backend_configuration() -> None:
+    root = ROOT / "android-health-bridge/app/src/main/java/com/healthia/one/bridge"
+    activity = (root / "MainActivity.kt").read_text(encoding="utf-8")
+    api = (root / "HealthiaApi.kt").read_text(encoding="utf-8")
+    worker = (root / "HealthSyncWorker.kt").read_text(encoding="utf-8")
+    assert "Pairing code" in activity
+    assert "HealthiaApi.claim" in activity
+    assert 'putString("access_token"' in activity
+    assert 'setRequestProperty("Authorization", "Bearer $token")' in api
+    assert 'getString("base_url"' in worker
+    assert 'getString("access_token"' in worker

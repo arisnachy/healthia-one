@@ -9,6 +9,7 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
     const numeric = value => value === "" ? null : Number(value);
     let snapshot = null;
     let refreshPromise = null;
+    let pairingPoll = null;
 
     async function api(path, options = {}) {
       const response = await fetch(path, options);
@@ -97,9 +98,26 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
           <label class="wide">Texto original<textarea name="text" required placeholder="Losartán 50 mg vía oral cada 24 horas"></textarea></label>
           <div id="medicationSuggestion" class="medication-suggestion"></div>
           <footer><button type="button" data-close-medication>Cancelar</button><button type="submit">Analizar texto</button></footer>
-        </form></dialog>`);
+        </form></dialog>
+        <dialog id="deviceConnectDialog" class="health-os-dialog device-connect-dialog"><div class="device-connect-shell">
+          <header><div><small>CONEXIÓN SEGURA</small><h2>Conectar Health Connect</h2></div><button type="button" data-close-device>×</button></header>
+          <p class="device-connect-lead">El navegador no puede leer Health Connect directamente. El puente Android solicita permiso al paciente y envía únicamente los tipos autorizados.</p>
+          <div class="device-connect-steps">
+            <article><span>1</span><div><strong>Instala el puente Android</strong><p>Ábrelo desde Android Studio o instala el APK que genere el proyecto.</p></div></article>
+            <article><span>2</span><div><strong>Introduce la dirección y el código</strong><p>En un teléfono real usa la IP de esta computadora, no 127.0.0.1.</p></div></article>
+            <article><span>3</span><div><strong>Autoriza y sincroniza</strong><p>Android mostrará cada permiso de Health Connect antes de enviar datos.</p></div></article>
+          </div>
+          <div class="pairing-panel">
+            <label>Dirección del backend<input id="pairingBackendUrl" readonly></label>
+            <label>Código temporal<input id="pairingCode" readonly value="------"></label>
+            <div id="pairingStatus" class="pairing-status">Generando conexión segura…</div>
+            <div class="pairing-actions"><button id="copyPairing" type="button">Copiar datos</button><a href="https://github.com/arisnachy/healthia-one/tree/main/android-health-bridge" target="_blank" rel="noreferrer">Abrir puente Android ↗</a></div>
+          </div>
+          <div class="device-demo-path"><div><strong>¿No tienes un dispositivo ahora?</strong><p>Ejecuta una sincronización sintética para probar toda la interfaz y el flujo longitudinal.</p></div><button id="dialogDemoDeviceSync" type="button">Probar sin dispositivo</button></div>
+        </div></dialog>`);
       $$('[data-close-profile]').forEach(node => node.addEventListener("click", () => $("#profileDialog")?.close()));
       $$('[data-close-medication]').forEach(node => node.addEventListener("click", () => $("#medicationNormalizeDialog")?.close()));
+      $$('[data-close-device]').forEach(node => node.addEventListener("click", closeDeviceDialog));
     }
 
     const tags = values => (values || []).length ? values.map(value => `<span>${esc(value)}</span>`).join("") : '<span class="empty-value">Sin dato</span>';
@@ -200,6 +218,56 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
       });
     }
 
+    function closeDeviceDialog() {
+      if (pairingPoll) clearInterval(pairingPoll);
+      pairingPoll = null;
+      $("#deviceConnectDialog")?.close();
+    }
+
+    async function demoDeviceSync() {
+      await api("/api/demo/device-sync", {method:"POST"});
+      await refresh();
+      toast("Datos sintéticos sincronizados.");
+    }
+
+    function phoneReachableUrl(value) {
+      try {
+        const url = new URL(value);
+        return ["127.0.0.1", "localhost"].includes(url.hostname)
+          ? `${value} · cambia 127.0.0.1 por la IP local de tu PC en el teléfono`
+          : value;
+      } catch { return value; }
+    }
+
+    async function startDevicePairing() {
+      const dialog = $("#deviceConnectDialog");
+      dialog?.showModal();
+      const status = $("#pairingStatus");
+      if (status) status.textContent = "Generando conexión segura…";
+      if (pairingPoll) clearInterval(pairingPoll);
+      try {
+        const pairing = await api("/api/devices/pairing", {method:"POST"});
+        $("#pairingBackendUrl").value = phoneReachableUrl(pairing.backend_url);
+        $("#pairingCode").value = pairing.code;
+        if (status) status.textContent = `Código válido hasta ${new Date(pairing.expires_at).toLocaleTimeString("es-DO", {hour:"2-digit", minute:"2-digit"})}. Esperando al puente Android.`;
+        pairingPoll = setInterval(async () => {
+          try {
+            const current = await api(`/api/devices/pairing/${pairing.code}`);
+            if (current.claimed) {
+              clearInterval(pairingPoll); pairingPoll = null;
+              if (status) status.textContent = `${current.display_name || "Dispositivo Android"} vinculado. Pulsa Sincronizar ahora en el teléfono.`;
+              await refresh();
+            }
+          } catch {
+            clearInterval(pairingPoll); pairingPoll = null;
+            if (status) status.textContent = "El código expiró. Cierra y vuelve a abrir para generar otro.";
+          }
+        }, 2000);
+      } catch (error) {
+        if (status) status.textContent = error.message;
+      }
+    }
+
     function renderDevices() {
       const root = $("#deviceRoot");
       const summary = snapshot?.device_summary;
@@ -207,12 +275,18 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
       const connections = summary.connections || [];
       const latest = summary.latest_by_metric || {};
       root.innerHTML = `
-        <div class="device-hero"><div><strong>Android Health Connect</strong><p>Lee datos autorizados en segundo plano y conserva procedencia, hora y dispositivo.</p></div><div><button id="demoDeviceSync">Probar sincronización</button><button id="refreshDevices">Actualizar</button></div></div>
+        <div class="device-hero"><div><strong>Android Health Connect</strong><p>Lee datos autorizados en segundo plano y conserva procedencia, hora y dispositivo.</p></div><div><button id="connectDevice">Conectar dispositivo</button><button id="demoDeviceSync">Probar sin dispositivo</button><button id="refreshDevices">Actualizar</button></div></div>
         <div class="device-boundary"><strong>No es una transmisión clínica garantizada en tiempo real.</strong><p>La disponibilidad depende de la fuente que escriba cada dato en Health Connect.</p></div>
         <div class="device-stats"><article><span>Conexiones</span><strong>${connections.length}</strong></article><article><span>Registros</span><strong>${summary.record_count || 0}</strong></article><article><span>Métricas compatibles</span><strong>${summary.supported_metrics?.length || 0}</strong></article></div>
         <div class="device-grid">${(summary.supported_metrics || []).map(metric => { const item = latest[metric]; return `<article class="device-metric"><header><h3>${esc(metric.replaceAll("_", " "))}</h3><span>${item ? "sincronizado" : "sin dato"}</span></header><strong>${item ? `${esc(item.value)} ${esc(item.unit)}` : "—"}</strong><small>${item ? `${esc(item.source_name)} · ${new Date(item.observed_at).toLocaleString("es-DO")}` : "Esperando una fuente autorizada"}</small></article>`; }).join("")}</div>
         <div class="connection-list">${connections.length ? connections.map(connection => `<article><strong>${esc(connection.display_name)}</strong><span>${esc(connection.status)} · background ${connection.background_read ? "on" : "off"}</span><small>${connection.last_sync_at ? new Date(connection.last_sync_at).toLocaleString("es-DO") : "Sin sincronización"}</small></article>`).join("") : '<article><strong>Sin dispositivo conectado</strong><span>Instala la app puente Android y concede permisos de Health Connect.</span></article>'}</div>`;
-      $("#demoDeviceSync")?.addEventListener("click", async () => { try { await api("/api/demo/device-sync", {method:"POST"}); await refresh(); toast("Datos sintéticos sincronizados."); } catch (error) { toast(error.message); } });
+      $("#connectDevice")?.addEventListener("click", startDevicePairing);
+      $("#demoDeviceSync")?.addEventListener("click", () => demoDeviceSync().catch(error => toast(error.message)));
+      $("#dialogDemoDeviceSync")?.addEventListener("click", () => demoDeviceSync().then(closeDeviceDialog).catch(error => toast(error.message)));
+      $("#copyPairing")?.addEventListener("click", async () => {
+        const value = `Backend: ${$("#pairingBackendUrl")?.value || ""}\nCódigo: ${$("#pairingCode")?.value || ""}`;
+        try { await navigator.clipboard.writeText(value); toast("Datos de conexión copiados."); } catch { toast("Copia manualmente la dirección y el código."); }
+      });
       $("#refreshDevices")?.addEventListener("click", () => refresh().catch(error => toast(error.message)));
     }
 

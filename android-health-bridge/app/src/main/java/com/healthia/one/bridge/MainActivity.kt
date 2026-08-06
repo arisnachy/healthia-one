@@ -22,22 +22,50 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = HealthConnectRepository(this)
+        val preferences = getSharedPreferences("healthia", MODE_PRIVATE)
         setContent {
             MaterialTheme {
-                BridgeScreen(repository.permissions) { syncNow() }
+                BridgeScreen(
+                    permissions = repository.permissions,
+                    initialBaseUrl = preferences.getString("base_url", BuildConfig.HEALTHIA_BASE_URL).orEmpty(),
+                    connect = { baseUrl, code, updateStatus -> connectBridge(baseUrl, code, updateStatus) },
+                    syncNow = { updateStatus -> syncNow(updateStatus) },
+                )
             }
         }
     }
 
-    private fun syncNow() {
+    private fun connectBridge(baseUrl: String, code: String, updateStatus: (String) -> Unit) {
         lifecycleScope.launch {
+            updateStatus("Connecting…")
             runCatching {
+                val token = withContext(Dispatchers.IO) {
+                    HealthiaApi.claim(baseUrl, code, deviceId(), "HealthIA Android Bridge")
+                }
+                getSharedPreferences("healthia", MODE_PRIVATE).edit()
+                    .putString("base_url", baseUrl.trimEnd('/'))
+                    .putString("access_token", token)
+                    .apply()
+                updateStatus("Paired. Grant Health Connect permissions, then sync.")
+            }.onFailure { updateStatus("Pairing failed: ${it.message}") }
+        }
+    }
+
+    private fun syncNow(updateStatus: (String) -> Unit) {
+        lifecycleScope.launch {
+            updateStatus("Syncing…")
+            runCatching {
+                val preferences = getSharedPreferences("healthia", MODE_PRIVATE)
+                val baseUrl = preferences.getString("base_url", "").orEmpty()
+                val token = preferences.getString("access_token", "").orEmpty()
+                require(baseUrl.isNotBlank() && token.isNotBlank()) { "Pair the bridge first" }
                 val records = repository.readSince()
                 withContext(Dispatchers.IO) {
-                    HealthiaApi.sync(BuildConfig.HEALTHIA_BASE_URL, deviceId(), records, background = false)
+                    HealthiaApi.sync(baseUrl, token, deviceId(), records, background = false)
                 }
                 HealthSyncWorker.schedule(this@MainActivity)
-            }
+                updateStatus("Synced ${records.size} records")
+            }.onFailure { updateStatus("Sync failed: ${it.message}") }
         }
     }
 
@@ -50,20 +78,33 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun BridgeScreen(permissions: Set<String>, syncNow: () -> Unit) {
-    var status by remember { mutableStateOf("Not connected") }
+private fun BridgeScreen(
+    permissions: Set<String>,
+    initialBaseUrl: String,
+    connect: (String, String, (String) -> Unit) -> Unit,
+    syncNow: ((String) -> Unit) -> Unit,
+) {
+    var status by remember { mutableStateOf("Not paired") }
+    var baseUrl by remember { mutableStateOf(initialBaseUrl) }
+    var code by remember { mutableStateOf("") }
     val permissionLauncher = rememberLauncherForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
-        status = if (granted.containsAll(permissions)) "Connected" else "Some permissions were not granted"
+        status = if (granted.containsAll(permissions)) "Health Connect permissions granted" else "Some permissions were not granted"
     }
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("HealthIA Android Bridge", style = MaterialTheme.typography.headlineSmall)
-            Text("Health Connect shares only the data types the patient authorizes.")
+            Text("Enter the backend address and the six-digit code shown in HealthIA ONE.")
+            OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("Backend URL") }, singleLine = true)
+            OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("Pairing code") }, singleLine = true)
             Text(status)
-            Button(onClick = { permissionLauncher.launch(permissions) }) { Text("Connect Health Connect") }
-            OutlinedButton(onClick = syncNow) { Text("Sync now") }
+            Button(
+                enabled = baseUrl.isNotBlank() && code.length == 6,
+                onClick = { connect(baseUrl, code) { status = it } },
+            ) { Text("Pair with HealthIA") }
+            OutlinedButton(onClick = { permissionLauncher.launch(permissions) }) { Text("Grant Health Connect permissions") }
+            OutlinedButton(onClick = { syncNow { status = it } }) { Text("Sync now") }
             Text("Background synchronization uses WorkManager and is not a guaranteed clinical real-time stream.")
         }
     }
