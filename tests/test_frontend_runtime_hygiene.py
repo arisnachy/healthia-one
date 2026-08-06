@@ -32,3 +32,10 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
     assert html.count("<script ") == len(expected)
     for script in expected:
         assert html.count(f'/assets/{script}') == 1
+
+
+def test_repository_contains_no_transfer_or_temporary_workflow_artifacts() -> None:
+    assert not (ROOT / ".cleanup-bundle").exists()
+    assert not list(ROOT.glob(".audit-tree-probe*"))
+    assert not list((ROOT / ".github" / "workflows").glob("apply-*.yml"))
+    assert not (ROOT / "RELEASE-MANIFEST.json").exists()
