@@ -26,13 +26,23 @@ jobs:
       - run: pytest
       - run: python -m compileall -q app healthia_one healthia_agent tests scripts
       - run: python scripts/smoke_test.py
-      - run: node --check web/app.js
-      - run: node --check web/ui-v2.js
-      - run: node --check web/ui-v3.js
-      - run: node --check web/ui-v4.js
-      - run: node --check web/ui-v5.js
-      - run: node --check web/ui-v6.js
-      - run: node --check web/ui-v7.js
+      - name: Validate semantic frontend modules
+        run: |
+          node --check web/app.js
+          node --check web/patient-record.js
+          node --check web/family-documents.js
+          node --check web/continuity.js
+          node --check web/privacy-controls.js
+          node --check web/profile-devices.js
+          node --check web/icons.js
+      - name: Reject version-number UI layers
+        shell: bash
+        run: |
+          if find web -maxdepth 1 -type f -name 'ui-v*' | grep -q .; then
+            echo "Version-number UI layers are not allowed after frontend consolidation."
+            find web -maxdepth 1 -type f -name 'ui-v*'
+            exit 1
+          fi
       - name: Parse secure PowerShell launcher
         shell: pwsh
         run: '[scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null'
