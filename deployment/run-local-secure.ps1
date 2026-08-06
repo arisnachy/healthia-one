@@ -7,14 +7,23 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $venvPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$probeScript = Join-Path $PSScriptRoot "verify_google_ai.py"
 
 if ($Gemini -and $Mock) {
     throw "Usa -Gemini o -Mock, no ambos. Gemini es el modo predeterminado."
 }
 if (-not (Test-Path $venvPython)) {
-    throw 'No se encontró .venv. Ejecuta: python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e ".[test]"'
+    throw 'No se encontro .venv. Ejecuta: python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e ".[test]"'
+}
+if (-not (Test-Path $probeScript)) {
+    throw "No se encontro deployment/verify_google_ai.py. Actualiza el repositorio antes de iniciar."
 }
 
 $useGemini = -not $Mock
@@ -25,6 +34,8 @@ $previousLocation = Get-Location
 
 try {
     Set-Location $projectRoot
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONIOENCODING = "utf-8"
     $env:HEALTHIA_ENV = "local"
     $env:HEALTHIA_STORE_BACKEND = "json"
     $env:HEALTHIA_DATA_PATH = ".healthia-one/state.json"
@@ -38,53 +49,30 @@ try {
             $plainKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
         }
         if ([string]::IsNullOrWhiteSpace($plainKey)) {
-            throw "No se proporcionó una API key. Usa -Mock para iniciar sin Google AI."
+            throw "No se proporciono una API key. Usa -Mock para iniciar sin Google AI."
         }
+
         $env:HEALTHIA_LLM_BACKEND = "gemini_api"
         $env:HEALTHIA_MODEL = $Model
         $env:GEMINI_API_KEY = $plainKey
         Remove-Item Env:GOOGLE_API_KEY -ErrorAction SilentlyContinue
 
         if (-not $SkipApiCheck) {
-            Write-Host "Verificando SDK, clave, cuota, modelo e Interactions API…" -ForegroundColor DarkCyan
-            $probe = @'
-from importlib.metadata import version
-from google import genai
-import os
-
-sdk_version = version("google-genai")
-major = int(sdk_version.split(".", 1)[0])
-if major < 2:
-    raise RuntimeError(f"google-genai {sdk_version} es incompatible; instala la rama 2.x")
-
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-model_name = os.environ["HEALTHIA_MODEL"]
-interaction = client.interactions.create(
-    model=model_name,
-    input="Responde únicamente con HEALTHIA_OK",
-    system_instruction="Prueba técnica mínima. No añadas ninguna otra palabra.",
-    store=False,
-)
-text = str(getattr(interaction, "output_text", "") or "").strip()
-if not text:
-    outputs = getattr(interaction, "outputs", None) or []
-    text = next((str(getattr(item, "text", "") or "").strip() for item in reversed(outputs) if str(getattr(item, "text", "") or "").strip()), "")
-if not text:
-    raise RuntimeError("Gemini respondió sin texto utilizable")
-print(f"Google AI listo: {model_name} · google-genai {sdk_version} · solicitud real completada · store=false")
-'@
-            & $venvPython -c $probe
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Google AI no superó la verificación real. Revisa clave, cuota y modelo; luego actualiza con: .\.venv\Scripts\python.exe -m pip install -e ".[test]"'
+            Write-Host "Verificando SDK, clave, cuota, modelo e Interactions API..." -ForegroundColor DarkCyan
+            $probeOutput = & $venvPython $probeScript 2>&1
+            $probeExitCode = $LASTEXITCODE
+            $probeOutput | ForEach-Object { Write-Host $_ }
+            if ($probeExitCode -ne 0) {
+                throw 'Google AI no supero la verificacion real. El mensaje HEALTHIA_GOOGLE_AI_ERROR indica si fallo autenticacion, cuota, modelo, SDK o red. Actualiza con: .\.venv\Scripts\python.exe -m pip install -e ".[test]"'
             }
         }
-        Write-Host "HealthIA ONE · Gemini activo en el chat principal · store=false" -ForegroundColor Cyan
+        Write-Host "HealthIA ONE - Gemini activo en el chat principal - store=false" -ForegroundColor Cyan
     }
     else {
         $env:HEALTHIA_LLM_BACKEND = "mock"
         Remove-Item Env:GEMINI_API_KEY -ErrorAction SilentlyContinue
         Remove-Item Env:GOOGLE_API_KEY -ErrorAction SilentlyContinue
-        Write-Host "HealthIA ONE · modo determinista local, sin consumo de API" -ForegroundColor Cyan
+        Write-Host "HealthIA ONE - modo determinista local, sin consumo de API" -ForegroundColor Cyan
     }
 
     Write-Host "Navegador en esta PC: http://127.0.0.1:$Port" -ForegroundColor Green
@@ -97,11 +85,11 @@ print(f"Google AI listo: {model_name} · google-genai {sdk_version} · solicitud
             } |
             Select-Object -ExpandProperty IPAddress -Unique
         foreach ($address in $lanAddresses) {
-            Write-Host "Teléfono en la misma Wi-Fi: http://${address}:$Port" -ForegroundColor Green
+            Write-Host "Telefono en la misma Wi-Fi: http://${address}:$Port" -ForegroundColor Green
         }
     }
     catch {
-        Write-Host "No pude detectar la IP LAN automáticamente; usa ipconfig para verla." -ForegroundColor Yellow
+        Write-Host "No pude detectar la IP LAN automaticamente; usa ipconfig para verla." -ForegroundColor Yellow
     }
 
     & $venvPython -m uvicorn app.main:app --host 0.0.0.0 --port $Port --reload
@@ -119,6 +107,8 @@ finally {
     Remove-Item Env:HEALTHIA_STORE_BACKEND -ErrorAction SilentlyContinue
     Remove-Item Env:HEALTHIA_DATA_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:HEALTHIA_PROACTIVE_INTERVAL_SECONDS -ErrorAction SilentlyContinue
+    Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue
+    Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
     Set-Location $previousLocation
     Write-Host "Variables temporales eliminadas." -ForegroundColor DarkGray
 }

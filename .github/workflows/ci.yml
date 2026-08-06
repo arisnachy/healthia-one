@@ -29,7 +29,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[test]"
       - run: pytest
-      - run: python -m compileall -q app healthia_one healthia_agent tests scripts
+      - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py
       - run: python scripts/smoke_test.py
       - name: Validate semantic frontend modules
         run: |
@@ -41,6 +41,7 @@ jobs:
           node --check web/profile-devices.js
           node --check web/icons.js
           node --check web/runtime-integrations.js
+          node --check web/provider-integrations.js
       - name: Reject version-number UI layers
         shell: bash
         run: |
