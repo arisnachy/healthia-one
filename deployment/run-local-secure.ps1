@@ -44,18 +44,26 @@ try {
         Remove-Item Env:GOOGLE_API_KEY -ErrorAction SilentlyContinue
 
         if (-not $SkipApiCheck) {
-            Write-Host "Verificando la clave y el modelo $Model…" -ForegroundColor DarkCyan
+            Write-Host "Verificando una solicitud real con $Model…" -ForegroundColor DarkCyan
             $probe = @'
 from google import genai
 import os
 client = genai.Client()
-model = client.models.get(model=os.environ["HEALTHIA_MODEL"])
-print(f"Google AI listo: {getattr(model, 'name', os.environ['HEALTHIA_MODEL'])}")
+interaction = client.interactions.create(
+    model=os.environ["HEALTHIA_MODEL"],
+    input="Responde únicamente con HEALTHIA_OK",
+    system_instruction="Prueba técnica de disponibilidad. No añadas texto.",
+    store=False,
+)
+text = str(getattr(interaction, "output_text", "") or "").strip()
+if not text:
+    raise RuntimeError("Google AI devolvió una respuesta vacía")
+print(f"Google AI listo: {os.environ['HEALTHIA_MODEL']} · respuesta real recibida")
 '@
             & $venvPython -c $probe
-            if ($LASTEXITCODE -ne 0) { throw "Google AI no superó la verificación previa." }
+            if ($LASTEXITCODE -ne 0) { throw "Google AI no superó la verificación real. Revisa clave, cuota y modelo." }
         }
-        Write-Host "HealthIA ONE · Gemini activo en el chat principal" -ForegroundColor Cyan
+        Write-Host "HealthIA ONE · Gemini activo en el chat principal · store=false" -ForegroundColor Cyan
     }
     else {
         $env:HEALTHIA_LLM_BACKEND = "mock"
