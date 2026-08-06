@@ -94,7 +94,7 @@ if (!window.__HEALTHIA_RUNTIME_INTEGRATIONS__) {
       };
       recognition.onresult = event => {
         let transcript = "";
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        for (let index = 0; index < event.results.length; index += 1) {
           transcript += event.results[index][0]?.transcript || "";
         }
         input.value = [prefix, transcript.trim()].filter(Boolean).join(prefix ? " " : "");
