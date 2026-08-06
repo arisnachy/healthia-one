@@ -61,11 +61,11 @@ if (!window.__HEALTHIA_FAMILY_DOCUMENTS__) {
     const family = document.createElement("section");
     family.id = "view-family";
     family.className = "view";
-    family.innerHTML = `<div class="page-body"><div class="page-kicker">HEREDITAS · HISTORIA FAMILIAR</div><h1>Genograma patológico</h1><p>Organiza parentescos y antecedentes para preparar preguntas preventivas. Un patrón familiar no confirma una enfermedad.</p><div id="genogramRoot"></div></div>`;
+    family.innerHTML = `<div class="page-body"><div class="page-kicker">ANTECEDENTES FAMILIARES</div><h1>Genograma patológico</h1><p>Organiza parentescos y antecedentes para preparar preguntas preventivas. Un patrón familiar no confirma una enfermedad.</p><div id="genogramRoot"></div></div>`;
     const documents = document.createElement("section");
     documents.id = "view-documents";
     documents.className = "view";
-    documents.innerHTML = `<div class="page-body"><div class="page-kicker">ARCHIVUM · EXPEDIENTE DOCUMENTAL</div><h1>Documentos del paciente</h1><p>Laboratorios, imágenes, recetas, informes y notas organizados por procedencia y estado.</p><div id="documentsRoot"></div></div>`;
+    documents.innerHTML = `<div class="page-body"><div class="page-kicker">EXPEDIENTE DOCUMENTAL</div><h1>Documentos del paciente</h1><p>Laboratorios, imágenes, recetas, informes y notas organizados por procedencia y estado.</p><div id="documentsRoot"></div></div>`;
     main.append(family, documents);
   }
 
@@ -138,12 +138,8 @@ if (!window.__HEALTHIA_FAMILY_DOCUMENTS__) {
       if (article.querySelector(".health-os-message-actions")) return;
       const text = article.textContent?.toLowerCase() || "";
       const targets = [];
-      if (text.includes("genograma") || text.includes("historia familiar") || text.includes("familiares")) {
-        targets.push(["Abrir genograma", "family"]);
-      }
-      if (text.includes("documento") || text.includes("expediente") || text.includes("archivo")) {
-        targets.push(["Abrir documentos", "documents"]);
-      }
+      if (text.includes("genograma") || text.includes("historia familiar") || text.includes("familiares")) targets.push(["Abrir genograma", "family"]);
+      if (text.includes("documento") || text.includes("expediente") || text.includes("archivo")) targets.push(["Abrir documentos", "documents"]);
       if (!targets.length) return;
       const bar = document.createElement("div");
       bar.className = "message-actions health-os-message-actions";
@@ -164,26 +160,12 @@ if (!window.__HEALTHIA_FAMILY_DOCUMENTS__) {
       event.preventDefault();
       const values = Object.fromEntries(new FormData(event.currentTarget).entries());
       const condition = String(values.condition || "").trim();
-      const payload = {
-        display_name: values.display_name,
-        relation: values.relation,
-        generation: Number(values.generation),
-        lineage: values.lineage,
-        sex_at_birth: values.sex_at_birth,
-        conditions: condition ? [{name: condition, age_at_diagnosis: values.age_at_diagnosis ? Number(values.age_at_diagnosis) : null, notes: values.notes || "", confirmed: false}] : [],
-      };
-      try {
-        await api("/api/family", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-        event.currentTarget.reset(); $("#familyDialog")?.close(); await refresh(); toast("Familiar añadido al genograma.");
-      } catch (error) { toast(error.message); }
+      const payload = {display_name:values.display_name, relation:values.relation, generation:Number(values.generation), lineage:values.lineage, sex_at_birth:values.sex_at_birth, conditions:condition ? [{name:condition, age_at_diagnosis:values.age_at_diagnosis ? Number(values.age_at_diagnosis) : null, notes:values.notes || "", confirmed:false}] : []};
+      try { await api("/api/family", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); event.currentTarget.reset(); $("#familyDialog")?.close(); await refresh(); toast("Familiar añadido al genograma."); } catch (error) { toast(error.message); }
     });
     $("#documentForm")?.addEventListener("submit", async event => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
-      try {
-        await api("/api/documents/upload", {method:"POST",body:form});
-        event.currentTarget.reset(); $("#documentDialog")?.close(); await refresh(); toast("Documento organizado en el expediente.");
-      } catch (error) { toast(error.message); }
+      try { await api("/api/documents/upload", {method:"POST",body:new FormData(event.currentTarget)}); event.currentTarget.reset(); $("#documentDialog")?.close(); await refresh(); toast("Documento organizado en el expediente."); } catch (error) { toast(error.message); }
     });
   }
 
@@ -193,7 +175,7 @@ if (!window.__HEALTHIA_FAMILY_DOCUMENTS__) {
       if (target) activateView(target);
     });
     const list = $("#messageList");
-    if (list) new MutationObserver(hydrateChatControls).observe(list, {childList: true, subtree: true});
+    if (list) new MutationObserver(hydrateChatControls).observe(list, {childList:true, subtree:true});
     hydrateChatControls();
   }
 
@@ -202,5 +184,4 @@ if (!window.__HEALTHIA_FAMILY_DOCUMENTS__) {
     refresh().catch(error => toast(error.message));
   });
 })();
-
 }

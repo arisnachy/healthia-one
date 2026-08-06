@@ -57,7 +57,8 @@ def test_chat_shell_logo_scroll_avatar_and_new_consultation_contract() -> None:
     assert ".user-pill" in css
     assert 'api("/api/demo/reset", {method:"POST"})' in app
     assert "setSendState" in app
-    assert "PUBLIC_NAMES" in app
+    assert "function publicName(value)" in app
+    assert "Módulo de salud" in app
 
 
 def test_patient_record_family_continuity_privacy_and_devices_contracts() -> None:

@@ -39,11 +39,7 @@ if (!window.__HEALTHIA_CONTINUITY__) {
     const nav = $(".main-nav");
     const missions = nav?.querySelector('[data-open="missions"]');
     if (!nav || !missions || nav.querySelector('[data-open="timeline"]')) return;
-    const items = [
-      ["timeline", "⌁", "Línea de salud"],
-      ["treatment", "✚", "Tratamiento"],
-      ["appointments", "◫", "Citas y consulta"],
-    ];
+    const items = [["timeline","⌁","Línea de salud"],["treatment","✚","Tratamiento"],["appointments","◫","Citas y consulta"]];
     items.forEach(([view, icon, label]) => {
       const button = document.createElement("button");
       button.dataset.open = view;
@@ -70,9 +66,9 @@ if (!window.__HEALTHIA_CONTINUITY__) {
     const main = $(".conversation-column");
     if (!main || $("#view-timeline")) return;
     const definitions = [
-      ["timeline", "HISTORIA · CONTINUIDAD", "Línea de salud", "Todos tus eventos en una cronología con procedencia.", "timelineRoot"],
-      ["treatment", "MEDSAFE · SEGURIDAD", "Tratamiento y tomas", "Registro del esquema indicado y adherencia informada por el paciente.", "treatmentRoot"],
-      ["appointments", "ADVOCATE · PREPARACIÓN", "Citas y consulta", "Prepara cambios, documentos, objetivos y preguntas sin empezar desde cero.", "appointmentsRoot"],
+      ["timeline", "CONTINUIDAD DE SALUD", "Línea de salud", "Todos tus eventos en una cronología con procedencia.", "timelineRoot"],
+      ["treatment", "SEGURIDAD DEL TRATAMIENTO", "Tratamiento y tomas", "Registro del esquema indicado y adherencia informada por el paciente.", "treatmentRoot"],
+      ["appointments", "PREPARACIÓN DE CONSULTA", "Citas y consulta", "Prepara cambios, documentos, objetivos y preguntas sin empezar desde cero.", "appointmentsRoot"],
     ];
     definitions.forEach(([id,kicker,title,copy,root]) => {
       const section = document.createElement("section");
@@ -118,10 +114,7 @@ if (!window.__HEALTHIA_CONTINUITY__) {
   }
 
   async function recordDose(medicationId, status) {
-    try {
-      await api("/api/treatment/checkins", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({medication_id:medicationId,status})});
-      await refresh(); toast("Toma registrada sin modificar el tratamiento.");
-    } catch (error) { toast(error.message); }
+    try { await api("/api/treatment/checkins", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({medication_id:medicationId,status})}); await refresh(); toast("Toma registrada sin modificar el tratamiento."); } catch (error) { toast(error.message); }
   }
 
   function renderAppointments() {
@@ -165,10 +158,7 @@ if (!window.__HEALTHIA_CONTINUITY__) {
       const values = Object.fromEntries(new FormData(event.currentTarget).entries());
       const split = value => String(value || "").split(",").map(item => item.trim()).filter(Boolean);
       const payload = {...values, scheduled_at:new Date(values.scheduled_at).toISOString(), required_documents:split(values.required_documents), questions:split(values.questions)};
-      try {
-        await api("/api/appointments", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-        event.currentTarget.reset(); $("#appointmentDialog")?.close(); await refresh(); toast("Cita añadida y resumen actualizado.");
-      } catch (error) { toast(error.message); }
+      try { await api("/api/appointments", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); event.currentTarget.reset(); $("#appointmentDialog")?.close(); await refresh(); toast("Cita añadida y resumen actualizado."); } catch (error) { toast(error.message); }
     });
   }
 
@@ -179,5 +169,4 @@ if (!window.__HEALTHIA_CONTINUITY__) {
     refresh().catch(error => toast(error.message));
   });
 })();
-
 }
