@@ -28,3 +28,4 @@ jobs:
       - run: node --check web/app.js
       - run: node --check web/ui-v2.js
       - run: node --check web/ui-v3.js
+      - run: node --check web/ui-v4.js
