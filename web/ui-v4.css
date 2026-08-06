@@ -1,0 +1,30 @@
+.continuity-layout { display: grid; gap: 16px; }
+.continuity-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.continuity-toolbar button { border: 0; border-radius: 10px; padding: 9px 12px; background: var(--slate); color: white; font-size: 9px; font-weight: 760; }
+.timeline-list { position: relative; display: grid; gap: 0; padding-left: 24px; }
+.timeline-list::before { content: ""; position: absolute; left: 8px; top: 8px; bottom: 8px; width: 1px; background: #dce4ee; }
+.timeline-event { position: relative; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 15px; background: white; }
+.timeline-event::before { content: ""; position: absolute; left: -21px; top: 18px; width: 9px; height: 9px; border: 3px solid white; border-radius: 50%; background: var(--slate); box-shadow: 0 0 0 1px #cbd6e3; }
+.timeline-event h3 { margin: 0; font-size: 11px; }
+.timeline-event p { margin: 5px 0 0; color: var(--muted); font-size: 9px; }
+.timeline-event small { color: var(--faint); font-size: 8px; white-space: nowrap; }
+.condition-pack-grid, .treatment-grid, .appointment-grid, .brief-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 11px; }
+.condition-pack, .treatment-card, .appointment-card, .brief-card { border: 1px solid var(--line); border-radius: 16px; padding: 14px; background: white; }
+.condition-pack h3, .treatment-card h3, .appointment-card h3, .brief-card h3 { margin: 0; font-size: 12px; }
+.condition-pack p, .treatment-card p, .appointment-card p, .brief-card p { color: var(--muted); font-size: 9px; line-height: 1.55; }
+.condition-pack ul, .brief-card ul { margin: 8px 0 0; padding-left: 17px; color: var(--muted); font-size: 8px; line-height: 1.6; }
+.treatment-card header, .appointment-card header { display: flex; justify-content: space-between; gap: 10px; }
+.health-status { border-radius: 999px; padding: 5px 8px; background: var(--success-soft); color: var(--success); font-size: 7px; font-weight: 800; }
+.treatment-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.treatment-actions button { border: 1px solid var(--line); border-radius: 999px; padding: 6px 9px; background: var(--surface); color: var(--slate-dark); font-size: 8px; }
+.adherence-meter { height: 7px; margin-top: 10px; border-radius: 999px; background: var(--surface-soft); overflow: hidden; }
+.adherence-meter span { height: 100%; display: block; border-radius: inherit; background: var(--success); }
+.brief-hero { border: 1px solid #d7e1ec; border-radius: 18px; padding: 16px; background: linear-gradient(145deg,#f7fafc,#eef4fa); }
+.brief-hero h2 { margin: 4px 0 0; font-size: 18px; }
+.brief-hero p { color: var(--muted); font-size: 9px; line-height: 1.55; }
+.brief-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+.brief-actions button { border: 0; border-radius: 9px; padding: 8px 10px; background: var(--slate); color: white; font-size: 8px; }
+@media (max-width: 760px) {
+  .condition-pack-grid, .treatment-grid, .appointment-grid, .brief-grid { grid-template-columns: 1fr; }
+  .timeline-event { grid-template-columns: 1fr; }
+}
