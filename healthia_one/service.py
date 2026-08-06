@@ -24,6 +24,7 @@ from healthia_one.models import (
     WeightRecord,
 )
 from healthia_one.orchestrator import respond
+from healthia_one.patient_control import maybe_control_response
 from healthia_one.proactive import evaluate_state
 from healthia_one.store import FirestoreStore, JsonStore, MemoryStore, StateStore
 
@@ -189,14 +190,8 @@ class HealthIAService:
             state = await self.store.load()
             patient_message = ChatMessage(role="patient", author=state.profile.display_name, content=content)
             state.messages.append(patient_message)
-            audit(
-                state,
-                actor="patient",
-                action="send_chat_message",
-                resource_type="chat_message",
-                resource_id=patient_message.id,
-            )
-            response = respond(state, content)
+            audit(state, actor="patient", action="send_chat_message", resource_type="chat_message", resource_id=patient_message.id)
+            response = maybe_control_response(state, content) or respond(state, content)
             state.messages.append(response.message)
             audit(
                 state,
@@ -210,15 +205,7 @@ class HealthIAService:
         await self.broker.publish({"type": "message", "message": response.message.model_dump(mode="json")})
         return response
 
-    async def _append_and_publish(
-        self,
-        collection: str,
-        item,
-        section: str,
-        *,
-        actor: str = "patient",
-        action: str = "create",
-    ):
+    async def _append_and_publish(self, collection: str, item, section: str, *, actor: str = "patient", action: str = "create"):
         async with self._mutation_lock:
             state = await self.store.load()
             values = getattr(state, collection)
@@ -226,13 +213,7 @@ class HealthIAService:
             sort_key = SORT_KEYS.get(collection)
             if sort_key:
                 values.sort(key=sort_key)
-            audit(
-                state,
-                actor=actor,
-                action=action,
-                resource_type=section,
-                resource_id=getattr(item, "id", ""),
-            )
+            audit(state, actor=actor, action=action, resource_type=section, resource_id=getattr(item, "id", ""))
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": section})
         return item
@@ -348,12 +329,7 @@ class HealthIAService:
                     content=content,
                     risk_level=finding.risk_level,
                     agent_plan=finding.agent_plan,
-                    metadata={
-                        "proactive": True,
-                        "rule_key": finding.key,
-                        "evidence_ids": finding.evidence_ids,
-                        "consent_reason": reason,
-                    },
+                    metadata={"proactive": True, "rule_key": finding.key, "evidence_ids": finding.evidence_ids, "consent_reason": reason},
                 )
                 state.messages.append(message)
                 audit(
