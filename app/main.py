@@ -5,7 +5,7 @@ import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -21,6 +21,7 @@ from healthia_one.models import (
     Appointment,
     ChatRequest,
     FamilyMember,
+    DevicePairingClaim,
     HealthConnectSyncBatch,
     HealthGoal,
     MedicationCheckIn,
@@ -34,9 +35,11 @@ from healthia_one.models import (
     WeightRecord,
 )
 from healthia_one.results import explain_result, parse_result_file
+from healthia_one.pairing import DevicePairingManager, PairingError
 from healthia_one.service import HealthIAService
 
 service = HealthIAService(settings)
+pairing_manager = DevicePairingManager()
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
 UPLOAD_ROOT = ROOT / "uploads" / "patient_demo"
@@ -78,6 +81,8 @@ async def readiness() -> dict:
         "llm_backend": settings.llm_backend,
         "model": settings.model,
         "adk_ready": settings.adk_ready,
+        "ai_ready": settings.adk_ready,
+        "ai_status": service.gemini.last_status,
         "store_backend": settings.store_backend,
         "proactive_interval_seconds": settings.proactive_interval_seconds,
         "capabilities": [
@@ -133,6 +138,11 @@ async def bootstrap() -> dict:
     return payload
 
 
+@app.post("/api/ai/test")
+async def test_google_ai() -> dict:
+    return await service.gemini.probe()
+
+
 @app.get("/api/profile")
 async def get_profile() -> dict:
     return profile_summary(await service.snapshot())
@@ -165,8 +175,43 @@ async def devices() -> dict:
     return payload
 
 
+@app.post("/api/devices/pairing")
+async def create_device_pairing(request: Request) -> dict:
+    payload = pairing_manager.create()
+    payload["backend_url"] = str(request.base_url).rstrip("/")
+    return payload
+
+
+@app.get("/api/devices/pairing/{code}")
+async def device_pairing_status(code: str) -> dict:
+    try:
+        return pairing_manager.status(code)
+    except PairingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/devices/pairing/claim")
+async def claim_device_pairing(claim: DevicePairingClaim) -> dict:
+    try:
+        return pairing_manager.claim(claim.code, claim.device_id, claim.display_name)
+    except PairingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def bearer_token(authorization: str | None) -> str:
+    if not authorization:
+        return ""
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
 @app.post("/api/devices/health-connect/sync")
-async def health_connect_sync(batch: HealthConnectSyncBatch) -> dict:
+async def health_connect_sync(
+    batch: HealthConnectSyncBatch,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    if not pairing_manager.validate(bearer_token(authorization), batch.device_id):
+        raise HTTPException(status_code=401, detail="Dispositivo no vinculado o token inválido.")
     return await service.ingest_health_connect(batch)
 
 

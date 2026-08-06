@@ -18,7 +18,8 @@ const refs = {
   dataForm: $("#dataForm"), dialogTitle: $("#dialogTitle"), dialogFields: $("#dialogFields"),
   resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast"),
   sendButton: $("#sendButton"), heroPatientName: $("#heroPatientName"), signalSummary: $("#signalSummary"),
-  openMissionSummary: $("#openMissionSummary"), newConsultation: $("#newConsultation"), closeContext: $("#closeContext")
+  openMissionSummary: $("#openMissionSummary"), newConsultation: $("#newConsultation"), closeContext: $("#closeContext"),
+  expandLeft: $("#expandLeft")
 };
 
 
@@ -290,7 +291,13 @@ refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value =
 refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
 refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
 refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "HealthIA revisando continuidad…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Equipo en segundo plano"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
-$("#collapseLeft").addEventListener("click", () => refs.shell.classList.toggle("left-collapsed"));
+function syncLeftToggle() {
+  const collapsed = refs.shell.classList.contains("left-collapsed");
+  refs.expandLeft?.setAttribute("aria-hidden", String(!collapsed));
+  $("#collapseLeft")?.setAttribute("aria-label", collapsed ? "Expandir navegación" : "Colapsar navegación");
+}
+$("#collapseLeft").addEventListener("click", () => { refs.shell.classList.toggle("left-collapsed"); syncLeftToggle(); });
+refs.expandLeft?.addEventListener("click", () => { refs.shell.classList.remove("left-collapsed"); syncLeftToggle(); });
 function syncContextToggle() {
   if (!refs.closeContext) return;
   const open = window.innerWidth <= 1080 ? refs.shell.classList.contains("context-open") : !refs.shell.classList.contains("right-collapsed");
@@ -319,8 +326,11 @@ refs.newConsultation?.addEventListener("click", async event => {
 (async function boot() {
   try {
     const readiness = await api("/api/readiness");
-    refs.runtimeLabel.textContent = `${readiness.store_backend} · ${readiness.llm_backend}`;
+    refs.runtimeLabel.textContent = readiness.llm_backend === "gemini_api"
+      ? (readiness.ai_ready ? `${readiness.model} · Google AI` : "Gemini · falta API key")
+      : "Modo local · sin API";
     setSendState();
+    syncLeftToggle();
     syncContextToggle();
     await refresh();
     connectEvents();

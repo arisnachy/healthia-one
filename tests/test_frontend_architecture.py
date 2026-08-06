@@ -23,7 +23,9 @@ def test_frontend_has_no_version_layer_assets() -> None:
     assert "ui-v5" not in html
     assert "ui-v6" not in html
     assert "ui-v7" not in html
-    assert html.count('rel="stylesheet"') == 1
+    assert html.count('rel="stylesheet"') == 2
+    assert '/assets/styles.css' in html
+    assert '/assets/interactions.css' in html
     for script in SEMANTIC_SCRIPTS:
         assert f'/assets/{script}' in html
     assert not list(WEB.glob("ui-v*.js"))
@@ -90,3 +92,26 @@ def test_visual_system_is_consolidated_and_icon_driven() -> None:
     assert '"Genograma familiar":"family"' in icons
     assert '"Dispositivos":"device"' in icons
     assert "healthia:ui-updated" in icons
+
+
+def test_left_rail_reopens_and_composer_floats_inside_chat_surface() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    interactions = (WEB / "interactions.css").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert 'id="expandLeft"' in html
+    assert ".left-collapsed .rail-reopen" in interactions
+    assert 'refs.expandLeft?.addEventListener("click"' in app
+    assert "#view-chat .composer-wrap" in interactions and "position: absolute" in interactions
+    assert 'class="composer-context"' not in html
+
+
+def test_device_page_exposes_real_pairing_and_no_hardware_demo_paths() -> None:
+    js = (WEB / "profile-devices.js").read_text(encoding="utf-8")
+    for marker in (
+        "Conectar dispositivo",
+        "/api/devices/pairing",
+        "Código temporal",
+        "Probar sin dispositivo",
+        "IP local de tu PC",
+    ):
+        assert marker in js
