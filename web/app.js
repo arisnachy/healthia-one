@@ -1,0 +1,241 @@
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+const state = { data: null, currentView: "chat", dialogType: null };
+const refs = {
+  shell: $("#app"), leftRail: $("#leftRail"), contextPanel: $("#contextPanel"),
+  messageList: $("#messageList"), chatScroll: $("#chatScroll"), chatForm: $("#chatForm"),
+  chatInput: $("#chatInput"), runtimeLabel: $("#runtimeLabel"), agentStatus: $("#agentStatus"),
+  runCheck: $("#runCheck"), patientName: $("#patientName"), todayBadge: $("#todayBadge"),
+  latestBp: $("#latestBp"), latestBpMeta: $("#latestBpMeta"), latestWeight: $("#latestWeight"),
+  weightTrend: $("#weightTrend"), latestActivity: $("#latestActivity"), missionCount: $("#missionCount"),
+  missionPreview: $("#missionPreview"), todayList: $("#todayList"), measurementList: $("#measurementList"),
+  resultList: $("#resultList"), missionList: $("#missionList"), dialog: $("#dataDialog"),
+  dataForm: $("#dataForm"), dialogTitle: $("#dialogTitle"), dialogFields: $("#dialogFields"),
+  resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast")
+};
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
+}
+
+function renderMarkdown(raw) {
+  const lines = String(raw ?? "").split(/\r?\n/);
+  const html = [];
+  let inList = false;
+  for (const source of lines) {
+    const line = escapeHtml(source)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+    if (/^###\s+/.test(source)) {
+      if (inList) { html.push("</ul>"); inList = false; }
+      html.push(`<h3>${line.replace(/^###\s+/, "")}</h3>`);
+    } else if (/^-\s+/.test(source)) {
+      if (!inList) { html.push("<ul>"); inList = true; }
+      html.push(`<li>${line.replace(/^-\s+/, "")}</li>`);
+    } else if (!source.trim()) {
+      if (inList) { html.push("</ul>"); inList = false; }
+    } else {
+      if (inList) { html.push("</ul>"); inList = false; }
+      html.push(`<p>${line}</p>`);
+    }
+  }
+  if (inList) html.push("</ul>");
+  return html.join("");
+}
+
+function timeLabel(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "ahora" : new Intl.DateTimeFormat("es-DO", {hour:"2-digit", minute:"2-digit"}).format(date);
+}
+
+function showToast(message) {
+  refs.toast.textContent = message;
+  refs.toast.hidden = false;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => { refs.toast.hidden = true; }, 3200);
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let detail = `Error ${response.status}`;
+    try { detail = (await response.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+function renderMessage(message) {
+  const article = document.createElement("article");
+  article.className = `message ${message.role}`;
+  article.dataset.id = message.id;
+  article.dataset.risk = message.risk_level || "info";
+  const avatar = document.createElement("div");
+  avatar.className = "avatar";
+  avatar.textContent = message.role === "patient" ? "AM" : "H1";
+  const content = document.createElement("div");
+  content.className = "message-content";
+  if (message.role !== "patient") {
+    content.innerHTML = `<div class="message-head"><strong>${escapeHtml(message.author)}</strong><span>${timeLabel(message.created_at)}</span></div><div class="message-body">${renderMarkdown(message.content)}</div>`;
+  } else {
+    content.innerHTML = `<div class="message-body">${renderMarkdown(message.content)}</div>`;
+  }
+  if (message.agent_plan?.length) {
+    const details = document.createElement("details");
+    details.className = "agent-plan";
+    details.innerHTML = `<summary>Ver equipo activado · ${message.agent_plan.length} agentes</summary>` + message.agent_plan.map(step => `<div class="agent-step"><strong>${escapeHtml(step.agent)}</strong><span>${escapeHtml(step.action)} · ${escapeHtml(step.reason)}</span></div>`).join("");
+    content.append(details);
+  }
+  article.append(avatar, content);
+  refs.messageList.append(article);
+}
+
+function renderAll() {
+  const data = state.data;
+  if (!data) return;
+  refs.patientName.textContent = data.profile.display_name;
+  refs.messageList.replaceChildren();
+  data.messages.forEach(renderMessage);
+  renderContext(); renderToday(); renderMeasurements(); renderResults(); renderMissions();
+  refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+}
+
+function renderContext() {
+  const data = state.data;
+  const vital = data.vitals.at(-1);
+  refs.latestBp.textContent = vital?.systolic && vital?.diastolic ? `${vital.systolic}/${vital.diastolic}` : "—";
+  refs.latestBpMeta.textContent = vital ? `${timeLabel(vital.measured_at)} · pulso ${vital.pulse || "—"}` : "Sin registro";
+  const weight = data.weights.at(-1);
+  refs.latestWeight.textContent = weight ? `${weight.weight_kg.toFixed(1)} kg` : "—";
+  if (data.weights.length >= 2) {
+    const delta = weight.weight_kg - data.weights.at(-2).weight_kg;
+    refs.weightTrend.textContent = `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} kg desde el registro previo`;
+  } else refs.weightTrend.textContent = "Sin tendencia";
+  const activity = data.activity.at(-1);
+  refs.latestActivity.textContent = activity ? `${activity.steps.toLocaleString("es-DO")} pasos` : "—";
+  const active = data.missions.filter(item => !["completed","cancelled"].includes(item.status));
+  refs.missionCount.textContent = active.length;
+  refs.missionPreview.innerHTML = active.slice(-3).reverse().map(item => `<div class="mission-preview"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.next_action)}</span></div>`).join("") || `<p>No hay misiones activas.</p>`;
+}
+
+function renderToday() {
+  const proactive = state.data.messages.filter(message => message.metadata?.proactive);
+  refs.todayBadge.textContent = proactive.length;
+  refs.todayList.innerHTML = proactive.slice().reverse().map(message => `<article class="data-card"><header><h3>${escapeHtml(message.author)}</h3><small>${timeLabel(message.created_at)}</small></header><div>${renderMarkdown(message.content)}</div></article>`).join("") || `<article class="data-card"><h3>Todo tranquilo</h3><p>No hay nuevas intervenciones proactivas.</p></article>`;
+}
+
+function renderMeasurements() {
+  const items = [];
+  state.data.vitals.slice().reverse().forEach(v => items.push({title:`Presión ${v.systolic || "—"}/${v.diastolic || "—"}`, body:`Pulso ${v.pulse || "—"}`, date:v.measured_at}));
+  state.data.weights.slice().reverse().forEach(v => items.push({title:`Peso ${v.weight_kg.toFixed(1)} kg`, body:v.note || "Registro del paciente", date:v.measured_at}));
+  state.data.activity.slice().reverse().forEach(v => items.push({title:`${v.steps.toLocaleString("es-DO")} pasos`, body:`${v.active_minutes} minutos activos`, date:v.measured_at}));
+  refs.measurementList.innerHTML = items.sort((a,b) => new Date(b.date)-new Date(a.date)).map(item => `<article class="data-card"><header><h3>${escapeHtml(item.title)}</h3><small>${timeLabel(item.date)}</small></header><p>${escapeHtml(item.body)}</p></article>`).join("") || `<article class="data-card"><p>Sin mediciones.</p></article>`;
+}
+
+function renderResults() {
+  refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => `<article class="data-card"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} valores</p><div>${renderMarkdown(result.explanation)}</div></article>`).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
+}
+
+function renderMissions() {
+  refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} agentes · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán cuando HealthIA detecte o reciba un asunto de seguimiento.</p></article>`;
+}
+
+async function refresh() {
+  state.data = await api("/api/bootstrap");
+  renderAll();
+}
+
+function setView(view) {
+  state.currentView = view;
+  $$(".view").forEach(node => node.classList.toggle("is-active", node.id === `view-${view}`));
+  $$('[data-open]').forEach(node => node.classList.toggle("is-active", node.dataset.open === view));
+  if (window.innerWidth < 760) refs.shell.classList.remove("menu-open");
+}
+
+async function sendMessage(text) {
+  const clean = text.trim();
+  if (!clean) return;
+  refs.chatInput.value = "";
+  refs.chatInput.style.height = "auto";
+  refs.agentStatus.textContent = "KIRA formando equipo…";
+  const patient = {id:`local_${Date.now()}`, role:"patient", author:state.data.profile.display_name, content:clean, created_at:new Date().toISOString(), risk_level:"info", agent_plan:[]};
+  state.data.messages.push(patient); renderMessage(patient); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+  try {
+    const response = await api("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:clean})});
+    if (response.mission) state.data.missions.push(response.mission);
+    state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
+  } catch (error) { showToast(error.message); }
+  refs.agentStatus.textContent = "Agentes en espera";
+  refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+}
+
+async function upload(file) {
+  if (!file) return;
+  const form = new FormData(); form.append("file", file);
+  refs.agentStatus.textContent = "LUMEN revisando archivo…";
+  try {
+    const result = await api("/api/results/upload", {method:"POST", body:form});
+    state.data.results.push(result); renderResults(); renderContext(); setView("results"); showToast("Resultado guardado y procesado.");
+  } catch (error) { showToast(error.message); }
+  refs.agentStatus.textContent = "Agentes en espera";
+}
+
+const dialogDefinitions = {
+  vital: {title:"Registrar presión y signos", fields:[['systolic','Sistólica','number'],['diastolic','Diastólica','number'],['pulse','Pulso','number'],['oxygen_saturation','Saturación %','number'],['symptoms','Síntomas separados por coma','text']]},
+  weight: {title:"Registrar peso", fields:[['weight_kg','Peso en kg','number'],['note','Contexto o nota','text']]},
+  activity: {title:"Registrar actividad", fields:[['steps','Pasos','number'],['active_minutes','Minutos activos','number'],['note','Barrera o contexto','text']]}
+};
+
+function openDialog(type) {
+  state.dialogType = type;
+  const def = dialogDefinitions[type];
+  refs.dialogTitle.textContent = def.title;
+  refs.dialogFields.innerHTML = `<div class="form-grid">${def.fields.map(([name,label,inputType]) => `<label>${escapeHtml(label)}<input name="${name}" type="${inputType}" ${inputType === 'number' ? 'step="any"' : ''}></label>`).join("")}</div>`;
+  refs.dialog.showModal();
+}
+
+async function saveDialog() {
+  const form = new FormData(refs.dataForm);
+  const payload = Object.fromEntries(form.entries());
+  Object.keys(payload).forEach(key => { if (payload[key] === "") delete payload[key]; });
+  for (const key of ["systolic","diastolic","pulse","oxygen_saturation","weight_kg","steps","active_minutes"]) if (payload[key] !== undefined) payload[key] = Number(payload[key]);
+  if (payload.symptoms) payload.symptoms = payload.symptoms.split(",").map(item => item.trim()).filter(Boolean);
+  const endpoint = {vital:"/api/vitals", weight:"/api/weight", activity:"/api/activity"}[state.dialogType];
+  try { await api(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)}); refs.dialog.close(); await refresh(); showToast("Medición guardada."); }
+  catch (error) { showToast(error.message); }
+}
+
+function connectEvents() {
+  const events = new EventSource("/api/events/stream");
+  events.onmessage = async event => {
+    const payload = JSON.parse(event.data);
+    if (payload.type === "message" && !state.data.messages.some(item => item.id === payload.message.id)) {
+      state.data.messages.push(payload.message); renderMessage(payload.message); renderToday(); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight; showToast("HealthIA se adelantó con una nueva observación.");
+    } else if (payload.type === "state") await refresh();
+    else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
+  };
+}
+
+refs.chatForm.addEventListener("submit", event => { event.preventDefault(); sendMessage(refs.chatInput.value); });
+refs.chatInput.addEventListener("input", () => { refs.chatInput.style.height = "auto"; refs.chatInput.style.height = `${Math.min(refs.chatInput.scrollHeight,150)}px`; });
+refs.chatInput.addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); refs.chatForm.requestSubmit(); } });
+$$('[data-prompt]').forEach(button => button.addEventListener("click", () => sendMessage(button.dataset.prompt)));
+$$('[data-open]').forEach(button => button.addEventListener("click", () => setView(button.dataset.open)));
+$$('[data-dialog]').forEach(button => button.addEventListener("click", () => openDialog(button.dataset.dialog)));
+refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
+refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
+refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
+refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "SENTINEL revisando…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Agentes en espera"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
+$("#collapseLeft").addEventListener("click", () => refs.shell.classList.toggle("left-collapsed"));
+$("#collapseRight").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); });
+$("#closeContext").addEventListener("click", () => refs.shell.classList.remove("context-open"));
+$("#mobileMenu").addEventListener("click", () => refs.shell.classList.toggle("menu-open"));
+
+(async function boot() {
+  try {
+    const readiness = await api("/api/readiness");
+    refs.runtimeLabel.textContent = `${readiness.store_backend} · ${readiness.llm_backend}`;
+    await refresh(); connectEvents();
+  } catch (error) { showToast(error.message); }
+})();

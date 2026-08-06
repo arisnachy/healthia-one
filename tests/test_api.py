@@ -1,0 +1,35 @@
+import os
+
+os.environ["HEALTHIA_STORE_BACKEND"] = "memory"
+os.environ["HEALTHIA_LLM_BACKEND"] = "mock"
+
+from fastapi.testclient import TestClient
+from app.main import app
+
+
+def test_bootstrap_and_chat():
+    with TestClient(app) as client:
+        bootstrap = client.get("/api/bootstrap")
+        assert bootstrap.status_code == 200
+        assert bootstrap.json()["profile"]["id"] == "patient_demo"
+        response = client.post("/api/chat", json={"message": "Quiero revisar mi peso"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["mission"]["mission_type"] == "weight_followup"
+        assert payload["message"]["agent_plan"]
+
+
+def test_proactive_tick_is_idempotent_for_same_rule_keys():
+    with TestClient(app) as client:
+        first = client.post("/api/demo/tick").json()["created"]
+        second = client.post("/api/demo/tick").json()["created"]
+        assert first >= 1
+        assert second == 0
+
+
+def test_static_shell_has_collapsible_panels_and_clean_composer():
+    html = open("web/index.html", encoding="utf-8").read()
+    js = open("web/app.js", encoding="utf-8").read()
+    assert "collapseLeft" in html and "collapseRight" in html
+    assert 'refs.chatInput.value = ""' in js
+    assert "EventSource" in js
