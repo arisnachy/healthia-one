@@ -34,8 +34,20 @@ jobs:
       - name: Parse secure PowerShell launcher
         shell: pwsh
         run: '[scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null'
+
+  release:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Build verified release archive
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
+      - name: Verify release archive
+        run: python scripts/verify_release_zip.py dist/HealthIA-ONE-release-candidate.zip --source-ref "$GITHUB_SHA"
       - name: Upload verified release archive
         uses: actions/upload-artifact@v4
         with:
