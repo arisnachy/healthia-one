@@ -24,10 +24,10 @@ def test_android_health_bridge_declares_health_connect_and_background_access() -
 
 def test_profile_and_devices_ui_contract() -> None:
     html = (ROOT / "web/index.html").read_text(encoding="utf-8")
-    js = (ROOT / "web/ui-v7.js").read_text(encoding="utf-8")
-    css = (ROOT / "web/ui-v7.css").read_text(encoding="utf-8")
-    assert "/assets/ui-v7.css" in html
-    assert "/assets/ui-v7.js" in html
+    js = (ROOT / "web/profile-devices.js").read_text(encoding="utf-8")
+    css = (ROOT / "web/styles.css").read_text(encoding="utf-8")
+    assert "/assets/styles.css" in html
+    assert "/assets/profile-devices.js" in html
     for marker in (
         "Perfil del paciente",
         "Dispositivos",

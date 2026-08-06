@@ -1,3 +1,5 @@
+if (!window.__HEALTHIA_PROFILE_DEVICES__) {
+  window.__HEALTHIA_PROFILE_DEVICES__ = true;
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -50,10 +52,10 @@
     if (!nav || !record || nav.querySelector('[data-open="profile"]')) return;
     const profile = document.createElement("button");
     profile.dataset.open = "profile";
-    profile.innerHTML = '<span>◯</span><b>Perfil del paciente</b>';
+    profile.innerHTML = '<span class="nav-icon">◌</span><b>Perfil del paciente</b>'; 
     const devices = document.createElement("button");
     devices.dataset.open = "devices";
-    devices.innerHTML = '<span>⌁</span><b>Dispositivos</b>';
+    devices.innerHTML = '<span class="nav-icon">⌁</span><b>Dispositivos</b>'; 
     profile.addEventListener("click", () => activate("profile"));
     devices.addEventListener("click", () => activate("devices"));
     nav.insertBefore(profile, record);
@@ -305,3 +307,5 @@
     if (list) new MutationObserver(hideInternalNames).observe(list, {childList:true, subtree:true});
   });
 })();
+
+}

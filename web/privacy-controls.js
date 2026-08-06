@@ -1,3 +1,5 @@
+if (!window.__HEALTHIA_PRIVACY_CONTROLS__) {
+  window.__HEALTHIA_PRIVACY_CONTROLS__ = true;
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -187,3 +189,5 @@
     refresh().catch(error => toast(error.message));
   });
 })();
+
+}

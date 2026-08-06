@@ -1,3 +1,5 @@
+if (!window.__HEALTHIA_FAMILY_DOCUMENTS__) {
+  window.__HEALTHIA_FAMILY_DOCUMENTS__ = true;
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -200,3 +202,5 @@
     refresh().catch(error => toast(error.message));
   });
 })();
+
+}

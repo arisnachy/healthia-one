@@ -16,7 +16,9 @@ def verify(path: Path, expected_ref: str) -> None:
             "healthia-one/app/main.py",
             "healthia-one/healthia_one/models.py",
             "healthia-one/healthia_agent/agent.py",
-            "healthia-one/web/ui-v5.js",
+            "healthia-one/web/privacy-controls.js",
+            "healthia-one/web/profile-devices.js",
+            "healthia-one/web/icons.js",
             "healthia-one/scripts/smoke_test.py",
             "healthia-one/RELEASE-MANIFEST.json",
         }
