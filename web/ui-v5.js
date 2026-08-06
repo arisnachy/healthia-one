@@ -87,21 +87,20 @@
       <section class="control-hero"><div><small>CONTROL REVERSIBLE</small><h2>Tú decides qué observa el equipo</h2><p>Los permisos se aplican antes de la intervención proactiva. Cambiarlos no elimina tus datos; cambia qué señales pueden activar seguimiento.</p></div><span class="control-state">${consent.proactive_enabled ? "Seguimiento activo" : "Seguimiento pausado"}</span></section>
       ${snoozed ? `<div class="snooze-banner">Intervenciones no urgentes pausadas hasta ${formatDate(consent.snoozed_until)}.</div>` : ""}
       <div class="control-grid">
-        <section class="control-card"><h3>Seguimiento proactivo</h3><p>HealthIA puede adelantarse únicamente con las clases autorizadas.</p><div class="toggle-row"><div><strong>Permitir intervenciones proactivas</strong><small>Las respuestas solicitadas en el chat siguen disponibles.</small></div><label class="toggle"><input id="proactiveEnabled" type="checkbox" ${consent.proactive_enabled ? "checked" : ""}><span></span></label></div><div class="toggle-row"><div><strong>Excepción de seguridad urgente</strong><small>Permite alertas deterministas urgentes durante silencio o pausa.</small></div><label class="toggle"><input id="urgentBypass" type="checkbox" ${consent.allow_urgent_safety_bypass ? "checked" : ""}><span></span></label></div></section>
+        <section class="control-card"><h3>Seguimiento proactivo</h3><p>HealthIA puede adelantarse únicamente con las clases autorizadas.</p><div class="toggle-row"><div><strong>Permitir intervenciones proactivas</strong><small>El chat solicitado sigue disponible.</small></div><label class="toggle"><input id="proactiveEnabled" type="checkbox" ${consent.proactive_enabled ? "checked" : ""}><span></span></label></div><div class="toggle-row"><div><strong>Excepción de seguridad urgente</strong><small>Alertas deterministas urgentes durante silencio o pausa.</small></div><label class="toggle"><input id="urgentBypass" type="checkbox" ${consent.allow_urgent_safety_bypass ? "checked" : ""}><span></span></label></div></section>
         <section class="control-card"><h3>Horario de silencio</h3><p>Las intervenciones no urgentes esperan fuera de esta ventana.</p><div class="quiet-grid"><label>Desde<input id="quietStart" type="time" value="${escapeHtml(consent.quiet_hours_start)}"></label><label>Hasta<input id="quietEnd" type="time" value="${escapeHtml(consent.quiet_hours_end)}"></label></div><div class="control-actions"><button id="snooze24">Pausar 24 horas</button><button id="saveConsent" class="primary">Guardar cambios</button></div></section>
         <section class="control-card wide"><h3>Señales autorizadas</h3><p>Puedes activar o desactivar cada clase de seguimiento.</p>${SIGNALS.map(([key,label,description]) => `<div class="toggle-row"><div><strong>${label}</strong><small>${description}</small></div><label class="toggle"><input type="checkbox" data-signal="${key}" ${consent.signal_types.includes(key) ? "checked" : ""}><span></span></label></div>`).join("")}</section>
-        <section class="control-card"><h3>Reglas silenciadas</h3><p>Una regla silenciada deja de producir nuevas intervenciones hasta que la reactives.</p><div class="muted-list">${consent.muted_rule_prefixes.length ? consent.muted_rule_prefixes.map(prefix => `<button data-unmute="${escapeHtml(prefix)}">${escapeHtml(prefix)} ×</button>`).join("") : "<span>Ninguna</span>"}</div></section>
-        <section class="control-card"><h3>Tus datos</h3><p>Exporta el estado estructurado y metadatos de documentos. Los archivos binarios no se incluyen.</p><div class="control-actions"><a class="primary" href="/api/export" download>Exportar JSON</a><button id="refreshAudit">Actualizar auditoría</button></div></section>
-        <section class="control-card wide"><h3>Registro auditable</h3><p>${snapshot.audit_summary?.count || 0} acciones registradas. No incluye razonamiento privado del modelo.</p><div class="audit-list">${auditEvents.slice().reverse().map(event => `<article class="audit-event"><div class="audit-icon">${event.outcome === "blocked" ? "!" : "✓"}</div><div><strong>${escapeHtml(event.action)}</strong><small>${escapeHtml(event.actor)} · ${escapeHtml(event.resource_type)}${event.resource_id ? ` · ${escapeHtml(event.resource_id)}` : ""}</small></div><time>${formatDate(event.created_at)}</time></article>`).join("") || "<p>Sin eventos.</p>"}</div></section>
+        <section class="control-card"><h3>Reglas silenciadas</h3><p>Dejan de producir nuevas intervenciones hasta que las reactives.</p><div class="muted-list">${consent.muted_rule_prefixes.length ? consent.muted_rule_prefixes.map(prefix => `<button data-unmute="${escapeHtml(prefix)}">${escapeHtml(prefix)} ×</button>`).join("") : "<span>Ninguna</span>"}</div></section>
+        <section class="control-card"><h3>Tus datos</h3><p>Exporta datos estructurados y metadatos; no incluye archivos binarios.</p><div class="control-actions"><a class="primary" href="/api/export" download>Exportar JSON</a><button id="refreshAudit">Actualizar auditoría</button></div></section>
+        <section class="control-card wide"><h3>Registro auditable</h3><p>${snapshot.audit_summary?.count || 0} acciones. No incluye razonamiento privado.</p><div class="audit-list">${auditEvents.slice().reverse().map(event => `<article class="audit-event"><div class="audit-icon">${event.outcome === "blocked" ? "!" : "✓"}</div><div><strong>${escapeHtml(event.action)}</strong><small>${escapeHtml(event.actor)} · ${escapeHtml(event.resource_type)}${event.resource_id ? ` · ${escapeHtml(event.resource_id)}` : ""}</small></div><time>${formatDate(event.created_at)}</time></article>`).join("") || "<p>Sin eventos.</p>"}</div></section>
       </div>
     </div>`;
     bindControlActions();
   }
 
   async function saveConsent() {
-    const current = snapshot.consent;
     const payload = {
-      ...current,
+      ...snapshot.consent,
       proactive_enabled: $("#proactiveEnabled").checked,
       allow_urgent_safety_bypass: $("#urgentBypass").checked,
       quiet_hours_start: $("#quietStart").value,
@@ -115,11 +114,11 @@
     } catch (error) { toast(error.message); }
   }
 
-  async function unmute(prefix) {
-    const payload = {...snapshot.consent, muted_rule_prefixes:snapshot.consent.muted_rule_prefixes.filter(item => item !== prefix), updated_at:new Date().toISOString()};
+  async function updateMuted(prefixes, message) {
+    const payload = {...snapshot.consent, muted_rule_prefixes:prefixes, updated_at:new Date().toISOString()};
     try {
       await api("/api/consent", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-      await refresh(); toast("Regla reactivada.");
+      await refresh(); toast(message);
     } catch (error) { toast(error.message); }
   }
 
@@ -130,7 +129,7 @@
       catch (error) { toast(error.message); }
     });
     $("#refreshAudit")?.addEventListener("click", () => refresh().catch(error => toast(error.message)));
-    $$('[data-unmute]').forEach(button => button.addEventListener("click", () => unmute(button.dataset.unmute)));
+    $$('[data-unmute]').forEach(button => button.addEventListener("click", () => updateMuted(snapshot.consent.muted_rule_prefixes.filter(item => item !== button.dataset.unmute), "Regla reactivada.")));
   }
 
   async function muteRule(ruleKey) {
@@ -146,15 +145,32 @@
     const byId = new Map((snapshot.messages || []).map(item => [item.id,item]));
     $$("#messageList .message").forEach(article => {
       const message = byId.get(article.dataset.id);
-      const bar = article.querySelector(".message-actions") || (() => { const node=document.createElement("div"); node.className="message-actions"; article.querySelector(".message-content")?.append(node); return node; })();
-      if (message?.metadata?.action_target === "control" && !bar.querySelector(".open-control-button")) {
-        const button = document.createElement("button"); button.type="button"; button.className="open-control-button"; button.textContent="Abrir permisos y privacidad"; button.addEventListener("click", () => activateView("control")); bar.append(button);
+      const needsControl = message?.metadata?.action_target === "control";
+      const ruleKey = message?.metadata?.proactive ? message.metadata.rule_key : null;
+      const needsMute = Boolean(ruleKey);
+      if (!needsControl && !needsMute) return;
+      let bar = article.querySelector(".message-actions");
+      if (!bar) {
+        bar = document.createElement("div");
+        bar.className = "message-actions";
+        article.querySelector(".message-content")?.append(bar);
       }
-      const ruleKey = message?.metadata?.rule_key;
-      if (message?.metadata?.proactive && ruleKey && !bar.querySelector(".mute-rule-button")) {
-        const button = document.createElement("button"); button.type="button"; button.className="mute-rule-button"; button.textContent="Silenciar este tipo"; button.addEventListener("click", () => muteRule(ruleKey)); bar.append(button);
+      if (needsControl && !bar.querySelector(".open-control-button")) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "open-control-button";
+        button.textContent = "Abrir permisos y privacidad";
+        button.addEventListener("click", () => activateView("control"));
+        bar.append(button);
       }
-      if (!bar.children.length) bar.remove();
+      if (needsMute && !bar.querySelector(".mute-rule-button")) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "mute-rule-button";
+        button.textContent = "Silenciar este tipo";
+        button.addEventListener("click", () => muteRule(ruleKey));
+        bar.append(button);
+      }
     });
   }
 
