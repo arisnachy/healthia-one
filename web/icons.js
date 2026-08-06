@@ -48,6 +48,7 @@ if (!window.__HEALTHIA_ICONS__) {
       loadScript('/assets/runtime-integrations.js','data-healthia-runtime');
       loadScript('/assets/provider-integrations.js','data-healthia-providers');
       loadScript('/assets/clinical-council.js','data-healthia-clinical-council');
+      loadScript('/assets/cost-control.js','data-healthia-cost-control');
     }
     window.HealthIAIcons={decorate,icon};
     if(document.readyState==='loading') window.addEventListener('DOMContentLoaded',boot,{once:true}); else boot();

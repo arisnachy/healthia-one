@@ -9,12 +9,20 @@ class Settings(BaseSettings):
 
     env: str = "local"
     model: str = "gemini-3.6-flash"
-    llm_backend: str = "gemini_api"
+    llm_backend: str = "mock"
     store_backend: str = "json"
     data_path: Path = Path(".healthia-one/state.json")
     proactive_interval_seconds: int = 20
+    proactive_enabled: bool = True
     max_upload_bytes: int = 5 * 1024 * 1024
     llm_timeout_seconds: int = 18
+
+    # Cost safety defaults: no billable request unless explicitly enabled.
+    cost_mode: str = "local"
+    ai_request_limit: int = 0
+    cost_guard_start_enabled: bool = False
+    cost_control_ui: bool = True
+    ai_max_output_tokens: int = 700
 
     @property
     def adk_ready(self) -> bool:

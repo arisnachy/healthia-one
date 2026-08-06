@@ -2,6 +2,9 @@ import os
 
 os.environ["HEALTHIA_STORE_BACKEND"] = "memory"
 os.environ["HEALTHIA_LLM_BACKEND"] = "mock"
+os.environ["HEALTHIA_COST_MODE"] = "local"
+os.environ["HEALTHIA_AI_REQUEST_LIMIT"] = "0"
+os.environ["HEALTHIA_COST_GUARD_START_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient
 from app.main import app
@@ -25,6 +28,26 @@ def test_proactive_tick_is_idempotent_for_same_rule_keys():
         second = client.post("/api/demo/tick").json()["created"]
         assert first >= 1
         assert second == 0
+
+
+def test_cost_control_defaults_to_local_zero_spend_and_cannot_be_enabled():
+    with TestClient(app) as client:
+        readiness = client.get("/api/readiness")
+        assert readiness.status_code == 200
+        cost = readiness.json()["cost_control"]
+        assert cost["mode"] == "local"
+        assert cost["enabled"] is False
+        assert cost["request_limit"] == 0
+        assert cost["estimated_spend_usd"] is None
+
+        status = client.get("/api/cost-control")
+        assert status.status_code == 200
+        assert status.json()["requests_remaining"] == 0
+
+        toggle = client.post("/api/cost-control?enabled=true")
+        assert toggle.status_code == 409
+        detail = toggle.json()["detail"]
+        assert any(token in detail for token in ("API key", "límite", "modo"))
 
 
 def test_static_shell_has_collapsible_panels_and_clean_composer():

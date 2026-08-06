@@ -8,6 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from healthia_one.config import Settings
+from healthia_one.cost_guard import CostGuard, CostGuardBlocked
 from healthia_one.models import ChatResponse, PatientState, RiskLevel
 
 
@@ -25,14 +26,40 @@ Distingue hechos confirmados, datos reportados por el paciente, incertidumbre y 
 
 
 class GeminiResponder:
-    """Patient-facing Gemini boundary with deterministic safety fallback."""
+    """Patient-facing Gemini boundary with deterministic safety and cost fallback."""
 
     def __init__(self, settings: Settings, client_factory: Callable[[], Any] | None = None) -> None:
         self.settings = settings
         self._client_factory = client_factory
         self._client: Any | None = None
+        self.cost_guard = CostGuard(
+            mode=settings.cost_mode,
+            request_limit=settings.ai_request_limit,
+            start_enabled=settings.cost_guard_start_enabled,
+            max_output_tokens=settings.ai_max_output_tokens,
+        )
         self.last_status = "not_called"
         self.last_error = ""
+
+    def cost_status(self) -> dict[str, Any]:
+        payload = self.cost_guard.snapshot()
+        payload.update(
+            {
+                "llm_backend": self.settings.llm_backend,
+                "model": self.settings.model,
+                "api_key_configured": self.settings.adk_ready,
+                "ui_control_available": bool(self.settings.cost_control_ui and self.settings.env == "local"),
+            }
+        )
+        return payload
+
+    def set_cost_enabled(self, enabled: bool) -> dict[str, Any]:
+        if not self.settings.cost_control_ui or self.settings.env != "local":
+            raise CostGuardBlocked("El interruptor remoto está deshabilitado fuera del entorno local.")
+        if enabled and not self.settings.adk_ready:
+            raise CostGuardBlocked("No hay una API key configurada para esta ejecución local.")
+        self.cost_guard.set_enabled(enabled)
+        return self.cost_status()
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -133,6 +160,10 @@ class GeminiResponder:
             model=self.settings.model,
             input=json.dumps(payload, ensure_ascii=False, default=str),
             system_instruction=SYSTEM_INSTRUCTION,
+            generation_config={
+                "max_output_tokens": self.cost_guard.max_output_tokens,
+                "thinking_level": "minimal",
+            },
             store=False,
         )
         text = self._interaction_text(interaction)
@@ -159,6 +190,20 @@ class GeminiResponder:
             self.last_status = "deterministic_safety"
             return draft
         try:
+            request_number = self.cost_guard.authorize("patient_chat_enhancement")
+        except CostGuardBlocked as exc:
+            self.last_status = "cost_guard_blocked"
+            self.last_error = str(exc)
+            draft.message.metadata.update(
+                {
+                    "llm_backend": "gemini_api",
+                    "llm_status": "cost_guard_blocked",
+                    "model": self.settings.model,
+                    "cost_guard": self.cost_guard.snapshot(),
+                }
+            )
+            return draft
+        try:
             text = await asyncio.wait_for(
                 asyncio.to_thread(self._generate, state, patient_text, draft),
                 timeout=self.settings.llm_timeout_seconds,
@@ -167,7 +212,13 @@ class GeminiResponder:
             self.last_status = "fallback"
             self.last_error = f"{type(exc).__name__}: {exc}"[:500]
             draft.message.metadata.update(
-                {"llm_backend": "gemini_api", "llm_status": "fallback", "model": self.settings.model}
+                {
+                    "llm_backend": "gemini_api",
+                    "llm_status": "fallback",
+                    "model": self.settings.model,
+                    "request_number": request_number,
+                    "cost_guard": self.cost_guard.snapshot(),
+                }
             )
             return draft
 
@@ -179,6 +230,8 @@ class GeminiResponder:
                 "llm_status": "completed",
                 "model": self.settings.model,
                 "store": False,
+                "request_number": request_number,
+                "cost_guard": self.cost_guard.snapshot(),
             }
         )
         self.last_status = "completed"
@@ -190,6 +243,7 @@ class GeminiResponder:
             model=self.settings.model,
             input="Responde únicamente con HEALTHIA_OK",
             system_instruction="Prueba técnica mínima. No añadas ninguna otra palabra.",
+            generation_config={"max_output_tokens": 32, "thinking_level": "minimal"},
             store=False,
         )
         text = self._interaction_text(interaction)
@@ -197,7 +251,7 @@ class GeminiResponder:
             raise RuntimeError("Gemini respondió sin texto utilizable")
         return text
 
-    async def probe(self) -> dict[str, str | bool]:
+    async def probe(self) -> dict[str, Any]:
         if self.settings.llm_backend != "gemini_api" or not self.settings.adk_ready:
             return {
                 "ok": False,
@@ -205,6 +259,20 @@ class GeminiResponder:
                 "model": self.settings.model,
                 "live_request": False,
                 "detail": "Falta configurar GEMINI_API_KEY en el proceso local.",
+                "cost_guard": self.cost_guard.snapshot(),
+            }
+        try:
+            request_number = self.cost_guard.authorize("manual_readiness_probe")
+        except CostGuardBlocked as exc:
+            self.last_status = "cost_guard_blocked"
+            self.last_error = str(exc)
+            return {
+                "ok": False,
+                "status": "cost_guard_blocked",
+                "model": self.settings.model,
+                "live_request": False,
+                "detail": str(exc),
+                "cost_guard": self.cost_guard.snapshot(),
             }
         try:
             client = self._get_client()
@@ -227,6 +295,8 @@ class GeminiResponder:
                 "model": self.settings.model,
                 "live_request": True,
                 "detail": self.last_error,
+                "request_number": request_number,
+                "cost_guard": self.cost_guard.snapshot(),
             }
         self.last_status = "ready"
         self.last_error = ""
@@ -238,4 +308,6 @@ class GeminiResponder:
             "live_request": True,
             "response": response,
             "store": False,
+            "request_number": request_number,
+            "cost_guard": self.cost_guard.snapshot(),
         }
