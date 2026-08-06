@@ -34,3 +34,12 @@ jobs:
       - name: Parse secure PowerShell launcher
         shell: pwsh
         run: '[scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null'
+      - name: Build verified release archive
+        run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
+      - name: Upload verified release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-ONE-release-candidate
+          path: dist/HealthIA-ONE-release-candidate.zip
+          if-no-files-found: error
+          retention-days: 30
