@@ -1,41 +1,149 @@
-# Architecture
+# HealthIA ONE architecture
 
-```text
-Patient chat / measurements / result upload
-                 ↓
-           FastAPI gateway
-                 ↓
-     deterministic safety boundary
-                 ↓
-      KIRA dynamic team router
-       ↙      ↓       ↓       ↘
-HISTORIA  SENTINEL  LUMEN  VITA/NAVIGATOR
-                 ↓
-       longitudinal patient state
-          JSON local / Firestore
-                 ↓
-    proactive evaluator + event broker
-                 ↓
-       SSE message to patient chat
+## System view
+
+```mermaid
+flowchart TB
+    P[Patient chat and authorized inputs]
+    UI[Chat-first patient OS]
+    API[FastAPI clinical gateway]
+    SAFE[Deterministic safety boundary]
+    KIRA[KIRA Health router]
+    AGENTS[Minimum specialist team]
+    STATE[Typed PatientState]
+    STORE[Memory / atomic JSON / Firestore boundary]
+    EVAL[Clinical + continuity evaluators]
+    CONTROL[BASTION consent gate]
+    SSE[Event broker + Server-Sent Events]
+
+    P --> UI --> API --> SAFE --> KIRA --> AGENTS --> STATE --> STORE
+    STORE --> EVAL --> CONTROL --> SSE --> UI
+    CONTROL -->|quiet, snooze, mute| STORE
+    UI -->|explicit manual review| EVAL
 ```
 
-## Design rules
+## Patient state
 
-1. The patient owns the context and explicitly selects monitored signal classes.
-2. Deterministic safety rules execute before model reasoning.
-3. The minimum useful specialist team is activated; the UI does not force the patient to manage agents.
-4. Every intervention exposes detected signal, reason, evidence IDs, uncertainty, and next action.
-5. Private chain-of-thought is never rendered. Only public work, tool results, and decisions appear.
-6. Long-running missions have states and closure conditions instead of disappearing after chat.
-7. The local JSON adapter is replaceable by Firestore without changing the domain contracts.
-8. The public demo uses synthetic data only.
+`PatientState` is the shared typed contract across API, storage, agents and UI. It contains:
 
-## Next production layers
+- profile and care plan;
+- consent and quiet-hour policy;
+- vitals, weight and activity;
+- results;
+- pathological family members;
+- document metadata;
+- medication plans and check-ins;
+- appointments and goals;
+- health missions and chat messages;
+- audit events and emitted-rule idempotency keys.
 
-- Patient authentication and scoped authorization.
-- Firestore transaction/idempotency tests.
-- Cloud Tasks or Pub/Sub for durable scheduled follow-up.
-- Vertex AI/Gemini multimodal result extraction.
-- FHIR import/export with provenance and patient consent.
-- Professional review channel for actions that require clinical accountability.
-- Golden clinical-safety evaluation suite and attack tests.
+All mutable records carry stable IDs, timestamps and source metadata where applicable.
+
+## Safety before intelligence
+
+```text
+patient message or measurement
+        ↓
+deterministic urgent-language / vital checks
+        ├── urgent → stop routine flow and escalate to human care
+        └── non-urgent → semantic routing and specialist work
+```
+
+Clinical safety does not depend on Gemini availability. The model is not allowed to downgrade deterministic urgent findings.
+
+## Agent topology
+
+```text
+KIRA Health
+├── HISTORIA    longitudinal context and timeline
+├── SENTINEL    safety and urgency
+├── LUMEN       result explanation
+├── VITA        barriers and low-risk micro-goals
+├── NAVIGATOR   missions and closure conditions
+├── HEREDITAS   pathological genogram
+├── ARCHIVUM    document organization
+├── MEDSAFE     treatment safety and check-ins
+├── ADVOCATE    patient-controlled consultation brief
+└── BASTION     consent, privacy and reversible control
+```
+
+The public interface displays actions, evidence, uncertainty and next steps. It never renders private chain-of-thought.
+
+## Proactive execution
+
+Two evaluators remain separated:
+
+1. **Clinical evaluator**: missing measurements, material weight change, extreme vitals, low activity, unreviewed results and family-history context.
+2. **Continuity evaluator**: upcoming appointments and patient-reported medication omissions.
+
+Every finding passes through BASTION:
+
+```text
+finding
+  → already emitted?
+  → urgent authorized bypass?
+  → explicit manual review?
+  → proactive enabled?
+  → snoozed?
+  → muted rule?
+  → quiet hours?
+  → emit and audit
+```
+
+Explicit patient-requested reviews can run during quiet hours because they are not unsolicited notifications. Background execution always remains consent-bound.
+
+## Patient interfaces
+
+The browser shell loads layered, reversible interface modules:
+
+- `app.js`: core chat, measurement forms, results and SSE;
+- `ui-v2.js`: fixed composer, voice, patient record and action buttons;
+- `ui-v3.js`: genogram and document archive;
+- `ui-v4.js`: timeline, treatment and appointments;
+- `ui-v5.js`: consent, privacy, audit and export.
+
+Each layer has static contracts and Node syntax checks in CI.
+
+## Storage
+
+### Local demonstration
+
+- `MemoryStore` for tests.
+- `JsonStore` with atomic replacement for local persistence.
+- document bytes under ignored `uploads/patient_demo` paths.
+
+### Cloud boundary
+
+- `FirestoreStore` preserves the domain contract.
+- Dockerfile and Cloud Run manifest are present.
+
+Production requires private Cloud Storage for files, Firestore security rules, authentication, tenant isolation, transaction/idempotency tests and durable scheduling through Cloud Tasks or Pub/Sub.
+
+## Main API groups
+
+```text
+/chat and /events/stream
+/vitals /weight /activity /results
+/family
+/documents
+/timeline
+/treatment
+/appointments /consultation-brief
+/consent /audit /export
+```
+
+FastAPI publishes the generated OpenAPI interface at `/docs`.
+
+## Failure and recovery principles
+
+- deterministic safety continues without a model;
+- repeated proactive findings are suppressed with stable rule keys;
+- backdated records are sorted by their event time, not upload order;
+- a missing Gemini key does not break the deterministic local demo;
+- unread PDFs and images remain pending instead of being fabricated;
+- audit records contain public operational facts, not secrets or hidden reasoning;
+- patient export removes internal storage paths.
+
+## Current truth boundary
+
+The repository is a tested synthetic release candidate, not a production clinical system or regulated medical device. Local and CI verification do not establish clinical effectiveness, security certification, legal compliance or regulatory clearance.
