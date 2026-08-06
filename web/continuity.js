@@ -1,3 +1,5 @@
+if (!window.__HEALTHIA_CONTINUITY__) {
+  window.__HEALTHIA_CONTINUITY__ = true;
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -177,3 +179,5 @@
     refresh().catch(error => toast(error.message));
   });
 })();
+
+}

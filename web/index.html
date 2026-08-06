@@ -6,38 +6,49 @@
   <meta name="description" content="HealthIA ONE — sistema agentico de continuidad de salud centrado en el paciente">
   <title>HealthIA ONE · Tu salud nunca empieza de cero</title>
   <link rel="stylesheet" href="/assets/styles.css">
-  <link rel="stylesheet" href="/assets/ui-v2.css">
-  <link rel="stylesheet" href="/assets/ui-v3.css">
-  <link rel="stylesheet" href="/assets/ui-v4.css">
-  <link rel="stylesheet" href="/assets/ui-v5.css">
-  <link rel="stylesheet" href="/assets/ui-v6.css">
-  <link rel="stylesheet" href="/assets/ui-v7.css">
 </head>
 <body>
   <div id="app" class="app-shell">
     <aside id="leftRail" class="left-rail">
       <div class="brand-row">
-        <div class="brand-mark">H1</div>
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="4" width="40" height="40" rx="14" fill="url(#brandGradient)"/>
+            <path d="M24 12.5C24.9 18.2 29.4 22.7 35.1 23.6C29.4 24.5 24.9 29 24 34.7C23.1 29 18.6 24.5 12.9 23.6C18.6 22.7 23.1 18.2 24 12.5Z" stroke="white" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="brandGradient" x1="8" y1="8" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#4A628B"/>
+                <stop offset="1" stop-color="#2A3C5C"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
         <div class="brand-copy"><strong>HealthIA ONE</strong><span>Continuous patient care</span></div>
         <button id="collapseLeft" class="icon-button" aria-label="Colapsar navegación">‹</button>
       </div>
-      <button class="primary-action" data-open="chat"><span>＋</span><b>Nueva consulta</b></button>
+      <button id="newConsultation" class="primary-action" data-open="chat"><span class="nav-icon">✚</span><b>Nueva consulta</b></button>
+      <div class="left-rail-scroll">
       <nav class="main-nav" aria-label="Navegación principal">
-        <button class="is-active" data-open="chat"><span>✦</span><b>HealthIA Chat</b></button>
-        <button data-open="today"><span>◷</span><b>Hoy</b><i id="todayBadge">0</i></button>
-        <button data-open="measurements"><span>⌁</span><b>Mediciones</b></button>
-        <button data-open="results"><span>▤</span><b>Resultados</b></button>
-        <button data-open="record"><span>▦</span><b>Mi expediente</b></button>
-        <button data-open="missions"><span>◎</span><b>Misiones de salud</b></button>
+        <button class="is-active" data-open="chat"><span class="nav-icon">✦</span><b>HealthIA Chat</b></button>
+        <button data-open="today"><span class="nav-icon">◷</span><b>Hoy</b><i id="todayBadge">0</i></button>
+        <button data-open="measurements"><span class="nav-icon">⌁</span><b>Mediciones</b></button>
+        <button data-open="results"><span class="nav-icon">▤</span><b>Resultados</b></button>
+        <button data-open="record"><span class="nav-icon">▦</span><b>Mi expediente</b></button>
+        <button data-open="missions"><span class="nav-icon">◎</span><b>Misiones de salud</b></button>
       </nav>
       <section class="rail-section">
         <p>Módulos de salud</p>
-        <div class="agent-mini"><span>HI</span><div><strong>HISTORIA</strong><small>Memoria longitudinal</small></div></div>
-        <div class="agent-mini"><span>SE</span><div><strong>SENTINEL</strong><small>Seguridad y tendencias</small></div></div>
-        <div class="agent-mini"><span>LU</span><div><strong>LUMEN</strong><small>Explica resultados</small></div></div>
-        <div class="agent-mini"><span>VI</span><div><strong>VITA</strong><small>Hábitos y barreras</small></div></div>
-        <div class="agent-mini"><span>NA</span><div><strong>NAVIGATOR</strong><small>Seguimiento</small></div></div>
+        <div class="agent-mini"><span>HX</span><div><strong>Health history</strong><small>Longitudinal memory</small></div></div>
+        <div class="agent-mini"><span>SM</span><div><strong>Safety monitoring</strong><small>Signals and trends</small></div></div>
+        <div class="agent-mini"><span>RV</span><div><strong>Results review</strong><small>Explain findings</small></div></div>
+        <div class="agent-mini"><span>HH</span><div><strong>Healthy habits</strong><small>Routines and barriers</small></div></div>
+        <div class="agent-mini"><span>FU</span><div><strong>Follow-up</strong><small>Next safe step</small></div></div>
       </section>
+      </div>
+      <button id="accountPill" class="user-pill" type="button" aria-label="Perfil del usuario">
+        <div class="patient-avatar">AG</div>
+        <div><strong>Arisnachy Gomez</strong><span>Plus</span></div>
+      </button>
       <div class="patient-chip"><div class="patient-avatar">AM</div><div><strong id="patientName">Paciente</strong><span>Sintético · demo segura</span></div></div>
     </aside>
 
@@ -45,7 +56,7 @@
       <header class="topbar">
         <button id="mobileMenu" class="icon-button mobile-only" aria-label="Abrir navegación">☰</button>
         <div class="topbar-title"><span class="status-dot"></span><div><strong>HealthIA</strong><small id="runtimeLabel">Preparando continuidad</small></div></div>
-        <div class="topbar-actions"><span id="agentStatus" class="status-pill">Equipo en segundo plano</span><button id="runCheck" class="secondary-button">Revisión agentica</button><button id="collapseRight" class="icon-button" aria-label="Mostrar u ocultar contexto">▥</button></div>
+        <div class="topbar-actions"><span id="agentStatus" class="status-pill">Equipo en segundo plano</span><button id="runCheck" class="secondary-button">Revisión agéntica</button><button id="collapseRight" class="icon-button" aria-label="Mostrar u ocultar contexto">▥</button></div>
       </header>
 
       <section id="view-chat" class="view is-active">
@@ -78,7 +89,7 @@
     </main>
 
     <aside id="contextPanel" class="context-panel">
-      <header><div><small>CONTEXTO AUTORIZADO</small><strong>Tu salud ahora</strong></div><button id="closeContext" class="icon-button" aria-label="Cerrar contexto">×</button></header>
+      <header><div><small>CONTEXTO AUTORIZADO</small><strong>Tu salud ahora</strong></div><button id="closeContext" class="icon-button panel-toggle" aria-label="Ocultar contexto">›</button></header>
       <section class="context-card action-card"><div class="context-heading"><strong>Próxima acción</strong><span id="nextActionRisk">activo</span></div><div id="nextAction" class="next-action">Sin acciones pendientes.</div></section>
       <section class="context-card"><div class="context-heading"><strong>Última presión</strong><button data-dialog="vital">＋</button></div><div id="latestBp" class="metric-value">—</div><small id="latestBpMeta">Sin registro</small></section>
       <section class="context-card"><div class="context-heading"><strong>Peso</strong><button data-dialog="weight">＋</button></div><div id="latestWeight" class="metric-value">—</div><small id="weightTrend">Sin tendencia</small></section>
@@ -92,11 +103,11 @@
   <dialog id="dataDialog"><form id="dataForm" method="dialog" class="dialog-card"><header><div><small>REGISTRO DEL PACIENTE</small><h2 id="dialogTitle">Nueva medición</h2></div><button value="cancel" aria-label="Cerrar">×</button></header><div id="dialogFields"></div><footer><button value="cancel" class="secondary-button">Cancelar</button><button id="saveData" value="default" class="primary-save">Guardar</button></footer></form></dialog>
   <div id="toast" class="toast" hidden></div>
   <script src="/assets/app.js" defer></script>
-  <script src="/assets/ui-v2.js" defer></script>
-  <script src="/assets/ui-v3.js" defer></script>
-  <script src="/assets/ui-v4.js" defer></script>
-  <script src="/assets/ui-v5.js" defer></script>
-  <script src="/assets/ui-v6.js" defer></script>
-  <script src="/assets/ui-v7.js" defer></script>
+  <script src="/assets/patient-record.js" defer></script>
+  <script src="/assets/family-documents.js" defer></script>
+  <script src="/assets/continuity.js" defer></script>
+  <script src="/assets/privacy-controls.js" defer></script>
+  <script src="/assets/profile-devices.js" defer></script>
+  <script src="/assets/icons.js" defer></script>
 </body>
 </html>

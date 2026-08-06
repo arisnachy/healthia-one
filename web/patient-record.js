@@ -1,3 +1,5 @@
+if (!window.__HEALTHIA_PATIENT_RECORD__) {
+  window.__HEALTHIA_PATIENT_RECORD__ = true;
 (() => {
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
@@ -156,3 +158,5 @@
     loadSnapshot().catch(() => {});
   });
 })();
+
+}

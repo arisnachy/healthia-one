@@ -1,3 +1,7 @@
+if (window.__HEALTHIA_APP_BOOTED__) {
+  console.info("HealthIA app already initialized; duplicate bootstrap ignored.");
+} else {
+window.__HEALTHIA_APP_BOOTED__ = true;
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -12,8 +16,36 @@ const refs = {
   missionPreview: $("#missionPreview"), todayList: $("#todayList"), measurementList: $("#measurementList"),
   resultList: $("#resultList"), missionList: $("#missionList"), dialog: $("#dataDialog"),
   dataForm: $("#dataForm"), dialogTitle: $("#dialogTitle"), dialogFields: $("#dialogFields"),
-  resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast")
+  resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast"),
+  sendButton: $("#sendButton"), heroPatientName: $("#heroPatientName"), signalSummary: $("#signalSummary"),
+  openMissionSummary: $("#openMissionSummary"), newConsultation: $("#newConsultation"), closeContext: $("#closeContext")
 };
+
+
+let refreshPromise = null;
+let refreshQueued = false;
+let eventStream = null;
+
+function setSendState() {
+  if (!refs.sendButton || !refs.chatInput) return;
+  refs.sendButton.disabled = !refs.chatInput.value.trim();
+}
+
+function safeFocusComposer() {
+  refs.chatInput?.focus();
+  refs.chatInput?.setSelectionRange(refs.chatInput.value.length, refs.chatInput.value.length);
+}
+
+
+const PUBLIC_NAMES = {
+  "KIRA Health": "HealthIA", "KIRA": "HealthIA",
+  "HISTORIA": "Health history", "SENTINEL": "Safety monitoring",
+  "LUMEN": "Results review", "VITA": "Healthy habits",
+  "NAVIGATOR": "Follow-up", "HEREDITAS": "Family history",
+  "ARCHIVUM": "Documents", "MEDSAFE": "Medication safety",
+  "ADVOCATE": "Visit preparation", "BASTION": "Privacy and consent"
+};
+function publicName(value) { return PUBLIC_NAMES[String(value || "").trim()] || String(value || "HealthIA").replace(/_/g, " "); }
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
@@ -77,14 +109,14 @@ function renderMessage(message) {
   const content = document.createElement("div");
   content.className = "message-content";
   if (message.role !== "patient") {
-    content.innerHTML = `<div class="message-head"><strong>${escapeHtml(message.author)}</strong><span>${timeLabel(message.created_at)}</span></div><div class="message-body">${renderMarkdown(message.content)}</div>`;
+    content.innerHTML = `<div class="message-head"><strong>${escapeHtml(publicName(message.author))}</strong><span>${timeLabel(message.created_at)}</span></div><div class="message-body">${renderMarkdown(message.content)}</div>`;
   } else {
     content.innerHTML = `<div class="message-body">${renderMarkdown(message.content)}</div>`;
   }
   if (message.agent_plan?.length) {
     const details = document.createElement("details");
     details.className = "agent-plan";
-    details.innerHTML = `<summary>Ver equipo activado · ${message.agent_plan.length} agentes</summary>` + message.agent_plan.map(step => `<div class="agent-step"><strong>${escapeHtml(step.agent)}</strong><span>${escapeHtml(step.action)} · ${escapeHtml(step.reason)}</span></div>`).join("");
+    details.innerHTML = `<summary>Ver módulos activados · ${message.agent_plan.length}</summary>` + message.agent_plan.map(step => `<div class="agent-step"><strong>${escapeHtml(publicName(step.agent))}</strong><span>${escapeHtml(step.action)} · ${escapeHtml(step.reason)}</span></div>`).join("");
     content.append(details);
   }
   article.append(avatar, content);
@@ -95,10 +127,20 @@ function renderAll() {
   const data = state.data;
   if (!data) return;
   refs.patientName.textContent = data.profile.display_name;
+  if (refs.heroPatientName) refs.heroPatientName.textContent = data.profile.display_name || "—";
+  if (refs.signalSummary) refs.signalSummary.textContent = `${(data.profile.authorized_signals || []).length || 0} activas`;
+  if (refs.openMissionSummary) refs.openMissionSummary.textContent = data.missions.filter(item => !["completed","cancelled"].includes(item.status)).length;
   refs.messageList.replaceChildren();
-  data.messages.forEach(renderMessage);
+  const firstPatient = data.messages.findIndex(message => message.role === "patient");
+  const visibleMessages = firstPatient < 0
+    ? []
+    : data.messages.slice(firstPatient).filter(message => !message.metadata?.proactive);
+  visibleMessages.forEach(renderMessage);
+  refs.chatScroll.classList.toggle("entry-mode", firstPatient < 0);
+  refs.chatScroll.classList.toggle("conversation-started", firstPatient >= 0);
   renderContext(); renderToday(); renderMeasurements(); renderResults(); renderMissions();
-  refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+  document.dispatchEvent(new CustomEvent("healthia:ui-updated"));
+  refs.chatScroll.scrollTop = firstPatient < 0 ? 0 : refs.chatScroll.scrollHeight;
 }
 
 function renderContext() {
@@ -122,7 +164,7 @@ function renderContext() {
 function renderToday() {
   const proactive = state.data.messages.filter(message => message.metadata?.proactive);
   refs.todayBadge.textContent = proactive.length;
-  refs.todayList.innerHTML = proactive.slice().reverse().map(message => `<article class="data-card"><header><h3>${escapeHtml(message.author)}</h3><small>${timeLabel(message.created_at)}</small></header><div>${renderMarkdown(message.content)}</div></article>`).join("") || `<article class="data-card"><h3>Todo tranquilo</h3><p>No hay nuevas intervenciones proactivas.</p></article>`;
+  refs.todayList.innerHTML = proactive.slice().reverse().map(message => `<article class="data-card"><header><h3>${escapeHtml(publicName(message.author))}</h3><small>${timeLabel(message.created_at)}</small></header><div>${renderMarkdown(message.content)}</div></article>`).join("") || `<article class="data-card"><h3>Todo tranquilo</h3><p>No hay nuevas intervenciones proactivas.</p></article>`;
 }
 
 function renderMeasurements() {
@@ -138,19 +180,35 @@ function renderResults() {
 }
 
 function renderMissions() {
-  refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} agentes · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán cuando HealthIA detecte o reciba un asunto de seguimiento.</p></article>`;
+  refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} módulos · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán cuando HealthIA detecte o reciba un asunto de seguimiento.</p></article>`;
 }
 
-async function refresh() {
-  state.data = await api("/api/bootstrap");
-  renderAll();
+async function refresh(force = false) {
+  if (refreshPromise && !force) {
+    refreshQueued = true;
+    return refreshPromise;
+  }
+  refreshPromise = (async () => {
+    state.data = await api("/api/bootstrap");
+    renderAll();
+  })();
+  try {
+    await refreshPromise;
+  } finally {
+    refreshPromise = null;
+    if (refreshQueued) {
+      refreshQueued = false;
+      queueMicrotask(() => refresh(true));
+    }
+  }
 }
 
 function setView(view) {
   state.currentView = view;
   $$(".view").forEach(node => node.classList.toggle("is-active", node.id === `view-${view}`));
-  $$('[data-open]').forEach(node => node.classList.toggle("is-active", node.dataset.open === view));
+  $$('.main-nav [data-open], .primary-action[data-open]').forEach(node => node.classList.toggle("is-active", node.dataset.open === view));
   if (window.innerWidth < 760) refs.shell.classList.remove("menu-open");
+  if (view === "chat") requestAnimationFrame(safeFocusComposer);
 }
 
 async function sendMessage(text) {
@@ -158,7 +216,8 @@ async function sendMessage(text) {
   if (!clean) return;
   refs.chatInput.value = "";
   refs.chatInput.style.height = "auto";
-  refs.agentStatus.textContent = "KIRA formando equipo…";
+  setSendState();
+  refs.agentStatus.textContent = "HealthIA organizando el siguiente paso…";
   const patient = {id:`local_${Date.now()}`, role:"patient", author:state.data.profile.display_name, content:clean, created_at:new Date().toISOString(), risk_level:"info", agent_plan:[]};
   state.data.messages.push(patient); renderMessage(patient); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
   try {
@@ -166,19 +225,19 @@ async function sendMessage(text) {
     if (response.mission) state.data.missions.push(response.mission);
     state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Agentes en espera";
+  refs.agentStatus.textContent = "Equipo en segundo plano";
   refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
 }
 
 async function upload(file) {
   if (!file) return;
   const form = new FormData(); form.append("file", file);
-  refs.agentStatus.textContent = "LUMEN revisando archivo…";
+  refs.agentStatus.textContent = "HealthIA revisando el archivo…";
   try {
     const result = await api("/api/results/upload", {method:"POST", body:form});
     state.data.results.push(result); renderResults(); renderContext(); setView("results"); showToast("Resultado guardado y procesado.");
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Agentes en espera";
+  refs.agentStatus.textContent = "Equipo en segundo plano";
 }
 
 const dialogDefinitions = {
@@ -207,18 +266,27 @@ async function saveDialog() {
 }
 
 function connectEvents() {
-  const events = new EventSource("/api/events/stream");
-  events.onmessage = async event => {
+  if (eventStream) return;
+  eventStream = new EventSource("/api/events/stream");
+  let refreshTimer = null;
+  eventStream.onmessage = async event => {
     const payload = JSON.parse(event.data);
     if (payload.type === "message" && !state.data.messages.some(item => item.id === payload.message.id)) {
-      state.data.messages.push(payload.message); renderMessage(payload.message); renderToday(); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight; showToast("HealthIA se adelantó con una nueva observación.");
-    } else if (payload.type === "state") await refresh();
-    else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
+      state.data.messages.push(payload.message);
+      renderMessage(payload.message);
+      renderToday();
+      refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+      showToast("HealthIA se adelantó con una nueva observación.");
+    } else if (payload.type === "state") {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => refresh(), 120);
+    } else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
   };
+  eventStream.onerror = () => showToast("La conexión de eventos se reconectará automáticamente.");
 }
 
 refs.chatForm.addEventListener("submit", event => { event.preventDefault(); sendMessage(refs.chatInput.value); });
-refs.chatInput.addEventListener("input", () => { refs.chatInput.style.height = "auto"; refs.chatInput.style.height = `${Math.min(refs.chatInput.scrollHeight,150)}px`; });
+refs.chatInput.addEventListener("input", () => { refs.chatInput.style.height = "auto"; refs.chatInput.style.height = `${Math.min(refs.chatInput.scrollHeight,150)}px`; setSendState(); });
 refs.chatInput.addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); refs.chatForm.requestSubmit(); } });
 $$('[data-prompt]').forEach(button => button.addEventListener("click", () => sendMessage(button.dataset.prompt)));
 $$('[data-open]').forEach(button => button.addEventListener("click", () => setView(button.dataset.open)));
@@ -226,16 +294,42 @@ $$('[data-dialog]').forEach(button => button.addEventListener("click", () => ope
 refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
 refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
 refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
-refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "SENTINEL revisando…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Agentes en espera"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
+refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "HealthIA revisando continuidad…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Equipo en segundo plano"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
 $("#collapseLeft").addEventListener("click", () => refs.shell.classList.toggle("left-collapsed"));
-$("#collapseRight").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); });
-$("#closeContext").addEventListener("click", () => refs.shell.classList.remove("context-open"));
+function syncContextToggle() {
+  if (!refs.closeContext) return;
+  const open = window.innerWidth <= 1080 ? refs.shell.classList.contains("context-open") : !refs.shell.classList.contains("right-collapsed");
+  refs.closeContext.textContent = open ? "›" : "‹";
+  refs.closeContext.setAttribute("aria-label", open ? "Colapsar contexto" : "Expandir contexto");
+}
+$("#collapseRight").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); syncContextToggle(); });
+$("#closeContext").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); syncContextToggle(); });
 $("#mobileMenu").addEventListener("click", () => refs.shell.classList.toggle("menu-open"));
+refs.newConsultation?.addEventListener("click", async event => {
+  event.preventDefault();
+  refs.newConsultation.disabled = true;
+  try {
+    await api("/api/demo/reset", {method:"POST"});
+    await refresh(true);
+    setView("chat");
+    refs.chatInput.value = "";
+    refs.chatInput.style.height = "auto";
+    setSendState();
+    safeFocusComposer();
+    showToast("Nueva consulta lista para iniciar.");
+  } catch (error) { showToast(error.message); }
+  finally { refs.newConsultation.disabled = false; }
+});
 
 (async function boot() {
   try {
     const readiness = await api("/api/readiness");
     refs.runtimeLabel.textContent = `${readiness.store_backend} · ${readiness.llm_backend}`;
-    await refresh(); connectEvents();
+    setSendState();
+    syncContextToggle();
+    await refresh();
+    connectEvents();
   } catch (error) { showToast(error.message); }
 })();
+
+}

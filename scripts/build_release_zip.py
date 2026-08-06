@@ -18,6 +18,7 @@ EXCLUDED_PARTS = {
     "__pycache__",
     "htmlcov",
     "node_modules",
+    "dist",
 }
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".log"}
 
@@ -25,6 +26,8 @@ EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".log"}
 def should_include(path: Path, output: Path) -> bool:
     relative = path.relative_to(ROOT)
     if path.resolve() == output.resolve():
+        return False
+    if relative.as_posix() == "RELEASE-MANIFEST.json":
         return False
     if any(part in EXCLUDED_PARTS or part.endswith(".egg-info") for part in relative.parts):
         return False
