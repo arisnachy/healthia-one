@@ -21,3 +21,15 @@ def test_pairing_code_cannot_be_claimed_by_another_device() -> None:
         assert "otro dispositivo" in str(exc)
     else:
         raise AssertionError("Pairing code should be single-device")
+
+
+def test_claimed_token_survives_pairing_code_expiration() -> None:
+    from datetime import timedelta
+
+    manager = DevicePairingManager(ttl_minutes=10)
+    code = manager.create()["code"]
+    claim = manager.claim(code, "phone-1", "My phone")
+    manager._sessions[code].expires_at -= timedelta(minutes=11)
+    manager._cleanup()
+    assert code not in manager._sessions
+    assert manager.validate(claim["access_token"], "phone-1") is True
