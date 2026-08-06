@@ -295,7 +295,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
 
 @app.post("/api/demo/tick")
 async def demo_tick() -> dict:
-    messages = await service.run_proactive_check()
+    messages = await service.run_proactive_check(manual_requested=True)
     return {"created": len(messages), "messages": [item.model_dump(mode="json") for item in messages]}
 
 
