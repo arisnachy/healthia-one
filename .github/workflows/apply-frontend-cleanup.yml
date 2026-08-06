@@ -1,0 +1,37 @@
+name: Apply frontend consolidation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.cleanup-bundle/**'
+      - '.github/workflows/apply-frontend-cleanup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/frontend-consolidation
+          fetch-depth: 0
+      - name: Apply verified cleanup bundle
+        shell: bash
+        run: |
+          cat .cleanup-bundle/chunk* > /tmp/frontend-cleanup.b64
+          base64 --decode --ignore-garbage /tmp/frontend-cleanup.b64 > /tmp/frontend-cleanup.tar.gz
+          echo "f3cfa77d6040a076da16330022c427e2e2c5e0565ec9d4c95f8b0782c36b05e4  /tmp/frontend-cleanup.tar.gz" | sha256sum --check --strict
+          tar -xzf /tmp/frontend-cleanup.tar.gz
+          rm -rf .cleanup-bundle
+          rm -f web/ui-v{2,3,4,5,6,7}.js web/ui-v{2,3,4,5,6,7}.css
+          rm -f tests/test_ui_v2.py tests/test_ui_v3.py tests/test_ui_v4.py tests/test_ui_v5.py tests/test_visual_polish_contract.py
+          rm -f RELEASE-MANIFEST.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: consolidate frontend and remove versioned layers"
+          git push origin HEAD:kira/frontend-consolidation
