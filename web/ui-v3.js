@@ -37,6 +37,22 @@
     [family, documents].forEach(button => button.addEventListener("click", () => activateView(button.dataset.open)));
   }
 
+  function injectQuickActions() {
+    const quick = $(".quick-records");
+    if (!quick || quick.querySelector('[data-health-os="family"]')) return;
+    const family = document.createElement("button");
+    family.type = "button";
+    family.dataset.healthOs = "family";
+    family.textContent = "◇ Familia";
+    const documents = document.createElement("button");
+    documents.type = "button";
+    documents.dataset.healthOs = "documents";
+    documents.textContent = "▣ Documento";
+    family.addEventListener("click", () => activateView("family"));
+    documents.addEventListener("click", () => activateView("documents"));
+    quick.append(family, documents);
+  }
+
   function injectViews() {
     const main = $(".conversation-column");
     if (!main || $("#view-family")) return;
@@ -115,10 +131,30 @@
     $("#addDocumentButton")?.addEventListener("click", () => $("#documentDialog")?.showModal());
   }
 
+  function hydrateChatControls() {
+    $$("#messageList .message").forEach(article => {
+      if (article.querySelector(".health-os-message-actions")) return;
+      const text = article.textContent?.toLowerCase() || "";
+      const targets = [];
+      if (text.includes("genograma") || text.includes("historia familiar") || text.includes("familiares")) {
+        targets.push(["Abrir genograma", "family"]);
+      }
+      if (text.includes("documento") || text.includes("expediente") || text.includes("archivo")) {
+        targets.push(["Abrir documentos", "documents"]);
+      }
+      if (!targets.length) return;
+      const bar = document.createElement("div");
+      bar.className = "message-actions health-os-message-actions";
+      bar.innerHTML = targets.map(([label, target]) => `<button type="button" data-health-os-target="${target}">${label}</button>`).join("");
+      article.querySelector(".message-content")?.append(bar);
+    });
+  }
+
   async function refresh() {
     snapshot = await api("/api/bootstrap");
     renderGenogram();
     renderDocuments();
+    hydrateChatControls();
   }
 
   function bindForms() {
@@ -151,14 +187,16 @@
 
   function extendChatActions() {
     $("#messageList")?.addEventListener("click", event => {
-      const text = event.target.textContent?.toLowerCase() || "";
-      if (text.includes("genograma") || text.includes("familia")) activateView("family");
-      if (text.includes("documento") || text.includes("expediente")) activateView("documents");
+      const target = event.target.closest("[data-health-os-target]")?.dataset.healthOsTarget;
+      if (target) activateView(target);
     });
+    const list = $("#messageList");
+    if (list) new MutationObserver(hydrateChatControls).observe(list, {childList: true, subtree: true});
+    hydrateChatControls();
   }
 
   window.addEventListener("DOMContentLoaded", () => {
-    injectNavigation(); injectViews(); injectDialogs(); bindForms(); extendChatActions();
+    injectNavigation(); injectQuickActions(); injectViews(); injectDialogs(); bindForms(); extendChatActions();
     refresh().catch(error => toast(error.message));
   });
 })();
