@@ -29,7 +29,16 @@ def patient_snapshot() -> dict:
         "previous_weight_kg": 78.0,
         "latest_blood_pressure": "148/92",
         "activity_last_3_days_steps": [2400, 1800, 2100],
-        "truth_boundary": "Synthetic demo data; not a diagnosis or treatment order.",
+        "family_history": {
+            "maternal": ["madre con diabetes", "abuela con diabetes"],
+            "paternal": ["padre con hipertensión"],
+            "siblings": ["hermano con hipertensión"],
+        },
+        "document_count": 0,
+        "truth_boundary": (
+            "Synthetic demo data. Family patterns support prevention questions only; they do not "
+            "diagnose or predict that the patient will develop a disease."
+        ),
     }
 
 
@@ -42,11 +51,14 @@ def allowed_patient_actions() -> dict:
             "record measurements",
             "create a follow-up mission",
             "prepare questions for a professional",
+            "organize patient-authorized documents",
+            "summarize authorized family history",
             "recommend an appropriate level of care using deterministic safety rules",
         ],
         "requires_professional": [
             "confirm diagnosis",
             "prescribe or change medication",
+            "predict that a hereditary disease will occur",
             "interpret an emergency as safe",
             "sign clinical orders",
         ],
@@ -107,6 +119,31 @@ navigator = LlmAgent(
     ),
 )
 
+hereditas = LlmAgent(
+    name="hereditas",
+    model=model(),
+    description="Organizes the pathological genogram and identifies family-history questions.",
+    instruction=(
+        "You are HEREDITAS. Use only family-history data explicitly authorized by the patient. "
+        "Organize lineage, relationship, conditions, age at diagnosis, and confidence. Identify "
+        "patterns that may justify preventive questions, but never present family aggregation as "
+        "proof, a diagnosis, or a prediction that disease will occur."
+    ),
+    tools=[patient_snapshot, allowed_patient_actions],
+)
+
+archivum = LlmAgent(
+    name="archivum",
+    model=model(),
+    description="Indexes and relates patient documents without fabricating unread content.",
+    instruction=(
+        "You are ARCHIVUM. Organize patient-authorized documents by type, date, source, provenance, "
+        "and review state. Link them to health missions and longitudinal context. Never invent text "
+        "from an unread PDF or image, and never expose a document outside the patient scope."
+    ),
+    tools=[patient_snapshot],
+)
+
 root_agent = LlmAgent(
     name="kira_health",
     model=model(),
@@ -114,12 +151,13 @@ root_agent = LlmAgent(
     instruction=(
         "You are KIRA Health, coordinator of HealthIA ONE. The patient owns the context. Select the "
         "minimum specialist needed: HISTORIA for longitudinal context, SENTINEL for safety, LUMEN "
-        "for explanation, VITA for lifestyle barriers, and NAVIGATOR for continuity. Be proactive "
-        "only with authorized data. Explain why you intervened. You are not a doctor or emergency "
-        "service; do not confirm diagnoses, prescribe, or change treatment. Keep private model "
+        "for explanation, VITA for lifestyle barriers, NAVIGATOR for continuity, HEREDITAS for the "
+        "pathological genogram, and ARCHIVUM for documents. Be proactive only with authorized data. "
+        "Explain why you intervened. You are not a doctor or emergency service; do not confirm "
+        "diagnoses, prescribe, change treatment, or predict hereditary disease. Keep private model "
         "reasoning hidden and expose only public actions, evidence, uncertainty, and next steps."
     ),
-    sub_agents=[historian, sentinel, lumen, vita, navigator],
+    sub_agents=[historian, sentinel, lumen, vita, navigator, hereditas, archivum],
     tools=[patient_snapshot, allowed_patient_actions],
 )
 
