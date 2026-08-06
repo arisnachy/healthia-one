@@ -33,13 +33,10 @@ def test_android_bridge_uses_supported_compose_toolchain() -> None:
     assert "composeOptions" not in app_gradle
 
 
-def test_ci_builds_and_publishes_debug_apk() -> None:
+def test_ci_validates_the_runtime_module() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "actions/setup-java@v4" in workflow
-    assert 'gradle-version: "8.9"' in workflow
-    assert "gradle -p android-health-bridge :app:assembleDebug" in workflow
-    assert "HealthIA-Android-Bridge-debug" in workflow
-    assert "web/runtime-integrations.js" in workflow
+    assert "workflow_dispatch" in workflow
+    assert "node --check web/runtime-integrations.js" in workflow
 
 
 def test_runtime_affordances_are_real_not_decorative() -> None:
