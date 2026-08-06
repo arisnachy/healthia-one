@@ -304,7 +304,7 @@ class HealthIAService:
         await self.broker.publish({"type": "state", "section": "consent"})
         return state.consent
 
-    async def run_proactive_check(self) -> list[ChatMessage]:
+    async def run_proactive_check(self, *, manual_requested: bool = False) -> list[ChatMessage]:
         created: list[ChatMessage] = []
         async with self._mutation_lock:
             state = await self.store.load()
@@ -313,7 +313,7 @@ class HealthIAService:
             for finding in findings:
                 if finding.key in state.emitted_rule_keys:
                     continue
-                allowed, reason = finding_allowed(state, finding)
+                allowed, reason = finding_allowed(state, finding, manual_requested=manual_requested)
                 if not allowed:
                     continue
                 state.emitted_rule_keys.append(finding.key)
@@ -338,7 +338,12 @@ class HealthIAService:
                     action="emit_proactive_intervention",
                     resource_type="chat_message",
                     resource_id=message.id,
-                    details={"rule_key": finding.key, "risk_level": str(finding.risk_level), "consent_reason": reason},
+                    details={
+                        "rule_key": finding.key,
+                        "risk_level": str(finding.risk_level),
+                        "consent_reason": reason,
+                        "manual_requested": manual_requested,
+                    },
                 )
                 created.append(message)
             await self.store.save(state)
