@@ -41,19 +41,26 @@ def test_android_bridge_uses_supported_compose_toolchain() -> None:
     assert "composeOptions" not in app_gradle
 
 
-def test_ci_validates_the_runtime_module() -> None:
+def test_ci_validates_semantic_runtime_modules() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch" in workflow
+    assert "deployment/verify_google_ai.py" in workflow
     assert "node --check web/runtime-integrations.js" in workflow
+    assert "node --check web/provider-integrations.js" in workflow
 
 
 def test_runtime_affordances_are_real_not_decorative() -> None:
     runtime = (ROOT / "web/runtime-integrations.js").read_text(encoding="utf-8")
+    providers = (ROOT / "web/provider-integrations.js").read_text(encoding="utf-8")
     icons = (ROOT / "web/icons.js").read_text(encoding="utf-8")
     interactions = (ROOT / "web/interactions.css").read_text(encoding="utf-8")
     assert "SpeechRecognition" in runtime
     assert 'json("/api/ai/test", {method: "POST"})' in runtime
     assert 'button.setAttribute("aria-pressed"' in runtime
     assert "/assets/runtime-integrations.js" in icons
+    assert "/assets/provider-integrations.js" in icons
+    assert 'fetch("/api/devices")' in providers
+    assert "provider_catalog" in providers
+    assert ".provider-grid" in interactions
     assert 'content: "Abrir menú"' in interactions
     assert "background: transparent" in interactions
