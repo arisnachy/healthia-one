@@ -41,14 +41,7 @@ class PairingSession:
 
 
 class DevicePairingManager:
-    """Event-driven pairing plus restart-safe, patient-bound signed credentials.
-
-    Pairing codes are short-lived and single-use. After a claim, the bearer
-    credential is an HMAC-signed envelope containing patient, connection and
-    device identity. No bearer token is stored in plaintext or in process memory.
-    With a stable HEALTHIA_DEVICE_TOKEN_SECRET, authorization survives Cloud Run
-    restarts while remaining bound to the original patient and device.
-    """
+    """Event-driven pairing plus restart-safe, patient-bound signed credentials."""
 
     def __init__(
         self,
@@ -139,7 +132,6 @@ class DevicePairingManager:
                 event.set()
 
     def _cleanup(self) -> None:
-        """Compatibility wrapper used by tests and maintenance probes."""
         with self._lock:
             self._cleanup_unlocked()
 
@@ -244,13 +236,18 @@ class DevicePairingManager:
             payload["expired"] = False
             return payload
 
-    def authorize(self, token: str, device_id: str, patient_id: str = "patient_demo") -> DevicePrincipal | None:
+    def identify(self, token: str, device_id: str) -> DevicePrincipal | None:
+        """Authenticate a signed device and recover its patient scope without trusting request input."""
         if not token or not device_id:
             return None
         principal = self._decode_token(token)
-        if principal is None:
+        if principal is None or principal.device_id != device_id:
             return None
-        if principal.device_id != device_id or principal.patient_id != patient_id:
+        return principal
+
+    def authorize(self, token: str, device_id: str, patient_id: str = "patient_demo") -> DevicePrincipal | None:
+        principal = self.identify(token, device_id)
+        if principal is None or principal.patient_id != patient_id:
             return None
         return principal
 
