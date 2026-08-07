@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from healthia_one.models import ClinicalDocument, DocumentCategory, PatientState, new_id
+from healthia_one.tenant import current_patient_id
 
 
 ALLOWED_EXTENSIONS = {".json", ".csv", ".txt", ".pdf", ".png", ".jpg", ".jpeg"}
@@ -42,14 +43,16 @@ def build_document(
         raise ValueError("Tipo de archivo no permitido")
     selected = DocumentCategory(category) if category else category_from_filename(safe)
     document_id = new_id("doc")
+    patient_id = current_patient_id()
     return ClinicalDocument(
         id=document_id,
+        patient_id=patient_id,
         title=(title or Path(safe).stem.replace("_", " ").strip() or "Documento clínico"),
         filename=safe,
         category=selected,
         mime_type=content_type or "application/octet-stream",
         size_bytes=size_bytes,
-        storage_path=f"uploads/patient_demo/{document_id}_{safe}",
+        storage_path=f"uploads/{patient_id}/{document_id}_{safe}",
         status="pending_review" if suffix in {".pdf", ".png", ".jpg", ".jpeg"} else "stored",
         summary=(
             "Documento guardado y organizado. La extracción multimodal requiere Gemini configurado; "
