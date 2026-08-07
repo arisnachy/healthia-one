@@ -17,7 +17,7 @@ if (!window.__HEALTHIA_RUNTIME_INTEGRATIONS__) {
     }
 
     async function json(path, options = {}) {
-      const response = await fetch(path, options);
+      const response = await (window.healthiaFetch || fetch)(path, options);
       let payload = {};
       try { payload = await response.json(); } catch {}
       if (!response.ok) throw new Error(payload.detail || `Error ${response.status}`);

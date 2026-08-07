@@ -32,7 +32,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
     }
 
     async function loadSnapshot() {
-      const response = await fetch("/api/bootstrap", {headers: {Accept: "application/json"}});
+      const response = await (window.healthiaFetch || fetch)("/api/bootstrap", {headers: {Accept: "application/json"}});
       if (!response.ok) throw new Error(`bootstrap ${response.status}`);
       snapshot = await response.json();
       consolidateIdentity();
