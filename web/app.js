@@ -223,7 +223,11 @@ async function sendMessage(text) {
   state.data.messages.push(patient); renderMessage(patient); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
   try {
     const response = await api("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:clean})});
-    if (response.mission) state.data.missions.push(response.mission);
+    if (response.mission) {
+      const missionIndex = state.data.missions.findIndex(item => item.id === response.mission.id);
+      if (missionIndex >= 0) state.data.missions[missionIndex] = response.mission;
+      else state.data.missions.push(response.mission);
+    }
     state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
   } catch (error) { showToast(error.message); }
   refs.agentStatus.textContent = "Listo";
