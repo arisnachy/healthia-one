@@ -18,6 +18,8 @@ def test_google_sdk_matches_interactions_api() -> None:
         assert "genai.Client(api_key=api_key)" in transport
         assert "genai.Client(vertexai=True, project=project, location=location)" in transport
         assert "VertexInteractionsAdapter" in transport
+        assert "response_json_schema" in transport
+        assert "thinking_config" in transport
     else:
         assert 'genai.Client(api_key=api_key)' in gemini
     assert "cost_guard.authorize" in gemini
@@ -44,10 +46,11 @@ def test_secure_launcher_defaults_to_zero_spend_and_requires_explicit_ai() -> No
     assert "Get-NetIPAddress" in launcher
     assert "Telefono en la misma Wi-Fi" in launcher
     assert "--host 0.0.0.0" in launcher
-    assert "client.interactions.create" in verifier
     assert "HEALTHIA_GOOGLE_AI_READY" in verifier
     assert "HEALTHIA_GOOGLE_AI_ERROR" in verifier
-    assert "store=False" in verifier
+    assert "genai.Client(vertexai=True" in verifier
+    assert "client.interactions.create" in verifier
+    assert '"gemini-3.5-flash"' in verifier
 
 
 def test_android_bridge_uses_supported_compose_toolchain() -> None:
@@ -94,13 +97,23 @@ def test_runtime_affordances_are_real_not_decorative() -> None:
     assert "background: transparent" in interactions
 
 
-def test_cloud_demo_is_scale_to_zero_and_easy_to_destroy() -> None:
+def test_cloud_demo_is_vertex_native_scale_to_zero_and_easy_to_destroy() -> None:
     deploy = (ROOT / "deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
     remove = (ROOT / "deployment/remove-cloud-demo.ps1").read_text(encoding="utf-8")
     assert '"--min", "0"' in deploy
     assert '"--max", "1"' in deploy
     assert "HEALTHIA_COST_MODE=cloud_demo" in deploy
     assert "HEALTHIA_PROACTIVE_ENABLED=false" in deploy
+    assert "HEALTHIA_MODEL=gemini-3.5-flash" in deploy
+    assert "GOOGLE_GENAI_USE_VERTEXAI=true" in deploy
+    assert "GOOGLE_CLOUD_LOCATION=$VertexLocation" in deploy
+    assert '"aiplatform.googleapis.com"' in deploy
+    assert '"roles/aiplatform.user"' in deploy
+    assert "GEMINI_API_KEY=" not in deploy
+    assert "healthia-gemini-api-key" not in deploy
+    assert "HEALTHIA_DEVICE_TOKEN_SECRET=" in deploy
+    assert "HEALTHIA_SESSION_SECRET=" in deploy
     assert "--no-allow-unauthenticated" in deploy
     assert "gcloud run services delete" in remove
+    assert "healthia-gemini-api-key" not in remove
     assert "gcloud projects delete" in remove
