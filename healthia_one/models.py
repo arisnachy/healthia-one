@@ -65,6 +65,75 @@ class SourceRef(BaseModel):
     verified: bool = False
 
 
+class ClinicalTwinEvent(BaseModel):
+    """Append-only event owned by the patient clinical twin.
+
+    `event_at` is the clinical time; `recorded_at` is when HealthIA learned it.
+    Keeping both prevents an old study uploaded today from appearing as if it
+    happened today.
+    """
+
+    id: str = Field(default_factory=lambda: new_id("twin_event"))
+    patient_id: str = "patient_demo"
+    event_type: str = Field(min_length=2, max_length=100)
+    entity_type: str = Field(default="clinical_event", max_length=100)
+    entity_id: str = Field(default="", max_length=180)
+    event_at: datetime = Field(default_factory=utc_now)
+    recorded_at: datetime = Field(default_factory=utc_now)
+    title: str = Field(default="", max_length=220)
+    summary: str = Field(default="", max_length=2400)
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="unknown", source_id="unknown"))
+    certainty: Literal[
+        "confirmed",
+        "patient_reported",
+        "device_observed",
+        "document_reported",
+        "ai_extraction",
+        "derived",
+        "unknown",
+        "contradictory",
+    ] = "unknown"
+    verification_status: Literal["verified", "unverified", "pending_review", "mixed"] = "unverified"
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class OpenClinicalLoop(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("loop"))
+    patient_id: str = "patient_demo"
+    topic: str = Field(min_length=2, max_length=180)
+    target_field: str = Field(default="", max_length=180)
+    question: str = Field(default="", max_length=500)
+    reason: str = Field(default="", max_length=500)
+    priority: Literal["low", "medium", "high"] = "medium"
+    status: Literal["open", "resolved", "dismissed"] = "open"
+    created_at: datetime = Field(default_factory=utc_now)
+    review_after: datetime | None = None
+    resolved_at: datetime | None = None
+    source_event_ids: list[str] = Field(default_factory=list)
+
+
+class AnatomicalLink(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("anatomy"))
+    patient_id: str = "patient_demo"
+    system: str = Field(default="", max_length=120)
+    region: str = Field(default="", max_length=180)
+    subregion: str = Field(default="", max_length=180)
+    laterality: Literal["left", "right", "bilateral", "midline", "unknown"] = "unknown"
+    entity_type: str = Field(default="result", max_length=100)
+    entity_id: str = Field(default="", max_length=180)
+    status: Literal[
+        "suspected",
+        "patient_reported",
+        "document_reported",
+        "clinician_confirmed",
+        "resolved",
+        "inactive",
+        "unknown",
+    ] = "unknown"
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="unknown", source_id="unknown"))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class CarePlan(BaseModel):
     conditions: list[str] = Field(default_factory=list)
     weight_due_days: int = 7
@@ -150,7 +219,7 @@ class PatientProfile(BaseModel):
 
 
 class PatientConsent(BaseModel):
-    proactive_enabled: bool = True
+    proactive_enabled: bool = False
     signal_types: list[str] = Field(default_factory=lambda: list(DEFAULT_SIGNAL_TYPES))
     quiet_hours_start: str = "22:00"
     quiet_hours_end: str = "07:00"
@@ -395,8 +464,36 @@ class HealthResult(BaseModel):
     patient_id: str = "patient_demo"
     uploaded_at: datetime = Field(default_factory=utc_now)
     filename: str
+    original_mime_type: str = "application/octet-stream"
+    original_storage_uri: str = ""
     panel: str = "Resultado cargado"
+    artifact_type: Literal[
+        "laboratory",
+        "radiology_report",
+        "xray_image",
+        "ct_image",
+        "mri_image",
+        "ultrasound_image",
+        "ecg",
+        "pathology",
+        "other",
+    ] = "other"
+    modality: str = Field(default="", max_length=120)
+    anatomical_region: str = Field(default="", max_length=180)
+    exam_date: date | None = None
     items: list[ResultItem] = Field(default_factory=list)
+    reported_impression: str = Field(default="", max_length=4000)
+    ai_observations: list[str] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
+    quality_limitations: list[str] = Field(default_factory=list)
+    ai_confidence: Literal["low", "medium", "high", "unknown"] = "unknown"
+    verification_status: Literal[
+        "patient_uploaded",
+        "document_reported",
+        "ai_observed_unverified",
+        "mixed_unverified",
+        "unverified",
+    ] = "patient_uploaded"
     status: Literal["parsed", "pending_multimodal", "invalid"] = "parsed"
     explained: bool = False
     explanation: str = ""
@@ -509,6 +606,9 @@ class PatientState(BaseModel):
     mission_artifacts: list[MissionArtifact] = Field(default_factory=list)
     messages: list[ChatMessage] = Field(default_factory=list)
     audit_events: list[AuditEvent] = Field(default_factory=list)
+    twin_events: list[ClinicalTwinEvent] = Field(default_factory=list)
+    open_clinical_loops: list[OpenClinicalLoop] = Field(default_factory=list)
+    anatomical_links: list[AnatomicalLink] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utc_now)
 
