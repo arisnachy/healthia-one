@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     llm_backend: str = "mock"
     store_backend: str = "json"
     data_path: Path = Path(".healthia-one/state.json")
+    # Demand-driven by default: no periodic agent wake-up loop.
     proactive_interval_seconds: int = 20
-    proactive_enabled: bool = True
+    proactive_enabled: bool = False
     max_upload_bytes: int = 5 * 1024 * 1024
     llm_timeout_seconds: int = 18
 
