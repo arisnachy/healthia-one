@@ -7,11 +7,19 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_google_sdk_matches_interactions_api() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     gemini = (ROOT / "healthia_one/gemini.py").read_text(encoding="utf-8")
+    transport_path = ROOT / "healthia_one/google_ai_transport.py"
     assert '"google-genai>=2.13,<3"' in pyproject
     assert '"google-adk[gcp]>=2.5,<3"' in pyproject
     assert gemini.count(".interactions.create(") >= 2
     assert "def _interaction_text" in gemini
-    assert 'genai.Client(api_key=api_key)' in gemini
+    if transport_path.exists():
+        transport = transport_path.read_text(encoding="utf-8")
+        assert "build_google_ai_client" in gemini
+        assert "genai.Client(api_key=api_key)" in transport
+        assert "genai.Client(vertexai=True, project=project, location=location)" in transport
+        assert "VertexInteractionsAdapter" in transport
+    else:
+        assert 'genai.Client(api_key=api_key)' in gemini
     assert "cost_guard.authorize" in gemini
     assert '"max_output_tokens"' in gemini
     assert '"thinking_level": "minimal"' in gemini
