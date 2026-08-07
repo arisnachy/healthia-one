@@ -14,6 +14,7 @@ from healthia_one.event_dispatch import CloudEventPublisher
 from healthia_one.mission_engine import apply_mission_action
 from healthia_one.devices import ingest_health_connect_batch
 from healthia_one.gemini import GeminiResponder
+from healthia_one.llm_policy import should_use_patient_chat_model
 from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
 from healthia_one.identity import AuthPrincipal
 from healthia_one.identity_state import bind_state_identity, new_identity_state
@@ -290,8 +291,14 @@ class HealthIAService:
             audit(state, actor="patient", action="send_chat_message", resource_type="chat_message", resource_id=patient_message.id)
             controlled_response = maybe_control_response(state, content)
             response = controlled_response or respond(state, content)
-            if controlled_response is None:
+            if controlled_response is None and should_use_patient_chat_model(content, response):
                 response = await self.gemini.enhance(state, content, response)
+            elif controlled_response is None:
+                response.message.metadata.update({
+                    "llm_status": "not_needed",
+                    "agent_execution": "on_demand",
+                    "model_call_saved": True,
+                })
             response.message.patient_id = state.profile.id
             state.messages.append(response.message)
             audit(
