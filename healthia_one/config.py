@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     agentic_events_enabled: bool = False
     event_dispatch_backend: str = "local"
     pubsub_topic: str = "healthia-agentic-events"
+    pubsub_push_service_account: str = ""
     cloud_region: str = "us-central1"
     max_upload_bytes: int = 5 * 1024 * 1024
     llm_timeout_seconds: int = 18
