@@ -14,8 +14,8 @@ def test_clinical_council_frontend_is_loaded() -> None:
     assert "[ENTREVISTA_CLINICA]" in script
     assert "clinical-question-block" in script
     assert "Áreas disponibles" in script
-    assert "Se activan según la consulta" in script
-    assert "Coordinación clínica" in script
+    assert "Solo se activan cuando la consulta las necesita" in script
+    assert "Contexto usado" in script
     assert "requestSubmit" in script
     assert "data-question-prompt" in script
     assert "question_prompt: fieldset.dataset.questionPrompt" in script
@@ -31,14 +31,16 @@ def test_question_blocks_keep_compact_readable_typography() -> None:
     assert ".clinical-detail" in styles
 
 
-def test_chat_feedback_is_immediate_and_has_fallback_message() -> None:
+def test_chat_feedback_is_immediate_and_never_fakes_ai_fallback() -> None:
     script = (ROOT / "web/clinical-council.js").read_text(encoding="utf-8")
-    assert "Analizando intención y coordinando la junta clínica" in script
-    assert "HealthIA activará la respuesta segura de respaldo" in script
+    assert "Entendiendo lo que dijiste y revisando qué falta preguntar" in script
+    assert "Google AI está tardando" in script
+    assert "en lugar de sustituirlas por un formulario genérico" in script
     assert "addPending();" in script
     assert "setTimeout(addPending, 0)" not in script
-    assert "Gemini · preguntas adaptativas" in script
-    assert "Modo seguro · respaldo" in script
+    assert "Preguntas creadas para este caso · Gemini + ADK" in script
+    assert "No voy a mostrarte preguntas precargadas" in script
+    assert "HealthIA activará la respuesta segura de respaldo" not in script
 
 
 def test_first_chat_submit_exits_entry_mode_before_pending_feedback() -> None:
