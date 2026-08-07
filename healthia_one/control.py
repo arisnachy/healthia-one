@@ -74,6 +74,7 @@ def audit(
     details: dict | None = None,
 ) -> AuditEvent:
     event = AuditEvent(
+        patient_id=state.profile.id,
         actor=actor,
         action=action,
         resource_type=resource_type,
