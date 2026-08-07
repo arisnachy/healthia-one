@@ -255,9 +255,7 @@ class HealthIAService:
             state = seed_state()
             patient_id = current_patient_id()
             if patient_id != "patient_demo":
-                principal = None
-                # Authenticated users must never be reset to the synthetic demo
-                # identity; preserve their namespace and basic profile identity.
+                # Authenticated users must never switch to the synthetic demo identity.
                 existing = await self.store.load()
                 state.profile = existing.profile
                 for collection in (
@@ -468,7 +466,7 @@ class HealthIAService:
             return []
         async with self._mutation_lock:
             state = await self.store.load()
-            findings = evaluate_state(state, self.settings)
+            findings = evaluate_state(state)
             created: list[ChatMessage] = []
             for finding in findings:
                 if not finding_allowed(state, finding):
