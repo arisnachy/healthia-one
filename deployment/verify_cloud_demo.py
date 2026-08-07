@@ -3,12 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import struct
 import sys
 import urllib.error
 import urllib.request
 import uuid
-import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +53,16 @@ def _json(config: CloudProofConfig, method: str, path: str, body: bytes | None =
     if not isinstance(payload, dict):
         raise CloudProofError(f"{method} {path} returned non-object JSON")
     return payload
+
+
+def _post_json(config: CloudProofConfig, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return _json(
+        config,
+        "POST",
+        path,
+        json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        "application/json",
+    )
 
 
 def _multipart_file(field: str, filename: str, mime_type: str, content: bytes) -> tuple[bytes, str]:
@@ -113,8 +121,17 @@ def verify_firestore_and_gcs(config: CloudProofConfig, result_id: str, document_
     state = snapshot.to_dict() or {}
     result = next((item for item in state.get("results", []) if item.get("id") == result_id), None)
     document = next((item for item in state.get("documents", []) if item.get("id") == document_id), None)
+    adk_audit = next(
+        (
+            item for item in reversed(state.get("audit_events", []))
+            if item.get("actor") == "google_adk" and item.get("action") == "execute_demand_driven_clinical_plan"
+        ),
+        None,
+    )
     if result is None or document is None:
         raise CloudProofError("Firestore does not contain the uploaded result/document IDs")
+    if adk_audit is None:
+        raise CloudProofError("Firestore does not contain Google ADK execution audit evidence")
     storage_path = str(document.get("storage_path") or "")
     expected_prefix = f"gs://{config.bucket_name}/"
     if not storage_path.startswith(expected_prefix):
@@ -127,6 +144,8 @@ def verify_firestore_and_gcs(config: CloudProofConfig, result_id: str, document_
     return {
         "firestore_document": snapshot.reference.path,
         "firestore_update_time": snapshot.update_time.isoformat() if snapshot.update_time else None,
+        "adk_audit_resource_id": adk_audit.get("resource_id"),
+        "adk_executed_roles": (adk_audit.get("details") or {}).get("executed_roles", []),
         "gcs_uri": storage_path,
         "gcs_generation": str(blob.generation or ""),
         "gcs_size": int(blob.size or 0),
@@ -159,6 +178,48 @@ def run(config: CloudProofConfig) -> dict[str, Any]:
     if not (ai_probe.get("ok") and ai_probe.get("status") == "ready" and ai_probe.get("live_request")):
         raise CloudProofError(f"Real Gemini probe failed: {ai_probe}")
 
+    clinical = _post_json(
+        config,
+        "/api/chat",
+        {"message": "Desde ayer tengo fiebre, dolor de garganta y náuseas; quiero hacer una consulta."},
+    )
+    clinical_message = clinical.get("message") or {}
+    clinical_metadata = clinical_message.get("metadata") or {}
+    interview = clinical_metadata.get("clinical_interview") or {}
+    if clinical_metadata.get("llm_status") != "dynamic_clinical_questions":
+        raise CloudProofError(f"Clinical runtime did not produce dynamic Gemini questions: {clinical_metadata}")
+    if interview.get("question_source") != "gemini_dynamic":
+        raise CloudProofError(f"Clinical question block is not Gemini dynamic: {interview}")
+    questions = (interview.get("question_block") or {}).get("questions") or []
+    if len(questions) != 5:
+        raise CloudProofError(f"Clinical runtime did not produce exactly five adaptive questions: {questions}")
+
+    audit_payload = _json(config, "GET", "/api/audit?limit=100")
+    adk_events = [
+        item for item in audit_payload.get("events", [])
+        if item.get("actor") == "google_adk" and item.get("action") == "execute_demand_driven_clinical_plan"
+    ]
+    if not adk_events:
+        raise CloudProofError("Visible clinical request has no Google ADK execution audit")
+    latest_adk = adk_events[0]
+    executed_roles = (latest_adk.get("details") or {}).get("executed_roles") or []
+    if "interview" not in executed_roles or "safety" not in executed_roles or len(executed_roles) > 4:
+        raise CloudProofError(f"Google ADK tool trajectory violated the minimum-tool contract: {executed_roles}")
+
+    pairing = _json(config, "POST", "/api/devices/pairing", body=b"")
+    code = str(pairing.get("code") or "")
+    if not code:
+        raise CloudProofError("Device pairing did not return a code")
+    claim = _post_json(
+        config,
+        "/api/devices/pairing/claim",
+        {"code": code, "device_id": "cloud-proof-phone", "display_name": "Synthetic Cloud Proof Phone"},
+    )
+    if claim.get("credential_persistence") != "restart_safe":
+        raise CloudProofError(f"Device credential is not restart-safe in Cloud: {claim}")
+    if claim.get("patient_id") != "patient_demo" or not claim.get("connection_id") or not claim.get("access_token"):
+        raise CloudProofError(f"Device credential did not bind patient/connection identity: {claim}")
+
     pdf = _minimal_pdf()
     multipart, content_type = _multipart_file("file", "synthetic_lab_cloud_proof.pdf", "application/pdf", pdf)
     uploaded = _json(config, "POST", "/api/results/upload", multipart, content_type)
@@ -187,6 +248,10 @@ def run(config: CloudProofConfig) -> dict[str, Any]:
         "project_id": config.project_id,
         "model": ai_probe.get("model"),
         "gemini_request_number": ai_probe.get("request_number"),
+        "adk_session_id": latest_adk.get("resource_id"),
+        "adk_executed_roles": executed_roles,
+        "device_connection_id": claim.get("connection_id"),
+        "device_credential_persistence": claim.get("credential_persistence"),
         "multimodal_result_id": result_id,
         "document_id": document_id,
         "download_content_type": headers.get("Content-Type", ""),
@@ -197,6 +262,9 @@ def run(config: CloudProofConfig) -> dict[str, Any]:
             "firestore_active_store",
             "gcs_original_evidence",
             "live_gemini_interactions_call",
+            "google_adk_runner_tool_trajectory",
+            "five_dynamic_clinical_questions",
+            "restart_safe_device_identity",
             "gemini_multimodal_pdf_extraction",
             "clinical_twin_provenance",
             "original_evidence_roundtrip",
