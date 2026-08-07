@@ -1,0 +1,56 @@
+name: One-shot candidate browser maintenance
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-candidate-and-clean-self:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          ref: kira/event-driven-results-twin-p1
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Apply browser identity fix and clean feature one-shots
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('web/app.js')
+          s = p.read_text(encoding='utf-8')
+          old = '  patientName: $("#patientName"),'
+          new = '  patientName: $("#patientName") || $("#heroPatientName"),'
+          if old in s:
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          elif new not in s:
+              raise SystemExit('patient name selector contract missing')
+          PY
+          rm -f .github/workflows/one-shot-browser-dom-fix.yml .github/workflows/one-shot-browser-e2e-upgrade.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/app.js .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: finalize browser patient identity contract"
+            git push origin HEAD:kira/event-driven-results-twin-p1
+          fi
+
+      - name: Remove this one-shot from main
+        shell: bash
+        run: |
+          git fetch origin main
+          git switch --force-create main origin/main
+          if [ -f .github/workflows/one-shot-candidate-maintenance.yml ]; then
+            git rm .github/workflows/one-shot-candidate-maintenance.yml
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "ci: remove completed candidate maintenance workflow"
+            git push origin main
+          fi
