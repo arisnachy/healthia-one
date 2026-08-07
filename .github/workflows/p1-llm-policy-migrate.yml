@@ -1,0 +1,40 @@
+name: P1 LLM demand policy migration
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.head_ref == 'kira/omega-100-agentic-runtime'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/omega-100-agentic-runtime
+          fetch-depth: 1
+      - name: Apply demand-only chat model policy and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('healthia_one/service.py')
+          text=path.read_text(encoding='utf-8')
+          if 'from healthia_one.llm_policy import should_use_patient_chat_model' not in text:
+              needle='from healthia_one.gemini import GeminiResponder\n'
+              if needle not in text: raise SystemExit('Gemini import marker missing')
+              text=text.replace(needle, needle+'from healthia_one.llm_policy import should_use_patient_chat_model\n',1)
+          old='''            controlled_response = maybe_control_response(state, content)\n            response = controlled_response or respond(state, content)\n            if controlled_response is None:\n                response = await self.gemini.enhance(state, content, response)'''
+          new='''            controlled_response = maybe_control_response(state, content)\n            response = controlled_response or respond(state, content)\n            if controlled_response is None and should_use_patient_chat_model(content, response):\n                response = await self.gemini.enhance(state, content, response)\n            elif controlled_response is None:\n                response.message.metadata.update({\n                    "llm_status": "not_needed",\n                    "agent_execution": "on_demand",\n                    "model_call_saved": True,\n                })'''
+          if old not in text: raise SystemExit('chat enhancement block missing')
+          path.write_text(text.replace(old,new,1),encoding='utf-8')
+          PY
+          rm .github/workflows/p1-llm-policy-migrate.yml
+          git config user.name "KIRA FORJA verification"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "perf: call Gemini only when chat understanding adds value"
+          git push origin HEAD:kira/omega-100-agentic-runtime
