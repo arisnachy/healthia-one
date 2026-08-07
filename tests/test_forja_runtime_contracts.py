@@ -9,7 +9,7 @@ def test_google_sdk_matches_interactions_api() -> None:
     gemini = (ROOT / "healthia_one/gemini.py").read_text(encoding="utf-8")
     assert '"google-genai>=2.13,<3"' in pyproject
     assert '"google-adk[gcp]>=2.5,<3"' in pyproject
-    assert "client.interactions.create" in gemini
+    assert gemini.count(".interactions.create(") >= 2
     assert "def _interaction_text" in gemini
     assert 'genai.Client(api_key=api_key)' in gemini
     assert "cost_guard.authorize" in gemini
@@ -28,7 +28,9 @@ def test_secure_launcher_defaults_to_zero_spend_and_requires_explicit_ai() -> No
     assert "LOCAL SEGURO - cero llamadas" in launcher
     assert '$env:HEALTHIA_COST_GUARD_START_ENABLED' in launcher
     assert 'Join-Path $PSScriptRoot "verify_google_ai.py"' in launcher
-    assert "& $venvPython $probeScript" in launcher
+    assert "if ($LiveProbe)" in launcher
+    assert "$probeOutput = & $venvPython $probeScript" in launcher
+    assert "La prueba consumio 1" in launcher
     assert "-c $probe" not in launcher
     assert "$env:PYTHONUTF8 = \"1\"" in launcher
     assert "Get-NetIPAddress" in launcher

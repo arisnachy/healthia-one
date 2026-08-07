@@ -26,8 +26,22 @@ if (!window.__HEALTHIA_ICONS__) {
     const icon=(name,cls='v6-icon')=>`<span class="${cls}" aria-hidden="true"><svg viewBox="0 0 24 24">${paths[name]||paths.sparkle}</svg></span>`;
     const navMap={"HealthIA Chat":"chat","Hoy":"calendar","Mediciones":"activity","Resultados":"chart","Perfil del paciente":"user","Dispositivos":"device","Mi expediente":"folder","Genograma familiar":"family","Documentos":"file","Línea de salud":"heart","Tratamiento":"pill","Citas y consulta":"appointment","Permisos y privacidad":"shield","Misiones de salud":"target"};
     function decorate(){
-      const primary=$('.primary-action > span'); if(primary) primary.innerHTML=icon('plus');
-      $$('.main-nav button').forEach(button=>{const label=$('b',button)?.textContent?.trim(); const holder=button.firstElementChild; if(!label||!holder)return; holder.className='nav-icon'; holder.innerHTML=`<svg viewBox="0 0 24 24">${paths[navMap[label]||'sparkle']}</svg>`; button.title=label;});
+      const primary=$('.primary-action > span');
+      if(primary){
+        primary.innerHTML=icon('plus');
+        const button=primary.closest('button');
+        if(button){ button.title='Nueva consulta'; button.setAttribute('aria-label','Nueva consulta'); }
+      }
+      $$('.main-nav button').forEach(button=>{
+        const label=$('b',button)?.textContent?.trim();
+        const holder=button.firstElementChild;
+        if(!label||!holder)return;
+        holder.className='nav-icon';
+        holder.innerHTML=`<svg viewBox="0 0 24 24">${paths[navMap[label]||'sparkle']}</svg>`;
+        button.title=label;
+        button.dataset.tooltip=label;
+        button.setAttribute('aria-label',label);
+      });
       const orb=$('.health-orb'); if(orb) orb.innerHTML=icon('sparkle');
       const attach=$('.attach-button'); if(attach) attach.innerHTML=icon('plus');
       const voice=$('#voiceButton'); if(voice) voice.innerHTML=icon('mic');

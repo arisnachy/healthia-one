@@ -9,9 +9,10 @@ def test_readme_matches_current_patient_os():
         "Pathological genogram",
         "Patient document operating system",
         "Treatment and consultation continuity",
-        "Patient control and audit",
+        "Patient control, audit and spending safety",
         "scripts/smoke_test.py",
         "deployment\\run-local-secure.ps1",
+        "Local · 0 llamadas",
     ]:
         assert marker in readme
 
@@ -21,7 +22,10 @@ def test_release_evidence_files_exist():
         "docs/ARCHITECTURE.md",
         "docs/DEMO_SCRIPT.md",
         "docs/SECURITY_AND_SAFETY_MATRIX.md",
+        "docs/COST_CONTROL.md",
         "deployment/run-local-secure.ps1",
+        "deployment/deploy-cloud-demo.ps1",
+        "deployment/remove-cloud-demo.ps1",
         "scripts/smoke_test.py",
     ]
     for relative in required:
