@@ -7,6 +7,7 @@ os.environ["HEALTHIA_COST_MODE"] = "local"
 os.environ["HEALTHIA_AI_REQUEST_LIMIT"] = "0"
 os.environ["HEALTHIA_COST_GUARD_START_ENABLED"] = "false"
 os.environ["HEALTHIA_PROACTIVE_ENABLED"] = "false"
+os.environ["HEALTHIA_BLOB_BACKEND"] = "local"
 
 from fastapi.testclient import TestClient
 from app.main import app
@@ -32,6 +33,8 @@ def test_proactive_tick_is_manual_and_idempotent_for_same_rule_keys():
     with TestClient(app) as client:
         readiness = client.get("/api/readiness").json()
         assert readiness["proactive_enabled"] is False
+        assert readiness["result_storage"]["backend"] == "local"
+        assert readiness["result_storage"]["durable_ready"] is True
         first = client.post("/api/demo/tick").json()["created"]
         second = client.post("/api/demo/tick").json()["created"]
         assert first >= 1
@@ -48,10 +51,13 @@ def test_uploaded_multimodal_original_is_preserved_for_authenticated_retrieval()
         assert response.status_code == 200
         result = response.json()
         assert result["status"] == "pending_multimodal"
+        assert result["original_mime_type"] == "image/png"
+        assert result["original_storage_uri"].startswith("local://uploads/results/patient_demo/")
         assert "no se consume una llamada" in result["explanation"]
         original = client.get(f"/api/results/{result['id']}/file")
         assert original.status_code == 200
         assert original.content == payload
+        assert original.headers["cache-control"] == "private, no-store"
 
 
 def test_cost_control_defaults_to_local_zero_spend_and_cannot_be_enabled():
