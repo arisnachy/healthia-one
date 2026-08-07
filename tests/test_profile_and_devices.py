@@ -13,11 +13,22 @@ from healthia_one.profile import calculate_bmi, normalize_medication_text, pregn
 
 def test_bmi_and_adult_nutritional_status() -> None:
     state = PatientState()
+    state.profile.birth_date = date(1982, 2, 20)
     state.profile.height_cm = 165
     state.weights = [WeightRecord(weight_kg=80.0)]
     summary = profile_summary(state)
     assert summary["vitals"]["bmi"] == calculate_bmi(80.0, 165)
     assert summary["vitals"]["nutritional_status"] in {"Preobesidad", "Obesidad clase I"}
+
+
+def test_profile_without_birth_date_does_not_invent_age_or_adult_classification() -> None:
+    state = PatientState()
+    state.profile.height_cm = 165
+    state.weights = [WeightRecord(weight_kg=80.0)]
+    summary = profile_summary(state)
+    assert summary["age_years"] is None
+    assert summary["vitals"]["bmi"] == calculate_bmi(80.0, 165)
+    assert summary["vitals"]["nutritional_status"] == "Requiere edad para clasificar"
 
 
 def test_pregnancy_and_postpartum_calculations_are_contextual() -> None:
@@ -85,5 +96,13 @@ def test_health_connect_batch_is_idempotent_and_updates_longitudinal_state() -> 
     assert second["duplicates"] == 3
     assert state.activity[-1].steps == 4321
     assert state.vitals[-1].systolic == 132
+    assert state.vitals[-1].diastolic == 84
     assert state.profile.height_cm == 166
-    assert device_summary(state)["record_count"] == 3
+
+
+def test_device_summary_requires_real_pairing_for_live_claim() -> None:
+    state = PatientState()
+    summary = device_summary(state)
+    assert summary["provider"] == "Android Health Connect"
+    assert summary["connected"] is False
+    assert summary["records_received"] == 0
