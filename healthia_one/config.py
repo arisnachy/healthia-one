@@ -8,7 +8,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="HEALTHIA_", env_file=".env", extra="ignore")
 
     env: str = "local"
-    model: str = "gemini-3.6-flash"
+    # Hackathon final model: Gemini 3.5 Flash or newer is required.
+    model: str = "gemini-3.5-flash"
     llm_backend: str = "mock"
     store_backend: str = "json"
     data_path: Path = Path(".healthia-one/state.json")
