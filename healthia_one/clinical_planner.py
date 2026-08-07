@@ -184,7 +184,7 @@ def select_on_demand_agents(
         for role_id in ("results", "documents"):
             if role_id not in candidates:
                 candidates.append(role_id)
-    elif any(token in context for token in ("documento", "pdf", "informe", "receta", "archivo")) and "documents" not in candidates:
+    elif any(token in context for token in ("documento", "pdf", "informe", "archivo", "receta medica")) and "documents" not in candidates:
         candidates.append("documents")
 
     if any(token in context for token in ("madre", "padre", "familia", "heredit", "abuelo", "abuela")) and "family" not in candidates:
