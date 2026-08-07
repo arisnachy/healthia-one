@@ -12,8 +12,10 @@ class Settings(BaseSettings):
     llm_backend: str = "mock"
     store_backend: str = "json"
     data_path: Path = Path(".healthia-one/state.json")
+    # Event-driven by default: the twin persists, workers wake only for an explicit
+    # patient action or an authorized external event. A periodic loop is opt-in.
     proactive_interval_seconds: int = 20
-    proactive_enabled: bool = True
+    proactive_enabled: bool = False
     mission_runtime: str = "deterministic"
     agentic_events_enabled: bool = False
     event_dispatch_backend: str = "local"
