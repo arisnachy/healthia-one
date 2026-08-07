@@ -295,6 +295,23 @@ def normalize_dynamic_question_block(raw: dict[str, Any], stage: int) -> dict[st
     }
 
 
+def _verified_adk_safety(model_payload: dict[str, Any]) -> bool:
+    execution = model_payload.get("adk_execution")
+    if not isinstance(execution, dict):
+        return False
+    roles = execution.get("executed_roles") or []
+    outputs = execution.get("tool_outputs") or []
+    if "safety" not in roles:
+        return False
+    return any(
+        isinstance(item, dict)
+        and item.get("role") == "safety"
+        and item.get("status") == "completed"
+        and isinstance(item.get("result"), dict)
+        for item in outputs
+    )
+
+
 def judge_dynamic_plan(
     block: dict[str, Any],
     *,
@@ -303,7 +320,7 @@ def judge_dynamic_plan(
     agent_plan: list[AgentStep],
     model_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Evidence-based, token-free gate applied after the single Gemini call."""
+    """Evidence-based, token-free gate applied after the Gemini/ADK plan."""
 
     score = 100
     blockers: list[str] = []
@@ -322,11 +339,14 @@ def judge_dynamic_plan(
             + [str(option) for item in questions for option in item.get("options", [])]
         )
     )
-    if not any(term in combined for term in SAFETY_TERMS):
+    adk_safety_verified = _verified_adk_safety(model_payload)
+    if adk_safety_verified:
+        strengths.append("Seguridad clínica verificada por herramienta ADK ejecutada")
+    elif not any(term in combined for term in SAFETY_TERMS):
         blockers.append("No demuestra una comprobación explícita de seguridad")
         score -= 25
     else:
-        strengths.append("Incluye comprobación de señales de alarma")
+        strengths.append("Incluye comprobación textual de señales de alarma")
 
     previous_ids = {
         str(item.get("question_id", "")).strip()
@@ -367,10 +387,11 @@ def judge_dynamic_plan(
         "verdict": "APPROVED_DYNAMIC_PLAN" if approved else "REJECTED_USE_SAFE_FALLBACK",
         "strengths": strengths[:4],
         "blockers": blockers[:4],
+        "adk_safety_verified": adk_safety_verified,
         "hackathon_alignment": {
             "innovation_operational_utility": "adaptive questions that pursue the next best information",
-            "architectural_discipline": "one model call plus demand-selected deterministic tools and a no-token judge gate",
-            "demo_readiness": "question source, selected areas, tool outcomes and judge verdict are auditable",
+            "architectural_discipline": "Gemini plus demand-driven ADK tool execution and a no-token judge gate",
+            "demo_readiness": "question source, executed tools and judge verdict are auditable",
         },
         "chief_complaint_present": bool(str(chief_complaint).strip()),
     }
