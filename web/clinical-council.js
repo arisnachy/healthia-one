@@ -57,7 +57,8 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       if (!section || section.dataset.clinicalCouncil === "true") return;
       section.dataset.clinicalCouncil = "true";
       section.innerHTML = `
-        <p>Junta de salud</p>
+        <p>Áreas disponibles</p>
+        <small class="council-availability-note">Se activan según la consulta</small>
         ${sidebarCouncil.map(([code, label, detail]) => `
           <div class="agent-mini" title="${esc(label)}">
             <span>${esc(code)}</span><div><strong>${esc(label)}</strong><small>${esc(detail)}</small></div>
@@ -102,7 +103,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       const details = document.createElement("details");
       details.className = "council-summary";
       details.innerHTML = `
-        <summary>Junta de salud · ${message.agent_plan.length} áreas coordinadas</summary>
+        <summary>Coordinación clínica · ${message.agent_plan.length} áreas activadas</summary>
         ${message.agent_plan.map(step => `
           <div class="council-member">
             <strong>${esc(publicAreaLabel(step))}</strong>
@@ -144,6 +145,16 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
         </div>
         <p class="clinical-form-error" hidden></p>
         <div class="clinical-submit-row"><button class="clinical-submit" type="submit">${esc(block.submit_label || "Continuar")}</button></div>`;
+
+      const source = interview.question_source || message.metadata?.question_source || "safe_fallback";
+      const judgeScore = Number(interview.judge_review?.score ?? message.metadata?.judge_review?.score ?? 0);
+      const sourceLabel = source === "gemini_dynamic" ? "Gemini · preguntas adaptativas" : "Modo seguro · respaldo";
+      form.dataset.questionSource = source;
+      const sourceBadge = document.createElement("span");
+      sourceBadge.className = `clinical-source ${source === "gemini_dynamic" ? "is-dynamic" : "is-fallback"}`;
+      sourceBadge.textContent = sourceLabel;
+      if (judgeScore) sourceBadge.title = `Validación de calidad: ${judgeScore}/100`;
+      $("header", form)?.append(sourceBadge);
 
       form.addEventListener("submit", event => {
         event.preventDefault();
@@ -222,7 +233,10 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       form.dataset.clinicalFeedbackBound = "true";
       form.addEventListener("submit", () => {
         if (!input.value.trim()) return;
-        setTimeout(addPending, 0);
+        const chatScroll = $("#chatScroll");
+        chatScroll?.classList.remove("entry-mode");
+        chatScroll?.classList.add("conversation-started");
+        addPending();
       }, true);
 
       const list = $("#messageList");
