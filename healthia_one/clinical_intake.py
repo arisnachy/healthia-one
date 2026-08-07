@@ -225,7 +225,7 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
             message = ChatMessage(
                 role="assistant",
                 author="HealthIA",
-                content="Gracias. Ya organicé el inicio, los síntomas, la intensidad, las señales de alarma y los medicamentos. Ahora completo el contexto antes de reunir la junta clínica.",
+                content="Gracias. Ya organicé la primera parte. Ahora haré preguntas nuevas sobre lo que todavía falta aclarar y activaré únicamente las áreas clínicas necesarias.",
                 mission_id=mission.id if mission else None,
                 agent_plan=_plan(),
                 metadata={
@@ -233,6 +233,7 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
                     "clinical_interview": {
                         "id": active["id"],
                         "mission_id": active.get("mission_id"),
+                        "chief_complaint": active.get("chief_complaint", "Consulta de salud"),
                         "domain": domain,
                         "stage": 2,
                         "status": "awaiting_answers",
@@ -264,7 +265,7 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
             + "\n".join(lines)
             + "\n\n"
             f"**Dirección de seguridad:** {urgency}\n\n"
-            "La entrevista, el expediente longitudinal, los medicamentos, las alergias, los documentos y el seguimiento fueron organizados como una sola misión. HealthIA puede preparar posibles explicaciones y preguntas para el profesional, pero no confirma un diagnóstico ni modifica tratamiento."
+            "Las áreas clínicas necesarias fueron coordinadas como una sola misión según lo que contaste y los datos autorizados. HealthIA puede preparar posibles explicaciones y preguntas para el profesional, pero no confirma un diagnóstico ni modifica tratamiento."
         )
         message = ChatMessage(
             role="assistant",
@@ -278,6 +279,7 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
                 "clinical_interview": {
                     "id": active["id"],
                     "mission_id": active.get("mission_id"),
+                    "chief_complaint": active.get("chief_complaint", "Consulta de salud"),
                     "domain": domain,
                     "stage": 2,
                     "status": "completed",
@@ -308,8 +310,8 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
         role="assistant",
         author="HealthIA",
         content=(
-            "Entendí que quieres iniciar una **consulta por síntomas**. Primero haré una entrevista breve en bloques de cinco preguntas. "
-            "La junta interna combinará entrevista, seguridad, expediente, medicamentos, documentos y seguimiento para darte la dirección más segura."
+            "Entendí que quieres iniciar una **consulta por síntomas**. Haré una entrevista adaptativa en bloques de cinco preguntas "
+            "y activaré únicamente las áreas clínicas necesarias para orientar el siguiente paso de forma segura."
         ),
         mission_id=mission.id,
         agent_plan=plan,
