@@ -45,23 +45,98 @@
 .patient-chip { display: none !important; }
 .user-pill { margin-top: auto; }
 
-/* ChatGPT-style collapsed rail: navigation remains available as icons. */
-.left-collapsed .left-rail { align-items: center; gap: 10px; padding: 14px 8px; }
-.left-collapsed .brand-row { width: 100%; grid-template-columns: 42px; justify-items: center; padding: 0 0 6px; }
-.left-collapsed .brand-mark { width: 42px; height: 42px; }
-.left-collapsed .primary-action,
-.left-collapsed .main-nav button { width: 44px; min-width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border-radius: 12px; }
-.left-collapsed .left-rail-scroll { width: 100%; overflow: visible; }
-.left-collapsed .main-nav { width: 100%; justify-items: center; gap: 6px; }
-.left-collapsed .main-nav .nav-icon,
-.left-collapsed .primary-action .nav-icon { width: 21px; height: 21px; display: grid; place-items: center; }
-.left-collapsed .main-nav svg,
-.left-collapsed .primary-action svg { width: 20px; height: 20px; }
-.left-collapsed .user-pill { width: 44px; min-width: 44px; height: 44px; margin-top: auto; padding: 5px; border-radius: 14px; justify-content: center; }
-.left-collapsed .user-pill > div:last-child { display: none; }
-.left-collapsed .user-pill .patient-avatar { width: 34px; height: 34px; }
-.left-collapsed .rail-reopen::after { content: none; }
-.left-collapsed .rail-reopen { width: 34px; padding: 0; }
+/* ChatGPT-style collapsed rail: every primary destination remains visible. */
+@media (min-width: 761px) {
+  .left-collapsed .left-rail {
+    align-items: center;
+    gap: 10px;
+    padding: 14px 8px;
+    overflow: visible;
+  }
+  .left-collapsed .brand-row {
+    width: 100%;
+    grid-template-columns: 42px;
+    justify-items: center;
+    padding: 0 0 6px;
+  }
+  .left-collapsed .brand-mark { width: 42px; height: 42px; }
+  .left-collapsed .primary-action,
+  .left-collapsed .main-nav button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    place-items: center;
+    padding: 0;
+    border-radius: 12px;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  .left-collapsed .left-rail-scroll {
+    display: flex !important;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    min-height: 0;
+    overflow: visible !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  .left-collapsed .main-nav {
+    display: grid !important;
+    width: 100%;
+    justify-items: center;
+    gap: 6px;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  .left-collapsed .main-nav .nav-icon,
+  .left-collapsed .primary-action .nav-icon {
+    width: 21px;
+    height: 21px;
+    display: grid !important;
+    place-items: center;
+    color: currentColor;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  .left-collapsed .main-nav svg,
+  .left-collapsed .primary-action svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .left-collapsed .main-nav button.is-active {
+    color: var(--slate-dark);
+    background: var(--slate-soft);
+    box-shadow: inset 3px 0 0 var(--slate);
+  }
+  .left-collapsed .main-nav button:hover,
+  .left-collapsed .primary-action:hover {
+    background: #eef3f8;
+  }
+  .left-collapsed .rail-section { display: none !important; }
+  .left-collapsed .user-pill {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    margin-top: auto;
+    padding: 5px;
+    border-radius: 14px;
+    justify-content: center;
+  }
+  .left-collapsed .user-pill > div:last-child { display: none; }
+  .left-collapsed .user-pill .patient-avatar { width: 34px; height: 34px; }
+  .left-collapsed .rail-reopen::after { content: none; }
+  .left-collapsed .rail-reopen { width: 34px; padding: 0; }
+}
 
 @media (max-width: 760px) {
   .clinical-question-block { padding: 11px; }
