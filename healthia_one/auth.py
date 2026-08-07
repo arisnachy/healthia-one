@@ -31,6 +31,7 @@ class PatientPrincipal:
 
 
 _current_principal: ContextVar[PatientPrincipal | None] = ContextVar("healthia_principal", default=None)
+_current_patient_override: ContextVar[str | None] = ContextVar("healthia_patient_override", default=None)
 
 
 def current_principal() -> PatientPrincipal | None:
@@ -38,6 +39,9 @@ def current_principal() -> PatientPrincipal | None:
 
 
 def current_patient_id() -> str:
+    override = _current_patient_override.get()
+    if override:
+        return override
     principal = current_principal()
     return principal.patient_id if principal else "patient_demo"
 
@@ -57,6 +61,18 @@ def principal_scope(principal: PatientPrincipal | None) -> Iterator[None]:
         yield
     finally:
         reset_principal(token)
+
+
+@contextmanager
+def patient_scope(patient_id: str) -> Iterator[None]:
+    clean = str(patient_id or "").strip()
+    if not clean.startswith("patient_") and clean != "patient_demo":
+        raise AuthError("Invalid patient identity scope")
+    token = _current_patient_override.set(clean)
+    try:
+        yield
+    finally:
+        _current_patient_override.reset(token)
 
 
 def _b64encode(value: bytes) -> str:
