@@ -36,6 +36,23 @@ def test_pairing_code_is_single_use_even_for_same_device() -> None:
         raise AssertionError("A pairing code must not mint a second bearer token")
 
 
+def test_signed_device_credential_survives_restart_with_stable_secret() -> None:
+    secret = "restart-safe-device-secret-0123456789abcdef"
+    first = DevicePairingManager(token_secret=secret)
+    session = first.create(patient_id="patient-alpha")
+    claim = first.claim(session["code"], "phone-alpha", "Pixel test")
+    assert claim["credential_persistence"] == "restart_safe"
+
+    restarted = DevicePairingManager(token_secret=secret)
+    principal = restarted.authorize(claim["access_token"], "phone-alpha", "patient-alpha")
+    assert principal is not None
+    assert principal.connection_id == session["connection_id"]
+    assert restarted.authorize(claim["access_token"], "phone-alpha", "patient-beta") is None
+    assert DevicePairingManager(token_secret="different-secret-0123456789abcdef").authorize(
+        claim["access_token"], "phone-alpha", "patient-alpha"
+    ) is None
+
+
 def test_result_kind_detection_covers_requested_modalities() -> None:
     assert infer_result_kind("analitica_abril.pdf", "application/pdf") == "laboratory"
     assert infer_result_kind("TAC_torax.png", "image/png") == "ct"
