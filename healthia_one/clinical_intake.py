@@ -28,38 +28,12 @@ NON_CLINICAL_INTENTS = (
 )
 
 SYMPTOM_SIGNALS = (
-    "me duele",
-    "tengo dolor",
-    "tengo fiebre",
-    "me arde",
-    "siento",
-    "presento",
-    "paciente viene",
-    "paciente presenta",
-    "desde ayer",
-    "desde hace",
-    "empeora",
-    "vomito",
-    "vómito",
-    "nausea",
-    "náusea",
-    "mareo",
-    "tos",
-    "diarrea",
-    "sangrado",
-    "debilidad",
-    "dificultad para respirar",
-    "falta de aire",
-    "dolor de cabeza",
-    "dolor de garganta",
-    "dolor abdominal",
-    "dolor lumbar",
-    "orinar",
-    "erupcion",
-    "erupción",
-    "hinchazon",
-    "hinchazón",
-    "palpitaciones",
+    "me duele", "tengo dolor", "tengo fiebre", "me arde", "siento", "presento",
+    "paciente viene", "paciente presenta", "desde ayer", "desde hace", "empeora",
+    "vomito", "vómito", "nausea", "náusea", "mareo", "tos", "diarrea", "sangrado",
+    "debilidad", "dificultad para respirar", "falta de aire", "dolor de cabeza",
+    "dolor de garganta", "dolor abdominal", "dolor lumbar", "orinar", "erupcion",
+    "erupción", "hinchazon", "hinchazón", "palpitaciones",
 )
 
 DOMAIN_SIGNALS: dict[str, tuple[str, ...]] = {
@@ -88,13 +62,15 @@ def _normalize(value: str) -> str:
 
 
 def _plan() -> list[AgentStep]:
+    """Safe fallback only: two capabilities, never a permanent six-agent council.
+
+    Gemini may replace this with a smaller/different case-specific plan. Keeping
+    the deterministic fallback minimal prevents mock/local mode from pretending
+    that every specialist ran for every symptom.
+    """
     return [
-        AgentStep(agent="INTERVIEWER", action="Recoger motivo, evolución, gravedad y síntomas", reason="Historia de la enfermedad actual", status="completed"),
-        AgentStep(agent="SENTINEL", action="Buscar señales de alarma y nivel de atención", reason="Seguridad clínica", status="completed"),
-        AgentStep(agent="HISTORIA", action="Cruzar la entrevista con el expediente longitudinal", reason="Evitar empezar desde cero", status="completed"),
-        AgentStep(agent="MEDSAFE", action="Revisar medicamentos, alergias y riesgos", reason="Seguridad farmacológica", status="completed"),
-        AgentStep(agent="ARCHIVUM", action="Reunir notas, resultados y documentos relacionados", reason="Procedencia y continuidad", status="completed"),
-        AgentStep(agent="NAVIGATOR", action="Definir el siguiente paso y la condición de cierre", reason="Seguimiento verificable", status="completed"),
+        AgentStep(agent="INTERVIEWER", action="Aclarar únicamente los datos que faltan", reason="Entrevista clínica adaptativa", status="completed"),
+        AgentStep(agent="SENTINEL", action="Comprobar señales de alarma específicas", reason="Seguridad clínica", status="completed"),
     ]
 
 
@@ -112,10 +88,7 @@ def detect_clinical_consultation(text: str) -> tuple[bool, str]:
     if score < 1:
         return False, "general"
 
-    domain_scores = {
-        domain: sum(1 for signal in signals if _normalize(signal) in normalized)
-        for domain, signals in DOMAIN_SIGNALS.items()
-    }
+    domain_scores = {domain: sum(1 for signal in signals if _normalize(signal) in normalized) for domain, signals in DOMAIN_SIGNALS.items()}
     domain = max(domain_scores, key=domain_scores.get)
     if domain_scores[domain] == 0:
         domain = "general"
@@ -123,17 +96,15 @@ def detect_clinical_consultation(text: str) -> tuple[bool, str]:
 
 
 def _question(question_id: str, prompt: str, options: list[str], *, multiple: bool = False, detail: str = "Puedes agregar un detalle") -> dict[str, Any]:
-    return {
-        "id": question_id,
-        "prompt": prompt,
-        "options": options,
-        "multiple": multiple,
-        "allow_detail": True,
-        "detail_placeholder": detail,
-    }
+    return {"id": question_id, "prompt": prompt, "options": options, "multiple": multiple, "allow_detail": True, "detail_placeholder": detail}
 
 
 def question_block(stage: int, domain: str) -> dict[str, Any]:
+    """Deterministic safety fallback.
+
+    In guarded Gemini mode this block is replaced by one generated from the
+    actual complaint, previous answers and authorized longitudinal context.
+    """
     if stage == 1:
         questions = [
             _question("onset", "¿Cuándo comenzó y cómo ha evolucionado?", ["Hoy", "1 a 3 días", "4 a 7 días", "Más de una semana", "No estoy seguro"], detail="Describe el inicio o algún cambio importante"),
@@ -159,10 +130,10 @@ def question_block(stage: int, domain: str) -> dict[str, Any]:
         ]
     return {
         "stage": stage,
-        "title": f"Entrevista clínica · bloque {stage} de 2",
-        "instruction": "Selecciona las opciones que correspondan. Puedes ampliar cada respuesta.",
+        "title": f"Preguntas para aclarar tu consulta · bloque {stage}",
+        "instruction": "Estas preguntas cambian según lo que ya sabemos. Puedes ampliar cualquier respuesta.",
         "questions": questions,
-        "submit_label": "Continuar entrevista" if stage == 1 else "Enviar a la junta clínica",
+        "submit_label": "Continuar" if stage == 1 else "Revisar lo conversado",
     }
 
 
@@ -223,27 +194,25 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
         mission = next((item for item in state.missions if item.id == active.get("mission_id")), None)
         if stage == 1:
             block = question_block(2, domain)
+            if mission:
+                mission.next_action = "Aclarar únicamente lo que aún falta para orientar el siguiente paso"
             message = ChatMessage(
                 role="assistant",
                 author="HealthIA",
-                content="Gracias. Ya organicé la primera parte. Ahora haré preguntas nuevas sobre lo que todavía falta aclarar y activaré únicamente las áreas clínicas necesarias.",
+                content="Gracias. Con eso ya tengo una parte importante. Voy a preguntarte solo lo que todavía falta aclarar.",
                 mission_id=mission.id if mission else None,
                 agent_plan=_plan(),
                 metadata={
                     "intent": "clinical_consultation",
                     "clinical_interview": {
-                        "id": active["id"],
-                        "mission_id": active.get("mission_id"),
+                        "id": active["id"], "mission_id": active.get("mission_id"),
                         "chief_complaint": active.get("chief_complaint", "Consulta de salud"),
-                        "domain": domain,
-                        "stage": 2,
-                        "status": "awaiting_answers",
-                        "previous_answers": answer.get("answers", []),
-                        "question_block": block,
+                        "domain": domain, "stage": 2, "status": "awaiting_answers",
+                        "previous_answers": answer.get("answers", []), "question_block": block,
                     },
                 },
             )
-            return ChatResponse(message=message)
+            return ChatResponse(message=message, mission=mission)
 
         previous = active.get("previous_answers", [])
         all_payload = {"answers": [*previous, *answer.get("answers", [])]}
@@ -254,43 +223,32 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
             mission.status = MissionStatus.WAITING_PROFESSIONAL
             mission.risk_level = risk
             mission.next_action = "Revisar la síntesis clínica y confirmar el nivel de atención con un profesional"
-            mission.closure_evidence = ["interview_two_blocks_completed"]
+            mission.closure_evidence = ["adaptive_interview_completed"]
         urgency = (
             "Aparece al menos una señal que requiere valoración humana prioritaria. No esperes una conclusión del chat si el síntoma está activo o empeora."
-            if alarm
-            else "No se seleccionó una señal de alarma mayor en el formulario, pero eso no descarta un problema importante."
+            if alarm else "No apareció una señal de alarma mayor en tus respuestas, aunque eso no descarta un problema importante."
         )
         content = (
-            "### Síntesis para la junta clínica\n\n"
+            "### Lo que entendí de tu consulta\n\n"
             f"**Motivo inicial:** {active.get('chief_complaint', 'Consulta de salud')}\n\n"
-            + "\n".join(lines)
-            + "\n\n"
-            f"**Dirección de seguridad:** {urgency}\n\n"
-            "Las áreas clínicas necesarias fueron coordinadas como una sola misión según lo que contaste y los datos autorizados. HealthIA puede preparar posibles explicaciones y preguntas para el profesional, pero no confirma un diagnóstico ni modifica tratamiento."
+            + "\n".join(lines) + "\n\n"
+            f"**Seguridad:** {urgency}\n\n"
+            "Con esto puedo seguir conversando contigo usando lo que ya sabemos y, si hace falta, preparar un resumen para revisión profesional. No confirmaré un diagnóstico ni modificaré tratamiento por mi cuenta."
         )
         message = ChatMessage(
-            role="assistant",
-            author="HealthIA",
-            content=content,
-            risk_level=risk,
-            mission_id=mission.id if mission else None,
-            agent_plan=_plan(),
+            role="assistant", author="HealthIA", content=content, risk_level=risk,
+            mission_id=mission.id if mission else None, agent_plan=_plan(),
             metadata={
                 "intent": "clinical_consultation",
                 "clinical_interview": {
-                    "id": active["id"],
-                    "mission_id": active.get("mission_id"),
+                    "id": active["id"], "mission_id": active.get("mission_id"),
                     "chief_complaint": active.get("chief_complaint", "Consulta de salud"),
-                    "domain": domain,
-                    "stage": 2,
-                    "status": "completed",
-                    "answers": all_payload["answers"],
+                    "domain": domain, "stage": 2, "status": "completed", "answers": all_payload["answers"],
                 },
-                "council_status": "completed",
-                "action_target": "missions",
+                "council_status": "completed", "action_target": "missions",
             },
         )
-        return ChatResponse(message=message)
+        return ChatResponse(message=message, mission=mission)
 
     is_consultation, domain = detect_clinical_consultation(patient_text)
     if not is_consultation:
@@ -299,34 +257,23 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
     interview_id = f"interview_{uuid4().hex[:12]}"
     plan = _plan()
     mission = HealthMission(
-        title="Completar entrevista clínica orientada al paciente",
+        title="Aclarar la consulta clínica del paciente",
         mission_type="clinical_interview",
         status=MissionStatus.WAITING_PATIENT,
-        next_action="Responder el primer bloque de cinco preguntas",
+        next_action="Responder las preguntas adaptadas al motivo actual",
         agent_plan=plan,
     )
     state.missions.append(mission)
     block = question_block(1, domain)
     message = ChatMessage(
-        role="assistant",
-        author="HealthIA",
-        content=(
-            "Entendí que quieres iniciar una **consulta por síntomas**. Haré una entrevista adaptativa en bloques de cinco preguntas "
-            "y activaré únicamente las áreas clínicas necesarias para orientar el siguiente paso de forma segura."
-        ),
-        mission_id=mission.id,
-        agent_plan=plan,
+        role="assistant", author="HealthIA",
+        content="Entendí el problema. Voy a preguntarte lo que más cambia la orientación y la seguridad, sin hacerte repetir datos que ya estén en tu historia.",
+        mission_id=mission.id, agent_plan=plan,
         metadata={
-            "intent": "clinical_consultation",
-            "action_target": "clinical_interview",
+            "intent": "clinical_consultation", "action_target": "clinical_interview",
             "clinical_interview": {
-                "id": interview_id,
-                "mission_id": mission.id,
-                "chief_complaint": patient_text,
-                "domain": domain,
-                "stage": 1,
-                "status": "awaiting_answers",
-                "question_block": block,
+                "id": interview_id, "mission_id": mission.id, "chief_complaint": patient_text,
+                "domain": domain, "stage": 1, "status": "awaiting_answers", "question_block": block,
             },
         },
     )
