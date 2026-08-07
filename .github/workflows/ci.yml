@@ -43,7 +43,7 @@ jobs:
           path: dist/browser-smoke
           if-no-files-found: warn
           retention-days: 30
-      - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py
+      - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py deployment/verify_cloud_demo.py
       - run: python scripts/smoke_test.py
       - name: JUDGE OMEGA evidence review
         run: python scripts/judge_omega.py
