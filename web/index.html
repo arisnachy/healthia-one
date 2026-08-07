@@ -58,7 +58,7 @@
         <button id="mobileMenu" class="icon-button mobile-only" aria-label="Abrir navegación">☰</button>
         <button id="expandLeft" class="icon-button rail-reopen" aria-label="Expandir navegación" title="Expandir navegación">☰</button>
         <div class="topbar-title"><span class="status-dot"></span><div><strong>HealthIA</strong><small id="runtimeLabel">Preparando continuidad</small></div></div>
-        <div class="topbar-actions"><span id="agentStatus" class="status-pill">Equipo en segundo plano</span><button id="runCheck" class="secondary-button">Revisión agéntica</button><button id="collapseRight" class="icon-button" aria-label="Mostrar u ocultar contexto">▥</button></div>
+        <div class="topbar-actions"><span id="agentStatus" class="status-pill">Equipo en segundo plano</span><button id="runCheck" class="secondary-button">Ejecución autónoma</button><button id="collapseRight" class="icon-button" aria-label="Mostrar u ocultar contexto">▥</button></div>
       </header>
 
       <section id="view-chat" class="view is-active">
@@ -86,7 +86,7 @@
       <section id="view-measurements" class="view"><div class="page-body"><div class="page-kicker">SEÑALES AUTORIZADAS</div><h1>Mediciones</h1><p>Registra datos con contexto; una tendencia vale más que una cifra aislada.</p><div class="measurement-actions"><button data-dialog="vital">＋ Presión y signos</button><button data-dialog="weight">＋ Peso</button><button data-dialog="activity">＋ Actividad</button></div><div id="measurementList" class="card-grid"></div></div></section>
       <section id="view-results" class="view"><div class="page-body"><div class="page-kicker">RESULTADOS CLAROS</div><h1>Resultados</h1><p>Carga un resultado para explicarlo con unidades, referencia, contexto y límites claros.</p><label class="drop-card"><input id="resultFilePage" type="file" accept=".json,.csv,.txt,.pdf,.png,.jpg,.jpeg" hidden><span>⇧</span><strong>Cargar resultado</strong><small>JSON, CSV, TXT, PDF o imagen · máximo 5 MB</small></label><div id="resultList" class="card-grid"></div></div></section>
       <section id="view-record" class="view"><div class="page-body"><div class="page-kicker">EXPEDIENTE DEL PACIENTE</div><h1>Mi historia en un solo lugar</h1><p>Datos confirmados, tratamiento registrado, alergias y señales que autorizaste.</p><div id="recordGrid" class="record-grid"></div></div></section>
-      <section id="view-missions" class="view"><div class="page-body"><div class="page-kicker">CONTINUIDAD Y SEGUIMIENTO</div><h1>Misiones de salud</h1><p>Asuntos vivos que el equipo mantiene hasta un próximo paso o cierre verificable.</p><div id="missionList" class="card-grid"></div></div></section>
+      <section id="view-missions" class="view"><div class="page-body"><div class="page-kicker">CONTINUIDAD Y SEGUIMIENTO</div><h1>Misiones de salud</h1><p>Asuntos vivos que el equipo mantiene hasta un próximo paso o cierre verificable.</p><div id="missionList" class="card-grid"></div><div class="execution-heading"><span>TRAZA OPERACIONAL</span><h2>Ejecuciones autónomas verificables</h2><p>Evento, decisión, herramienta, persistencia y cierre. No muestra razonamiento privado.</p></div><div id="missionRunList" class="execution-list"></div></div></section>
     </main>
 
     <aside id="contextPanel" class="context-panel">

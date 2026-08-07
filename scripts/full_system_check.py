@@ -243,6 +243,14 @@ def run() -> dict:
         require(second_tick["created"] == 0, "proactive check is not idempotent")
         checks["proactive_idempotency"] = "pass"
 
+        agentic = check(client.post("/api/demo/agentic-closed-loop"), "agentic closed loop")
+        require(agentic["model_calls"] == 0, "CI agentic proof must stay zero-spend")
+        require(agentic["final_trace"]["mission"]["status"] == "completed", "agentic mission did not close")
+        require(agentic["final_trace"]["artifacts"], "agentic closure artifact missing")
+        stages = {item["stage"] for item in agentic["final_trace"]["run"]["events"]}
+        require({"trigger", "tool", "persistence", "closure"}.issubset(stages), "agentic trace is incomplete")
+        checks["agentic_closed_loop"] = "pass"
+
     return {"status": "PASS", "check_count": len(checks), "checks": checks}
 
 

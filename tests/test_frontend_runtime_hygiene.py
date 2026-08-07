@@ -45,3 +45,15 @@ def test_repository_contains_no_transfer_or_temporary_workflow_artifacts() -> No
         assert payload.get("project") == "HealthIA ONE"
         assert payload.get("synthetic_demo_only") is True
         assert payload.get("source_ref")
+
+
+def test_mission_view_exposes_public_agentic_trace_without_private_reasoning() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert 'id="missionRunList"' in html
+    assert "Ejecuciones autónomas verificables" in html
+    assert "razonamiento privado" in html
+    assert "renderMissionRuns" in app
+    assert "Google ADK" in app
+    assert "Cierre verificado" in app
+    assert "private chain" not in app.lower()

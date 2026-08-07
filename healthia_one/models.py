@@ -425,6 +425,56 @@ class HealthMission(BaseModel):
     closure_evidence: list[str] = Field(default_factory=list)
 
 
+class AgenticEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("event"))
+    event_type: Literal["vital_recorded", "device_sync", "scheduled_tick", "manual_demo"]
+    patient_id: str = "patient_demo"
+    source_id: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class MissionTraceEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("trace"))
+    created_at: datetime = Field(default_factory=utc_now)
+    stage: Literal["trigger", "decision", "tool", "persistence", "closure", "error"]
+    actor: str
+    action: str
+    status: Literal["queued", "running", "completed", "blocked", "failed"] = "completed"
+    evidence_ids: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class MissionArtifact(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("artifact"))
+    patient_id: str = "patient_demo"
+    mission_id: str
+    artifact_type: str
+    title: str
+    created_at: datetime = Field(default_factory=utc_now)
+    source_evidence_ids: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    verified: bool = True
+
+
+class MissionRun(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("run"))
+    correlation_id: str = Field(default_factory=lambda: new_id("corr"))
+    patient_id: str = "patient_demo"
+    mission_id: str | None = None
+    trigger_type: str
+    runtime: Literal["google_adk", "deterministic_fallback", "deterministic_test"]
+    status: Literal["queued", "running", "completed", "blocked", "failed"] = "queued"
+    model: str = ""
+    provider_requests_reserved: int = 0
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    events: list[MissionTraceEvent] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    public_summary: str = ""
+    error: str = ""
+
+
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: new_id("msg"))
     patient_id: str = "patient_demo"
@@ -455,6 +505,8 @@ class PatientState(BaseModel):
     appointments: list[Appointment] = Field(default_factory=list)
     goals: list[HealthGoal] = Field(default_factory=list)
     missions: list[HealthMission] = Field(default_factory=list)
+    mission_runs: list[MissionRun] = Field(default_factory=list)
+    mission_artifacts: list[MissionArtifact] = Field(default_factory=list)
     messages: list[ChatMessage] = Field(default_factory=list)
     audit_events: list[AuditEvent] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)

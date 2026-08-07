@@ -9,19 +9,19 @@ The main verification workflow proves the following in a clean hosted runner:
 | Area | Evidence | Current automated gate |
 |---|---|---|
 | Python behavior | Unit and integration tests | `pytest` |
-| Whole backend | Fourteen API and state workflows | `python scripts/full_system_check.py` |
+| Whole backend | Fifteen API and state workflows, including autonomous mission closure | `python scripts/full_system_check.py` |
 | Real browser behavior | Chromium with the actual HTML, CSS and JavaScript | `python scripts/browser_smoke.py` |
 | Adaptive clinical intake | Two different five-question blocks and exactly two fake-model calls | Browser smoke + dynamic intake tests |
 | Demand-driven specialists | Only selected deterministic tools execute | Clinical tool tests |
 | Cost boundary | Local mode blocks Google calls and guarded mode counts them | Cost-guard tests |
 | Safety | Urgent text bypasses routine interview | System check + safety tests |
-| Mission closure | Interview advances to professional review with closure evidence | System check |
+| Mission closure | Clinical interview advances safely and a separate event-driven mission reaches persisted `completed` with an artifact | System check + mission runtime tests |
 | Patient data workflows | Measurements, results, documents, treatment, family, appointments and goals | System check |
 | Device protocol | Six-digit pairing, bearer token and synthetic Health Connect sync | System check |
 | Patient control | Consent, quiet hours, snooze and mute | System check |
 | Auditability | Timeline, audit trail and safe export | System check |
-| Frontend quality | One visible identity, collapsed icon rail, no hidden first response and no pending-message race | Browser smoke |
-| Windows launchers | PowerShell parse gate | CI |
+| Frontend quality | One visible identity, collapsed icon rail, no hidden first response, no pending race and judge-visible operational execution trace | Browser smoke |
+| Windows launchers | Local launcher, cloud deploy, proof capture and cleanup parse successfully | CI |
 | Release package | Manifest, expected contents and tests rerun from extracted ZIP | CI |
 | Hackathon evidence discipline | JUDGE Ω scorecard validation | CI |
 
@@ -31,14 +31,12 @@ Browser evidence is uploaded as the `HealthIA-browser-smoke` artifact. The relea
 
 The hosted browser test uses a fake Gemini transport so it can verify orchestration without spending credits. It proves the product contract, not access to the live provider.
 
-The following requires a short, controlled live test:
+Two different live checks remain deliberately separate:
 
-1. Start HealthIA with guarded Gemini and a small request ceiling.
-2. Submit one clinical complaint.
-3. Confirm `question_source=gemini_dynamic`, five adaptive questions, a JUDGE Ω approval and one consumed request.
-4. Capture the browser and the corresponding structured server log.
+1. **Adaptive chat proof:** guarded Gemini generates case-specific five-question blocks. A normal two-block interview is designed for no more than two direct Gemini requests.
+2. **Cloud agentic proof:** `deployment/capture-cloud-proof.ps1` requires three Google ADK mission runs, reserves at most six model-call slots, proves Scheduler → Pub/Sub → ADK → Firestore and closes an event-driven mission with an artifact.
 
-A normal two-block interview is designed to use no more than two Gemini requests.
+CI uses fake or deterministic runtimes and therefore never claims either check as live-provider evidence.
 
 ## Remaining hard gates before submission
 
@@ -46,14 +44,14 @@ These items must not be represented as completed until their evidence exists:
 
 | Gate | Required proof |
 |---|---|
-| Google ADK is the visible runtime | One trace showing ADK selecting the same tools used by the patient workflow |
-| Durable Google Cloud execution | Cloud Scheduler, Pub/Sub or Cloud Tasks invoking a Cloud Run worker with retry evidence |
-| Persistent cloud state | Firestore write and read connected to the same mission trace |
+| Google ADK live runtime | Repository/CI prove the bounded ADK bridge and visible trace; a real cloud capture must show `runtime=google_adk` for all proof runs |
+| Durable Google Cloud execution | Deployment code now provisions Scheduler → Pub/Sub authenticated push → Cloud Run; the real proof JSON/logs are still required |
+| Persistent cloud state | Firestore store and deployment are implemented; real proof must show the same correlation trace after separate Cloud Run/PubSub requests |
 | Real cloud model call | Correlated Cloud Run or Vertex/Gemini log with secrets hidden |
 | Physical Android integration | Health Connect permission screen, real device pairing and one authorized record |
 | Apple Health integration | Native iOS HealthKit bridge; currently not implemented |
 | Multi-user isolation | Authenticated identities and tests proving cross-patient data separation |
-| Final submission package | Final architecture diagram, approximately four-minute demo, write-up and evidence index |
+| Final submission package | Architecture and write-up drafts exist; the unedited ~4-minute video URL and real cloud evidence still must be captured |
 
 ## Required demo path
 
@@ -89,3 +87,14 @@ Browser verification after installing Chromium once:
 .\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe scripts\browser_smoke.py
 ```
+
+
+## Cloud proof commands
+
+```powershell
+.\deployment\deploy-cloud-demo.ps1 -ProjectId YOUR_PROJECT_ID -RequestLimit 6 -MaxOutputTokens 350
+.\deployment\capture-cloud-proof.ps1 -ProjectId YOUR_PROJECT_ID
+.\deployment\remove-cloud-demo.ps1 -ProjectId YOUR_PROJECT_ID
+```
+
+The proof is accepted only when `dist/cloud-proof/healthia-cloud-proof.json` is produced by a real project and passes the runtime, persistence, closure and cost assertions.

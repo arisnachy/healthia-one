@@ -14,7 +14,7 @@ const refs = {
   latestBp: $("#latestBp"), latestBpMeta: $("#latestBpMeta"), latestWeight: $("#latestWeight"),
   weightTrend: $("#weightTrend"), latestActivity: $("#latestActivity"), missionCount: $("#missionCount"),
   missionPreview: $("#missionPreview"), todayList: $("#todayList"), measurementList: $("#measurementList"),
-  resultList: $("#resultList"), missionList: $("#missionList"), dialog: $("#dataDialog"),
+  resultList: $("#resultList"), missionList: $("#missionList"), missionRunList: $("#missionRunList"), dialog: $("#dataDialog"),
   dataForm: $("#dataForm"), dialogTitle: $("#dialogTitle"), dialogFields: $("#dialogFields"),
   resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast"),
   sendButton: $("#sendButton"), heroPatientName: $("#heroPatientName"), signalSummary: $("#signalSummary"),
@@ -175,8 +175,40 @@ function renderResults() {
   refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => `<article class="data-card"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} valores</p><div>${renderMarkdown(result.explanation)}</div></article>`).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
 }
 
+function publicRuntime(runtime) {
+  if (runtime === "google_adk") return "Google ADK";
+  if (runtime === "deterministic_test") return "Verificación local";
+  return "Respaldo seguro";
+}
+
+function publicTraceStage(stage) {
+  return ({trigger:"Evento", decision:"Decisión", tool:"Acción", persistence:"Persistencia", closure:"Cierre", error:"Incidencia"})[stage] || "Paso";
+}
+
+function publicTraceAction(action) {
+  const labels = {
+    vital_recorded:"Nueva medición recibida", device_sync:"Datos autorizados del dispositivo", scheduled_tick:"Revisión programada", manual_demo:"Prueba controlada",
+    open_repeat_measurement:"Abrir seguimiento de medición", close_repeat_measurement:"Cerrar seguimiento con evidencia",
+    escalate_professional_review:"Preparar revisión profesional", prepare_consultation_packet:"Preparar paquete de consulta",
+    no_action:"Sin acción adicional", persist_patient_state_and_trace:"Guardar estado y traza", verify_mission_closure:"Cierre verificado",
+    reserve_model_call_budget:"Reservar presupuesto de IA", commit_mission_action:"Ejecutar acción acotada"
+  };
+  return labels[action] || String(action || "Paso completado").replaceAll("_", " ");
+}
+
+function renderMissionRuns() {
+  if (!refs.missionRunList) return;
+  const runs = (state.data.mission_runs || []).slice().reverse();
+  refs.missionRunList.innerHTML = runs.map(run => {
+    const events = (run.events || []).map(item => `<li data-stage="${escapeHtml(item.stage)}"><span>${escapeHtml(publicTraceStage(item.stage))}</span><strong>${escapeHtml(publicTraceAction(item.action))}</strong>${item.evidence_ids?.length ? `<small>${item.evidence_ids.length} evidencia${item.evidence_ids.length === 1 ? "" : "s"}</small>` : ""}</li>`).join("");
+    const model = run.runtime === "google_adk" && run.model ? `<span class="execution-model">${escapeHtml(run.model)}</span>` : "";
+    return `<article class="execution-card" data-runtime="${escapeHtml(run.runtime)}"><header><div><span>Ejecución autónoma</span><h3>${escapeHtml(publicRuntime(run.runtime))}</h3></div><div class="execution-badges"><span>${escapeHtml(run.status)}</span>${model}</div></header><p>${escapeHtml(run.public_summary || "Ejecución registrada.")}</p><ol class="execution-trace">${events}</ol><footer><span>Correlación ${escapeHtml(String(run.correlation_id || "").slice(0, 12))}</span><span>${(run.artifact_ids || []).length} artefacto${(run.artifact_ids || []).length === 1 ? "" : "s"}</span></footer></article>`;
+  }).join("") || `<article class="data-card"><p>Aún no hay ejecuciones autónomas registradas. Las trazas aparecerán cuando un evento active una misión.</p></article>`;
+}
+
 function renderMissions() {
   refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} módulos · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán cuando HealthIA detecte o reciba un asunto de seguimiento.</p></article>`;
+  renderMissionRuns();
 }
 
 async function refresh(force = false) {
@@ -290,7 +322,16 @@ $$('[data-dialog]').forEach(button => button.addEventListener("click", () => ope
 refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
 refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
 refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
-refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "HealthIA revisando continuidad…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Equipo en segundo plano"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
+refs.runCheck.addEventListener("click", async () => {
+  refs.agentStatus.textContent = "Actualizando evidencia operacional…";
+  try {
+    await refresh();
+    setView("missions");
+    const latest = (state.data.mission_runs || []).at(-1);
+    showToast(latest ? `Última ejecución: ${publicRuntime(latest.runtime)} · ${latest.status}` : "Aún no hay ejecuciones autónomas registradas.");
+  } catch (error) { showToast(error.message); }
+  refs.agentStatus.textContent = "Equipo en segundo plano";
+});
 function syncLeftToggle() {
   const collapsed = refs.shell.classList.contains("left-collapsed");
   refs.expandLeft?.setAttribute("aria-hidden", String(!collapsed));

@@ -94,7 +94,7 @@ def answer_payload(interview: dict) -> str:
     )
 
 
-def backend_fixture() -> tuple[dict, list[dict], int]:
+def backend_fixture() -> tuple[dict, list[dict], int, dict]:
     fake_client = FakeClient()
     service.gemini = GeminiResponder(
         Settings(
@@ -123,7 +123,10 @@ def backend_fixture() -> tuple[dict, list[dict], int]:
             "/api/chat",
             json={"message": answer_payload(second["message"]["metadata"]["clinical_interview"])},
         ).json()
-    return bootstrap, [first, second, final], len(fake_client.interactions.calls)
+        agentic = client.post("/api/demo/agentic-closed-loop").json()
+        require(agentic["final_trace"]["mission"]["status"] == "completed", "backend agentic fixture did not close")
+        agentic_bootstrap = client.get("/api/bootstrap").json()
+    return bootstrap, [first, second, final], len(fake_client.interactions.calls), agentic_bootstrap
 
 
 def mock_script(bootstrap: dict, responses: list[dict]) -> str:
@@ -168,7 +171,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def run() -> dict:
-    bootstrap, responses, model_calls = backend_fixture()
+    bootstrap, responses, model_calls, agentic_bootstrap = backend_fixture()
     require(model_calls == 2, f"expected two model calls, found {model_calls}")
     require(all(item["message"]["metadata"].get("question_source") == "gemini_dynamic" for item in responses[:2]), "dynamic question source missing")
 
@@ -251,8 +254,17 @@ def run() -> dict:
         require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient summary")
         require(page.get_by_text("Revisar la síntesis clínica y confirmar el nivel de atención con un profesional").count() > 0, "mission card remained stale after completion")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after completion")
-        require(not report["console_errors"] and not report["page_errors"], "browser emitted errors")
         page.screenshot(path=str(OUTPUT / "04-final.png"), full_page=True)
+
+        page.evaluate("snapshot => { window.__mockSnapshot = snapshot; }", agentic_bootstrap)
+        page.locator("#runCheck").click()
+        page.wait_for_selector("#view-missions.is-active .execution-card", timeout=10_000)
+        require(page.locator(".execution-card").count() >= 2, "agentic execution cards did not render")
+        require(page.get_by_text("Cierre verificado", exact=True).count() >= 1, "judge-visible closure stage missing")
+        require(page.get_by_text("Verificación local", exact=True).count() >= 1, "runtime badge missing")
+        require(page.get_by_text("razonamiento privado", exact=False).count() >= 1, "trace truth boundary missing")
+        require(not report["console_errors"] and not report["page_errors"], "browser emitted errors")
+        page.screenshot(path=str(OUTPUT / "05-agentic-trace.png"), full_page=True)
         browser.close()
 
     report["checks"] = {
@@ -265,6 +277,8 @@ def run() -> dict:
         "final_summary": "pass",
         "readable_summary_labels": "pass",
         "mission_state_refresh": "pass",
+        "judge_visible_agentic_trace": "pass",
+        "closed_loop_stage_visible": "pass",
     }
     (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report

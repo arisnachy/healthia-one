@@ -89,10 +89,18 @@ def test_runtime_affordances_are_real_not_decorative() -> None:
 def test_cloud_demo_is_scale_to_zero_and_easy_to_destroy() -> None:
     deploy = (ROOT / "deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
     remove = (ROOT / "deployment/remove-cloud-demo.ps1").read_text(encoding="utf-8")
-    assert '"--min", "0"' in deploy
-    assert '"--max", "1"' in deploy
+    assert '"--min-instances", "0"' in deploy
+    assert '"--max-instances", "1"' in deploy
+    assert '"--cpu-throttling"' in deploy
     assert "HEALTHIA_COST_MODE=cloud_demo" in deploy
     assert "HEALTHIA_PROACTIVE_ENABLED=false" in deploy
+    assert "HEALTHIA_MISSION_RUNTIME=adk" in deploy
+    assert "HEALTHIA_EVENT_DISPATCH_BACKEND=pubsub" in deploy
+    assert "pubsub" in deploy.lower()
+    assert "scheduler" in deploy.lower() and '"pause"' in deploy
+    assert "roles/run.invoker" in deploy
+    assert "roles/iam.serviceAccountTokenCreator" in deploy
     assert "--no-allow-unauthenticated" in deploy
-    assert "gcloud run services delete" in remove
-    assert "gcloud projects delete" in remove
+    assert '"run", "services", "delete"' in remove
+    assert '"pubsub", "subscriptions", "delete"' in remove
+    assert "projects delete" in remove or '"projects", "delete"' in remove

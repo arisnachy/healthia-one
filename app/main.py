@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
+from healthia_one.event_dispatch import decode_pubsub_push
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
@@ -19,6 +20,7 @@ from healthia_one.family import family_summary
 from healthia_one.profile import normalize_medication_text, profile_summary
 from healthia_one.models import (
     ActivityRecord,
+    AgenticEvent,
     Appointment,
     ChatRequest,
     FamilyMember,
@@ -32,6 +34,7 @@ from healthia_one.models import (
     PatientConsent,
     PatientProfile,
     SnoozeRequest,
+    SourceRef,
     VitalRecord,
     WeightRecord,
 )
@@ -90,6 +93,10 @@ async def readiness() -> dict:
         "store_backend": settings.store_backend,
         "proactive_interval_seconds": settings.proactive_interval_seconds,
         "proactive_enabled": settings.proactive_enabled,
+        "mission_runtime": settings.mission_runtime,
+        "agentic_events_enabled": settings.agentic_events_enabled,
+        "event_dispatch_backend": settings.event_dispatch_backend,
+        "pubsub_topic": settings.pubsub_topic if settings.event_dispatch_backend == "pubsub" else None,
         "cost_control": service.gemini.cost_status(),
         "capabilities": [
             "chat",
@@ -117,6 +124,10 @@ async def readiness() -> dict:
             "health_connect_sync",
             "device_medication_cross_check",
             "cloud_cost_guard",
+            "google_adk_background_runtime",
+            "pubsub_durable_events",
+            "mission_execution_trace",
+            "autonomous_closed_loop",
         ],
         "truth_boundary": (
             "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
@@ -464,6 +475,86 @@ async def demo_device_sync() -> dict:
 async def demo_tick() -> dict:
     messages = await service.run_proactive_check(manual_requested=True)
     return {"created": len(messages), "messages": [item.model_dump(mode="json") for item in messages]}
+
+
+@app.post("/api/demo/agentic-closed-loop")
+async def demo_agentic_closed_loop() -> dict:
+    """Run a zero-spend synthetic mission from trigger to verified closure."""
+    await service.reset_demo()
+    first = VitalRecord(
+        systolic=165,
+        diastolic=102,
+        pulse=78,
+        source=SourceRef(source_type="synthetic_demo", source_id="agentic_closed_loop"),
+    )
+    await service._append_and_publish("vitals", first, "vitals", action="synthetic_agentic_demo_vital")
+    first_event = AgenticEvent(
+        event_type="vital_recorded",
+        source_id=first.id,
+        payload={"synthetic": True, "step": 1},
+    )
+    first_run = await service.process_agentic_event(first_event, force_test_runtime=True)
+
+    second = VitalRecord(
+        systolic=138,
+        diastolic=88,
+        pulse=74,
+        source=SourceRef(source_type="synthetic_demo", source_id="agentic_closed_loop"),
+    )
+    await service._append_and_publish("vitals", second, "vitals", action="synthetic_agentic_demo_vital")
+    second_event = AgenticEvent(
+        event_type="vital_recorded",
+        source_id=second.id,
+        payload={"synthetic": True, "step": 2},
+    )
+    second_run = await service.process_agentic_event(second_event, force_test_runtime=True)
+    trace = await service.mission_trace(second_run.correlation_id)
+    return {
+        "synthetic": True,
+        "model_calls": 0,
+        "first_run": first_run.model_dump(mode="json"),
+        "second_run": second_run.model_dump(mode="json"),
+        "final_trace": trace,
+        "truth_boundary": "CI/demo proof of workflow semantics; not proof of a live Gemini or Google Cloud execution.",
+    }
+
+
+@app.post("/api/internal/pubsub/mission")
+async def pubsub_mission(request: Request) -> dict:
+    """Authenticated Cloud Run target for durable Pub/Sub push delivery."""
+    try:
+        payload = await request.json()
+        event = decode_pubsub_push(payload)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    run = await service.process_agentic_event(event)
+    return {
+        "acknowledged": True,
+        "event_id": event.id,
+        "correlation_id": run.correlation_id,
+        "runtime": run.runtime,
+        "status": run.status,
+    }
+
+
+@app.get("/api/judge/mission-runs")
+async def judge_mission_runs(limit: int = 20) -> dict:
+    state = await service.snapshot()
+    limit = min(max(limit, 1), 100)
+    runs = list(reversed(state.mission_runs[-limit:]))
+    return {
+        "count": len(state.mission_runs),
+        "runs": [item.model_dump(mode="json") for item in runs],
+        "truth_boundary": "Operational traces only; no hidden reasoning, secrets or raw credentials.",
+    }
+
+
+@app.get("/api/judge/trace/{correlation_id}")
+async def judge_mission_trace(correlation_id: str) -> dict:
+    trace = await service.mission_trace(correlation_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Traza de misión no encontrada")
+    return trace
 
 
 @app.get("/api/events/stream")

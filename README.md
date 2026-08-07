@@ -61,7 +61,7 @@ This repository is a clean hackathon implementation. The public demo uses a synt
 
 The runtime activates the minimum useful specialist instead of running every module for every message. Internal implementation names are documented for maintainers but are never exposed in the patient-facing interface.
 
-The Google ADK application lives in `healthia_agent/agent.py`. The local FastAPI demo remains deterministic and usable without an API key; a real Gemini run is a separate, explicitly guarded execution path.
+The Google ADK application lives in `healthia_agent/agent.py`. HealthIA now also has a bounded background mission runtime in `healthia_one/adk_runtime.py`: authorized events can travel through Pub/Sub, be decided by Google ADK, validated against deterministic safety, execute one bounded mission tool, persist evidence in Firestore and emit a correlation trace. The local FastAPI demo remains deterministic and usable without an API key.
 
 ## Clinical truth boundary
 
@@ -166,41 +166,48 @@ python scripts/judge_omega.py
 
 GitHub Actions repeats installation and verification in a clean Ubuntu/Python 3.12/Node 22 environment.
 
-## Guarded Cloud Run demonstration
+## Guarded Google Cloud agentic demonstration
 
-Prepare a dedicated Google Cloud project, Firestore and a Secret Manager secret. Then deploy with conservative limits:
+Use a dedicated hackathon Google Cloud project. The deployment helper creates the low-spend proof path: private Cloud Run, Firestore, Secret Manager, Pub/Sub authenticated push and a Cloud Scheduler job that is **paused immediately**.
 
 ```powershell
 .\deployment\deploy-cloud-demo.ps1 `
   -ProjectId YOUR_PROJECT_ID `
-  -SecretName healthia-gemini-api-key `
-  -RequestLimit 20
+  -Region us-central1 `
+  -FirestoreLocation us-central1 `
+  -RequestLimit 6 `
+  -MaxOutputTokens 350
 ```
 
-The helper uses minimum instances `0`, maximum instances `1`, disables proactive background work, fixes a per-process model-request ceiling and keeps the service private unless `-PublicDemo` is explicitly supplied.
+The cloud runtime uses minimum instances `0`, maximum instances `1`, request-based CPU and no process-local proactive loop. An actionable ADK mission reserves the complete two-model-call worst-case budget before it starts; a non-actionable event uses zero Gemini calls.
 
-After capturing the required Cloud Run, logging, Firestore and Gemini evidence:
+Capture one strict real proof:
+
+```powershell
+.\deployment\capture-cloud-proof.ps1 `
+  -ProjectId YOUR_PROJECT_ID `
+  -Region us-central1 `
+  -ServiceName healthia-one-demo
+```
+
+A passing proof requires three real Google ADK mission runs with no fallback: one Cloud Scheduler background task and a two-event follow-up that reaches a persisted `completed` state. The script rejects missing Firestore/Pub/Sub/ADK, an incomplete trace or more than six reserved model calls and writes sanitized evidence to `dist/cloud-proof/`.
+
+Then stop the execution resources:
 
 ```powershell
 .\deployment\remove-cloud-demo.ps1 `
   -ProjectId YOUR_PROJECT_ID `
+  -Region us-central1 `
   -ServiceName healthia-one-demo
 ```
 
-The process request ceiling resets when Cloud Run restarts. It must be combined with Cloud Billing budgets, eligible spend caps, quotas and resource cleanup. See [`docs/COST_CONTROL.md`](docs/COST_CONTROL.md).
+See [`docs/CLOUD_AGENTIC_PROOF.md`](docs/CLOUD_AGENTIC_PROOF.md) for the exact evidence contract and [`docs/SUBMISSION_PACKAGE.md`](docs/SUBMISSION_PACKAGE.md) for the four-minute judge path.
 
-The repository includes a Firestore state-store boundary, but a production deployment still requires:
+The per-process request ceiling resets when Cloud Run starts a new instance. It must still be combined with Cloud Billing budgets/alerts, quotas and immediate resource cleanup. See [`docs/COST_CONTROL.md`](docs/COST_CONTROL.md).
 
-- authenticated patient access and per-patient authorization;
-- Firestore security rules and transaction/idempotency verification;
-- private encrypted Cloud Storage for document bytes;
-- Secret Manager;
-- durable scheduling through Cloud Tasks or Pub/Sub;
-- malware scanning and content validation;
-- retention, deletion, export and incident-response policies;
-- clinical, privacy, legal and independent security review.
+Production beyond the hackathon still requires authenticated multi-patient isolation, hardened Firestore authorization, private encrypted object storage for document bytes, malware scanning, retention/deletion policy, clinical validation and independent privacy/security/legal review.
 
-A local green test suite is not proof of production safety or regulatory clearance.
+A green test suite or a successful hackathon demo is not proof of production safety or regulatory clearance.
 
 ## Demo paths
 
@@ -234,6 +241,8 @@ See `docs/DEMO_SCRIPT.md` for the complete judge-facing flow.
 - `/api/audit`
 - `/api/export`
 - `/api/events/stream`
+- `/api/judge/mission-runs` and `/api/judge/trace/{correlation_id}`
+- `/api/internal/pubsub/mission` (private Cloud Run push target)
 
 FastAPI exposes interactive API documentation at `/docs` while the service is running.
 
