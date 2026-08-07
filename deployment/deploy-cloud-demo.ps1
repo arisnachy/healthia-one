@@ -7,6 +7,7 @@ param(
     [string]$ServiceName = "healthia-one-demo",
     [string]$RuntimeServiceAccount = "healthia-one-demo",
     [string]$SecretName = "healthia-gemini-api-key",
+    [string]$DeviceSecretName = "healthia-device-token-secret",
     [ValidateRange(2, 25)][int]$RequestLimit = 20,
     [ValidateRange(64, 2048)][int]$MaxOutputTokens = 700,
     [switch]$PublicDemo,
@@ -61,6 +62,21 @@ if ($LASTEXITCODE -ne 0) { throw "No se pudieron activar las APIs necesarias." }
 & gcloud secrets describe $SecretName --project $ProjectId --format "value(name)" 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "No existe el secreto $SecretName. Crea el secreto con la API key de Gemini antes de desplegar; el script nunca acepta ni imprime la clave."
+}
+
+& gcloud secrets describe $DeviceSecretName --project $ProjectId --format "value(name)" 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Creando secreto criptografico para identidad durable de dispositivos..." -ForegroundColor Cyan
+    $secretBytes = New-Object byte[] 48
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($secretBytes)
+    $deviceSecretValue = [Convert]::ToBase64String($secretBytes)
+    $deviceSecretValue | & gcloud secrets create $DeviceSecretName `
+        --project $ProjectId `
+        --replication-policy="automatic" `
+        --data-file=- | Out-Null
+    $deviceSecretValue = $null
+    $secretBytes = $null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo crear $DeviceSecretName." }
 }
 
 & gcloud iam service-accounts describe $RuntimeServiceAccountEmail --project $ProjectId --format "value(email)" 2>$null | Out-Null
@@ -124,7 +140,7 @@ $args = @(
     "--memory", "512Mi",
     "--timeout", "600",
     "--set-env-vars", $envVars,
-    "--set-secrets", "GEMINI_API_KEY=${SecretName}:latest",
+    "--set-secrets", "GEMINI_API_KEY=${SecretName}:latest,HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest",
     "--quiet"
 )
 
@@ -172,7 +188,7 @@ if (-not $SkipStrictProof) {
     }
 }
 
-Write-Host "" 
+Write-Host ""
 Write-Host "CLOUD REAL PROBADO: $url" -ForegroundColor Green
 Write-Host "Captura Cloud Run revision $revision, Cloud Logging y deployment/cloud-proof-latest.json para el demo." -ForegroundColor Cyan
 Write-Host "Al terminar, elimina el servicio y opcionalmente el bucket con:" -ForegroundColor Yellow
