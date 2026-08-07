@@ -1,18 +1,19 @@
 param(
     [Parameter(Mandatory = $true)][string]$ProjectId,
     [string]$Region = "us-central1",
+    [string]$VertexLocation = "global",
     [string]$FirestoreLocation = "nam5",
     [string]$BucketLocation = "US",
     [string]$BucketName = "",
     [string]$ServiceName = "healthia-one-demo",
     [string]$RuntimeServiceAccount = "healthia-one-demo",
-    [string]$SecretName = "healthia-gemini-api-key",
     [string]$DeviceSecretName = "healthia-device-token-secret",
     [string]$SessionSecretName = "healthia-session-secret",
     [ValidateRange(8, 40)][int]$RequestLimit = 20,
     [ValidateRange(256, 4096)][int]$MaxOutputTokens = 1400,
     [switch]$PublicDemo,
-    [switch]$SkipStrictProof
+    [switch]$SkipStrictProof,
+    [switch]$Confirmed
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,21 +61,22 @@ function Ensure-Secret([string]$Name, [string]$Purpose) {
     }
 }
 
-Write-Host "MODO DEMO CLOUD VERIFICABLE" -ForegroundColor Cyan
+Write-Host "HEALTHIA ONE - CLOUD / VERTEX HACKATHON PROOF" -ForegroundColor Cyan
 Write-Host "Proyecto: $ProjectId" -ForegroundColor White
 Write-Host "Cloud Run: $ServiceName ($Region)" -ForegroundColor White
+Write-Host "Vertex AI: Gemini 3.5 Flash ($VertexLocation), ADC por identidad de servicio" -ForegroundColor White
 Write-Host "Firestore: (default) ($FirestoreLocation)" -ForegroundColor White
 Write-Host "Evidencia clinica: gs://$BucketName ($BucketLocation)" -ForegroundColor White
 Write-Host "Runtime SA: $RuntimeServiceAccountEmail" -ForegroundColor White
-Write-Host "Cloud Run: min 0, max 1, facturacion por solicitud." -ForegroundColor Green
+Write-Host "Cloud Run: min 0, max 1; agentes a demanda y proactive=false." -ForegroundColor Green
 Write-Host "Google AI: maximo $RequestLimit solicitudes por proceso y $MaxOutputTokens tokens de salida." -ForegroundColor Green
-Write-Host "La prueba estricta usa varias solicitudes Gemini: probe, bloques clinicos adaptativos, decision de cierre y PDF multimodal." -ForegroundColor Yellow
-Write-Host "El limite por proceso se reinicia si Cloud Run reinicia la instancia; conserva budgets/quota del proyecto." -ForegroundColor Yellow
-Write-Host "Identidad: login/logout obligatorio; estado, SSE, documentos y dispositivos quedan vinculados al patient_id autenticado." -ForegroundColor Green
+Write-Host "No se inyecta GEMINI_API_KEY: Cloud Run usa su service account para Vertex AI." -ForegroundColor Green
 
-$confirmation = Read-Host "Escribe DEPLOY para aprovisionar/desplegar y probar"
-if ($confirmation -ne "DEPLOY") {
-    throw "Despliegue cancelado."
+if (-not $Confirmed) {
+    $confirmation = Read-Host "Escribe DEPLOY para aprovisionar/desplegar y probar"
+    if ($confirmation -ne "DEPLOY") {
+        throw "Despliegue cancelado."
+    }
 }
 
 & gcloud config set project $ProjectId | Out-Host
@@ -83,6 +85,7 @@ if ($LASTEXITCODE -ne 0) { throw "No se pudo seleccionar el proyecto." }
 Write-Host "Activando APIs necesarias..." -ForegroundColor Cyan
 $apis = @(
     "run.googleapis.com",
+    "aiplatform.googleapis.com",
     "firestore.googleapis.com",
     "storage.googleapis.com",
     "secretmanager.googleapis.com",
@@ -93,11 +96,6 @@ $apis = @(
 & gcloud services enable @apis --project $ProjectId | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "No se pudieron activar las APIs necesarias." }
 
-& gcloud secrets describe $SecretName --project $ProjectId --format "value(name)" 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "No existe el secreto $SecretName. Crea el secreto con la API key de Gemini antes de desplegar; el script nunca acepta ni imprime la clave."
-}
-
 Ensure-Secret $DeviceSecretName "identidad durable de dispositivos"
 Ensure-Secret $SessionSecretName "sesiones firmadas de pacientes"
 
@@ -107,7 +105,12 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la cuenta de servicio de runtime." }
 }
 
-foreach ($role in @("roles/datastore.user", "roles/storage.objectAdmin", "roles/secretmanager.secretAccessor")) {
+foreach ($role in @(
+    "roles/aiplatform.user",
+    "roles/datastore.user",
+    "roles/storage.objectAdmin",
+    "roles/secretmanager.secretAccessor"
+)) {
     & gcloud projects add-iam-policy-binding $ProjectId `
         --member "serviceAccount:$RuntimeServiceAccountEmail" `
         --role $role `
@@ -138,6 +141,7 @@ if ($LASTEXITCODE -ne 0) {
 $envVars = @(
     "HEALTHIA_ENV=cloud",
     "HEALTHIA_LLM_BACKEND=gemini_api",
+    "HEALTHIA_MODEL=gemini-3.5-flash",
     "HEALTHIA_STORE_BACKEND=firestore",
     "HEALTHIA_AUTH_REQUIRED=true",
     "HEALTHIA_ALLOW_REGISTRATION=true",
@@ -148,7 +152,9 @@ $envVars = @(
     "HEALTHIA_AI_MAX_OUTPUT_TOKENS=$MaxOutputTokens",
     "HEALTHIA_PROACTIVE_ENABLED=false",
     "HEALTHIA_GCS_BUCKET=$BucketName",
-    "GOOGLE_CLOUD_PROJECT=$ProjectId"
+    "GOOGLE_GENAI_USE_VERTEXAI=true",
+    "GOOGLE_CLOUD_PROJECT=$ProjectId",
+    "GOOGLE_CLOUD_LOCATION=$VertexLocation"
 ) -join ","
 
 $args = @(
@@ -164,7 +170,7 @@ $args = @(
     "--memory", "512Mi",
     "--timeout", "600",
     "--set-env-vars", $envVars,
-    "--set-secrets", "GEMINI_API_KEY=${SecretName}:latest,HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest,HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest",
+    "--set-secrets", "HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest,HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest",
     "--quiet"
 )
 
@@ -205,7 +211,7 @@ if (-not $SkipStrictProof) {
     if (-not [string]::IsNullOrWhiteSpace($identityToken)) {
         $proofArgs += @("--identity-token", $identityToken)
     }
-    Write-Host "Ejecutando prueba estricta: auth A/B + aislamiento + Gemini/ADK + Firestore + GCS + gemelo..." -ForegroundColor Cyan
+    Write-Host "Prueba estricta: Cloud Run + auth A/B + Gemini 3.5/ADK + Firestore + GCS + gemelo..." -ForegroundColor Cyan
     & python @proofArgs | Tee-Object -FilePath "deployment/cloud-proof-latest.json" | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "El despliegue existe pero NO supero la prueba estricta. No lo declares probado."
@@ -214,6 +220,6 @@ if (-not $SkipStrictProof) {
 
 Write-Host ""
 Write-Host "CLOUD REAL PROBADO: $url" -ForegroundColor Green
-Write-Host "Captura Cloud Run revision $revision, Cloud Logging y deployment/cloud-proof-latest.json para el demo." -ForegroundColor Cyan
-Write-Host "Al terminar, elimina el servicio y opcionalmente bucket/secretos con:" -ForegroundColor Yellow
+Write-Host "Captura Cloud Run revision $revision, Vertex AI/Cloud Logging y deployment/cloud-proof-latest.json para el demo." -ForegroundColor Cyan
+Write-Host "Al terminar puedes eliminar solo Cloud Run (manteniendo evidencia) con:" -ForegroundColor Yellow
 Write-Host ".\deployment\remove-cloud-demo.ps1 -ProjectId $ProjectId -Region $Region -ServiceName $ServiceName -BucketName $BucketName" -ForegroundColor Yellow
