@@ -144,3 +144,9 @@
   .clinical-option span { width: 100%; border-radius: 11px; }
   .council-member { grid-template-columns: 1fr; }
 }
+
+.clinical-source { align-self: flex-start; border: 1px solid #cbd5e1; border-radius: 999px; padding: 5px 8px; color: #64748b; background: #fff; font-size: 9px; font-weight: 750; white-space: nowrap; }
+.clinical-source.is-dynamic { border-color: #9fc8bb; background: #eef8f4; color: #266453; }
+.clinical-source.is-fallback { background: #f8fafc; color: #64748b; }
+
+.council-availability-note { display: block; margin: -4px 0 8px; color: #7b8798; font-size: 9px; line-height: 1.35; }

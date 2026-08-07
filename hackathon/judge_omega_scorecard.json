@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-06",
+  "updated_at": "2026-08-07",
   "primary_track": "The Taskmaster",
   "target_score": 90,
   "official_rubric": {
@@ -36,7 +36,8 @@
       "blocker_if_not_proven": true,
       "evidence": [
         {"kind": "repo_path", "value": "Dockerfile"},
-        {"kind": "repo_path", "value": "healthia_one/store.py"}
+        {"kind": "repo_path", "value": "healthia_one/store.py"},
+        {"kind": "repo_path", "value": "deployment/deploy-cloud-demo.ps1"}
       ]
     },
     {
@@ -54,7 +55,8 @@
       "status": "proven",
       "blocker_if_not_proven": true,
       "evidence": [
-        {"kind": "repo_path", "value": "README.md"}
+        {"kind": "repo_path", "value": "README.md"},
+        {"kind": "repo_path", "value": "START-HEALTHIA.cmd"}
       ]
     },
     {
@@ -86,12 +88,14 @@
       "id": "innovation_operational_utility",
       "label": "Innovation & Operational Utility",
       "max_points": 40,
-      "awarded_points": 25,
-      "reason": "The patient-owned continuity problem is strong and differentiated, with consent-bound proactive logic and device ingestion. The current visible product still needs one agent-driven closed loop that executes tools and reaches a verified outcome with little hand-holding.",
+      "awarded_points": 30,
+      "reason": "HealthIA now turns a patient complaint into two adaptive five-question blocks, selects and executes only the relevant specialist tools, applies a zero-token adversarial quality gate, preserves deterministic safety and advances the interview mission to professional review with closure evidence. The remaining gap is an autonomous real-world action that reaches a verified outcome beyond the interview and review boundary.",
       "evidence": [
-        {"kind": "repo_path", "value": "healthia_one/service.py"},
+        {"kind": "repo_path", "value": "healthia_one/gemini.py"},
+        {"kind": "repo_path", "value": "healthia_one/clinical_planner.py"},
+        {"kind": "repo_path", "value": "healthia_one/clinical_tools.py"},
+        {"kind": "repo_path", "value": "healthia_one/clinical_intake.py"},
         {"kind": "repo_path", "value": "healthia_one/proactive.py"},
-        {"kind": "repo_path", "value": "healthia_one/continuity.py"},
         {"kind": "repo_path", "value": "android-health-bridge"}
       ]
     },
@@ -99,11 +103,13 @@
       "id": "architectural_discipline_tech_stack",
       "label": "Architectural Discipline & Tech Stack",
       "max_points": 30,
-      "awarded_points": 19,
-      "reason": "Typed state, deterministic safety, consent, auditability, ADK, Gemini, Firestore boundary and a clean frontend are strong. The ADK graph is not yet the main runtime, durable cloud execution is absent, identity isolation is incomplete and judge-visible observability is limited.",
+      "awarded_points": 22,
+      "reason": "The system has typed longitudinal state, deterministic safety, consent and audit controls, guarded single-call Gemini planning, demand-selected deterministic tools, request ceilings, Firestore and Cloud Run boundaries, event-driven UI refresh and reproducible full-system tests. Google ADK is still not the primary visible runtime, durable cloud execution and authenticated multi-patient isolation remain unproven, and the cloud trace is not assembled.",
       "evidence": [
         {"kind": "repo_path", "value": "healthia_agent/agent.py"},
         {"kind": "repo_path", "value": "healthia_one/models.py"},
+        {"kind": "repo_path", "value": "healthia_one/cost_guard.py"},
+        {"kind": "repo_path", "value": "healthia_one/service.py"},
         {"kind": "repo_path", "value": "healthia_one/store.py"},
         {"kind": "repo_path", "value": "docs/ARCHITECTURE.md"}
       ]
@@ -112,12 +118,15 @@
       "id": "demo_production_readiness",
       "label": "Demo & Production Readiness",
       "max_points": 30,
-      "awarded_points": 8,
-      "reason": "The repository, local launcher, synthetic path and setup documentation are useful. There is no completed four-minute judge video, hosted proof, Cloud Run evidence, durable mission trace or final submission package yet.",
+      "awarded_points": 14,
+      "reason": "A clean hosted runner now installs Chromium, passes the Python suite, verifies fourteen complete API and state workflows, renders the real frontend, proves one identity, collapsed navigation, visible adaptive questioning, readable final synthesis and mission refresh, uploads screenshots, and reruns tests from the extracted release ZIP. This is strong local and synthetic evidence, but there is still no final video, public cloud proof, live correlated Gemini execution, physical-device capture or submission package.",
       "evidence": [
-        {"kind": "repo_path", "value": "README.md"},
-        {"kind": "repo_path", "value": "docs/DEMO_SCRIPT.md"},
-        {"kind": "repo_path", "value": "scripts/smoke_test.py"}
+        {"kind": "repo_path", "value": ".github/workflows/ci.yml"},
+        {"kind": "repo_path", "value": "scripts/full_system_check.py"},
+        {"kind": "repo_path", "value": "scripts/browser_smoke.py"},
+        {"kind": "repo_path", "value": "scripts/build_release_zip.py"},
+        {"kind": "repo_path", "value": "scripts/verify_release_zip.py"},
+        {"kind": "repo_path", "value": "docs/VERIFICATION_MATRIX.md"}
       ]
     }
   ],
@@ -133,9 +142,9 @@
       "evidence_needed": "Cloud Scheduler, Pub/Sub or Cloud Tasks invoking a Cloud Run worker, with logs and retry behavior."
     },
     {
-      "id": "no_closed_loop_mission",
-      "statement": "The product must prove an action completed from event to verified mission outcome, not only generate a message.",
-      "evidence_needed": "A synthetic end-to-end mission with evidence IDs, action result, patient feedback and closure state."
+      "id": "no_autonomous_outcome_closure",
+      "statement": "The interview reaches professional review, but the submission still needs one autonomous action that reaches a verified real or synthetic outcome and closes its mission.",
+      "evidence_needed": "A correlated end-to-end mission with evidence IDs, tool action, external or patient feedback, persisted result and completed closure state."
     },
     {
       "id": "no_cloud_judge_proof",

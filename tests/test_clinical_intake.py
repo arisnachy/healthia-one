@@ -9,7 +9,7 @@ from healthia_one.service import seed_state
 def answer_payload(interview: dict, stage: int) -> str:
     if stage == 1:
         answers = [
-            {"question_id": "onset", "selected": ["1 a 3 días"], "detail": "Empeora desde ayer"},
+            {"question_id": "onset", "question_prompt": "¿Cuándo comenzó y cómo ha evolucionado?", "selected": ["1 a 3 días"], "detail": "Empeora desde ayer"},
             {"question_id": "symptoms", "selected": ["Ardor al orinar", "Orino con más frecuencia"], "detail": ""},
             {"question_id": "severity", "selected": ["Moderada"], "detail": "4 de 10"},
             {"question_id": "red_flags", "selected": ["Ninguna de las anteriores"], "detail": ""},
@@ -52,12 +52,16 @@ def test_interview_preserves_context_and_completes_two_blocks() -> None:
 
     assert second_interview["stage"] == 2
     assert second_interview["id"] == first_interview["id"]
+    assert second_interview["chief_complaint"] == "Desde ayer me arde al orinar y tengo frecuencia urinaria"
     assert len(second_interview["previous_answers"]) == 5
     assert len(second_interview["question_block"]["questions"]) == 5
 
     final = respond(state, answer_payload(second_interview, 2))
 
     assert final.message.metadata["clinical_interview"]["status"] == "completed"
+    assert "Desde ayer me arde al orinar y tengo frecuencia urinaria" in final.message.content
+    assert "Las áreas clínicas necesarias" in final.message.content
+    assert "¿Cuándo comenzó y cómo ha evolucionado?" in final.message.content
     assert final.message.metadata["council_status"] == "completed"
     assert "Síntesis para la junta clínica" in final.message.content
     mission = next(item for item in state.missions if item.id == first_interview["mission_id"])

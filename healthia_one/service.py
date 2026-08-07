@@ -261,6 +261,7 @@ class HealthIAService:
             )
             await self.store.save(state)
         await self.broker.publish({"type": "message", "message": response.message.model_dump(mode="json")})
+        await self.broker.publish({"type": "state", "section": "chat"})
         return response
 
     async def _append_and_publish(self, collection: str, item, section: str, *, actor: str = "patient", action: str = "create"):
