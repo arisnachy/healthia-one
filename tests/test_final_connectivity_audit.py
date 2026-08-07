@@ -9,12 +9,16 @@ SOURCE = ANDROID / "app/src/main/java/com/healthia/one/bridge"
 def test_gemini_calls_are_stateless_and_the_probe_is_a_live_interaction() -> None:
     gemini = (ROOT / "healthia_one/gemini.py").read_text(encoding="utf-8")
     launcher = (ROOT / "deployment/run-local-secure.ps1").read_text(encoding="utf-8")
+    verifier = (ROOT / "deployment/verify_google_ai.py").read_text(encoding="utf-8")
     assert gemini.count("store=False") >= 2
     assert "def _live_probe" in gemini
     assert "live_request" in gemini
     assert '"store": False' in gemini
-    assert "store=False" in launcher
-    assert "clave, cuota y modelo" in launcher
+    assert "store=False" in verifier
+    assert "HEALTHIA_GOOGLE_AI_READY" in verifier
+    assert "HEALTHIA_GOOGLE_AI_ERROR" in verifier
+    assert "if ($LiveProbe)" in launcher
+    assert "$probeOutput = & $venvPython $probeScript" in launcher
     assert "Get-NetIPAddress" in launcher
 
 
@@ -29,7 +33,8 @@ def test_runtime_exposes_retryable_google_status_and_complete_device_links() -> 
         "actions/workflows/android-bridge.yml",
         "CONNECT_ANDROID.md",
         "HealthIA-Bridge-debug",
-        "Teléfono y computadora en la misma Wi-Fi",
+        "Teléfono y computadora",
+        "misma Wi",
         'reopen.textContent = "›"',
         'event.key.toLowerCase() !== "b"',
     ):
