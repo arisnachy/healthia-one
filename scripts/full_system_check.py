@@ -59,6 +59,7 @@ def run() -> dict:
         initial = check(client.get("/api/bootstrap"), "bootstrap")
         require(initial["profile"]["display_name"] == "Ana Martínez", "synthetic identity missing")
         require(initial["vitals"] and initial["weights"] and initial["activity"], "seed continuity missing")
+        require(initial["twin_events"], "clinical twin did not receive synthetic longitudinal events")
         checks["bootstrap_continuity"] = "pass"
 
         first = check(
@@ -78,6 +79,7 @@ def run() -> dict:
 
         final = check(client.post("/api/chat", json={"message": answers_for(interview2)}), "clinical completion")
         require(final["message"]["metadata"]["clinical_interview"]["status"] == "completed", "interview did not complete")
+        require(final["message"]["metadata"].get("twin_updated") is True, "completed interview did not update twin")
         require("Desde ayer me arde al orinar" in final["message"]["content"], "final summary lost complaint")
         require("No confirmaré un diagnóstico" in final["message"]["content"], "clinical truth boundary missing")
         require(final.get("mission", {}).get("next_action") == "Revisar la síntesis clínica y confirmar el nivel de atención con un profesional", "final mission update not returned")
@@ -85,6 +87,7 @@ def run() -> dict:
         mission = next(item for item in after_clinical["missions"] if item["id"] == first["mission"]["id"])
         require(mission["status"] == "waiting_professional", "mission state did not advance")
         require(mission["closure_evidence"] == ["adaptive_interview_completed"], "closure evidence missing")
+        require(any(event["entity_id"] == interview1["id"] and event["certainty"] == "patient_reported" for event in after_clinical["twin_events"]), "patient-reported interview never reached twin")
         checks["clinical_closed_loop"] = "pass"
 
         urgent = check(
@@ -112,6 +115,7 @@ def run() -> dict:
             "structured result",
         )
         require(parsed_result["status"] == "parsed" and parsed_result["explained"] is True, "result was not parsed")
+        require(parsed_result["artifact_type"] == "laboratory", "structured lab was not classified deterministically")
         structured_original = client.get(f"/api/results/{parsed_result['id']}/file")
         require(structured_original.status_code == 200, "structured result original was not preserved")
 
@@ -188,7 +192,7 @@ def run() -> dict:
             ),
             "appointment",
         )
-        brief = check(client.get(f"/api/consultation-brief?appointment_id={appointment['id']}"), "consultation brief")
+        brief = check(client.get(f"/api/consultation-brief?appointment_id={appointment['id']}",), "consultation brief")
         require(brief["appointment"]["id"] == appointment["id"], "consultation brief mismatch")
         check(
             client.post(
@@ -239,6 +243,7 @@ def run() -> dict:
         )
         require(sync["accepted"] == 1, "device record not accepted")
         require(sync["patient_id"] == "patient_demo", "device payload escaped paired patient scope")
+        require(sync["twin_events_added"] == 1, "device event did not update twin")
         device_state = check(client.get("/api/bootstrap"), "device bootstrap")
         require(device_state["device_observations"][-1]["patient_id"] == "patient_demo", "forged device patient_id persisted")
         checks["device_pairing_and_identity"] = "pass"
@@ -253,7 +258,7 @@ def run() -> dict:
 
         timeline = check(client.get("/api/timeline"), "timeline")
         require(len(timeline["events"]) >= 8, "timeline did not aggregate created data")
-        require(any(event["id"] == parsed_result["id"] for event in timeline["events"]), "result never reached the longitudinal timeline")
+        require(any(event.get("entity_id") == parsed_result["id"] and event["type"] == "result" for event in timeline["events"]), "result never reached the longitudinal timeline")
         audit = check(client.get("/api/audit"), "audit")
         require(audit["count"] >= 10, "audit evidence too small")
         exported = client.get("/api/export")
