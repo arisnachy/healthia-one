@@ -4,6 +4,7 @@ param(
     [string]$ServiceName = "healthia-one-demo",
     [string]$SecretName = "healthia-gemini-api-key",
     [string]$DeviceSecretName = "healthia-device-token-secret",
+    [string]$SessionSecretName = "healthia-session-secret",
     [string]$BucketName = "",
     [string]$RuntimeServiceAccount = "healthia-one-demo",
     [switch]$DeleteBucket,
@@ -27,7 +28,7 @@ if ($DeleteBucket) {
     Write-Host "Tambien se eliminara gs://$BucketName y TODA la evidencia sintetica de demo que contenga." -ForegroundColor Red
 }
 if ($DeleteSecret) {
-    Write-Host "Tambien se eliminaran $SecretName y $DeviceSecretName." -ForegroundColor Red
+    Write-Host "Tambien se eliminaran $SecretName, $DeviceSecretName y $SessionSecretName." -ForegroundColor Red
 }
 if ($DeleteProject) {
     Write-Host "Tambien se programara la eliminacion COMPLETA del proyecto." -ForegroundColor Red
@@ -51,7 +52,7 @@ if ($DeleteBucket) {
 }
 
 if ($DeleteSecret) {
-    foreach ($name in @($SecretName, $DeviceSecretName)) {
+    foreach ($name in @($SecretName, $DeviceSecretName, $SessionSecretName)) {
         & gcloud secrets delete $name --project $ProjectId --quiet | Out-Host
         if ($LASTEXITCODE -ne 0) {
             Write-Host "No se pudo eliminar $name o ya no existe." -ForegroundColor Yellow
