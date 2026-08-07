@@ -6,7 +6,8 @@ from pathlib import Path
 from healthia_one.models import ClinicalDocument, DocumentCategory, PatientState, new_id
 
 
-ALLOWED_EXTENSIONS = {".json", ".csv", ".txt", ".pdf", ".png", ".jpg", ".jpeg"}
+ALLOWED_EXTENSIONS = {".json", ".csv", ".txt", ".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+MULTIMODAL_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 
 
 def safe_filename(filename: str) -> str:
@@ -17,9 +18,15 @@ def safe_filename(filename: str) -> str:
 
 def category_from_filename(filename: str) -> DocumentCategory:
     text = filename.lower()
-    if any(word in text for word in ("lab", "hemograma", "glucosa", "perfil", "resultado")):
+    if any(word in text for word in ("lab", "hemograma", "glucosa", "perfil", "resultado", "analitica")):
         return DocumentCategory.LABORATORY
-    if any(word in text for word in ("rx", "radiografia", "tomografia", "resonancia", "imagen")):
+    if any(
+        word in text
+        for word in (
+            "rx", "radiografia", "tomografia", "tac", "ct", "resonancia", "mri", "imagen",
+            "sono", "ultra", "ecografia", "ecg", "ekg", "electrocard",
+        )
+    ):
         return DocumentCategory.IMAGING
     if any(word in text for word in ("receta", "prescripcion", "medicamento")):
         return DocumentCategory.PRESCRIPTION
@@ -50,11 +57,10 @@ def build_document(
         mime_type=content_type or "application/octet-stream",
         size_bytes=size_bytes,
         storage_path=f"uploads/patient_demo/{document_id}_{safe}",
-        status="pending_review" if suffix in {".pdf", ".png", ".jpg", ".jpeg"} else "stored",
+        status="pending_review" if suffix in MULTIMODAL_EXTENSIONS else "stored",
         summary=(
-            "Documento guardado y organizado. La extracción multimodal requiere Gemini configurado; "
-            "HealthIA no inventará contenido que no haya podido leer."
-            if suffix in {".pdf", ".png", ".jpg", ".jpeg"}
+            "Documento original guardado. El análisis multimodal se ejecuta solo cuando Google AI real está habilitado; HealthIA no inventará contenido no leído."
+            if suffix in MULTIMODAL_EXTENSIONS
             else "Documento guardado y disponible para el expediente longitudinal."
         ),
     )
