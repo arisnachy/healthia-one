@@ -26,6 +26,7 @@ def test_collapsed_icons_keep_accessible_labels() -> None:
 def test_one_click_windows_launcher_runs_from_its_own_folder() -> None:
     launcher = (ROOT / "START-HEALTHIA.cmd").read_text(encoding="utf-8")
     assert 'cd /d "%~dp0"' in launcher
-    assert r"deployment\run-local-secure.ps1" in launcher
+    assert "%~dp0deployment" in launcher
+    assert "run-local-secure.ps1" in launcher
     assert "-GuardedAi -RequestLimit 10" in launcher
     assert "Local seguro - 0 llamadas" in launcher
