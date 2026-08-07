@@ -43,9 +43,11 @@ def tiny_pdf() -> bytes:
 
 
 def main() -> int:
-    required = ["GEMINI_API_KEY", "HEALTHIA_SESSION_SECRET", "HEALTHIA_DEVICE_TOKEN_SECRET"]
+    vertex_enabled = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in {"1", "true", "yes", "on"}
+    required = ["HEALTHIA_SESSION_SECRET", "HEALTHIA_DEVICE_TOKEN_SECRET"]
+    required.append("GOOGLE_CLOUD_PROJECT" if vertex_enabled else "GEMINI_API_KEY")
     if any(not os.getenv(name) for name in required):
-        print("HEALTHIA_TASKMASTER_PROOF_BLOCKED: missing required secret environment")
+        print("HEALTHIA_TASKMASTER_PROOF_BLOCKED: missing required AI/auth environment")
         return 2
 
     from app.main import app
@@ -55,6 +57,8 @@ def main() -> int:
         "synthetic_only": True,
         "model": os.getenv("HEALTHIA_MODEL", ""),
         "gemini_request_ceiling": 1,
+        "ai_transport": "vertex_ai" if vertex_enabled else "developer_api",
+        "google_cloud_project": os.getenv("GOOGLE_CLOUD_PROJECT", "") if vertex_enabled else "",
         "checks": [],
     }
     suffix = uuid4().hex[:10]

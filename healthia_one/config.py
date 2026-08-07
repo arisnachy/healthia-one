@@ -34,10 +34,19 @@ class Settings(BaseSettings):
     session_hours: int = 12
 
     @property
+    def vertex_ai_enabled(self) -> bool:
+        import os
+
+        return os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    @property
     def adk_ready(self) -> bool:
         if self.llm_backend == "mock":
             return False
         import os
+
+        if self.vertex_ai_enabled:
+            return bool(os.getenv("GOOGLE_CLOUD_PROJECT"))
         return bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
 
 

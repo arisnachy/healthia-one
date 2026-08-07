@@ -15,6 +15,7 @@ from healthia_one.clinical_planner import (
 )
 from healthia_one.config import Settings
 from healthia_one.cost_guard import CostGuard, CostGuardBlocked
+from healthia_one.google_ai_transport import build_google_ai_client
 from healthia_one.models import ChatResponse, PatientState, RiskLevel
 
 
@@ -97,7 +98,8 @@ class GeminiResponder:
             {
                 "llm_backend": self.settings.llm_backend,
                 "model": self.settings.model,
-                "api_key_configured": self.settings.adk_ready,
+                "google_ai_configured": self.settings.adk_ready,
+                "ai_transport": "vertex_ai" if self.settings.vertex_ai_enabled else "developer_api",
                 "ui_control_available": bool(self.settings.cost_control_ui and self.settings.env == "local"),
             }
         )
@@ -107,7 +109,7 @@ class GeminiResponder:
         if not self.settings.cost_control_ui or self.settings.env != "local":
             raise CostGuardBlocked("El interruptor remoto está deshabilitado fuera del entorno local.")
         if enabled and not self.settings.adk_ready:
-            raise CostGuardBlocked("No hay una API key configurada para esta ejecución local.")
+            raise CostGuardBlocked("Google AI no está configurado para esta ejecución local.")
         self.cost_guard.set_enabled(enabled)
         return self.cost_status()
 
@@ -116,12 +118,7 @@ class GeminiResponder:
             if self._client_factory is not None:
                 self._client = self._client_factory()
             else:
-                from google import genai
-
-                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-                if not api_key:
-                    raise RuntimeError("GEMINI_API_KEY no está configurada para el proceso actual")
-                self._client = genai.Client(api_key=api_key)
+                self._client = build_google_ai_client(self.settings)
         return self._client
 
     @staticmethod
