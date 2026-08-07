@@ -137,7 +137,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
         </header>
         <div class="clinical-questions">
           ${(block.questions || []).map((question, index) => `
-            <fieldset class="clinical-question" data-question-id="${esc(question.id)}">
+            <fieldset class="clinical-question" data-question-id="${esc(question.id)}" data-question-prompt="${esc(question.prompt)}">
               <legend>${index + 1}. ${esc(question.prompt)}</legend>
               <div class="clinical-options">${optionMarkup(question, interview.id)}</div>
               ${question.allow_detail ? `<input class="clinical-detail" type="text" maxlength="500" placeholder="${esc(question.detail_placeholder || "Agregar detalle (opcional)")}">` : ""}
@@ -165,7 +165,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
           const selected = $$("input:checked", fieldset).map(input => input.value);
           const detail = $(".clinical-detail", fieldset)?.value.trim() || "";
           if (!selected.length && !detail) missing = true;
-          answers.push({question_id: fieldset.dataset.questionId, selected, detail});
+          answers.push({question_id: fieldset.dataset.questionId, question_prompt: fieldset.dataset.questionPrompt, selected, detail});
         });
         if (missing) {
           error.textContent = "Responde cada pregunta o agrega un detalle antes de continuar.";
