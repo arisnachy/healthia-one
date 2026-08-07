@@ -7,10 +7,16 @@ param(
     [string]$TopicName = "healthia-agentic-events",
     [string]$SubscriptionName = "healthia-agentic-events-push",
     [string]$SchedulerName = "healthia-agentic-tick",
-    [ValidateRange(2, 20)][int]$RequestLimit = 6,
-    [ValidateRange(64, 1024)][int]$MaxOutputTokens = 350,
+    [ValidateRange(6, 5000)][int]$RequestLimit = 500,
+    [ValidateRange(64, 2048)][int]$MaxOutputTokens = 700,
+    [ValidateRange(1, 49)][double]$BudgetTargetUsd = 45,
+    [ValidateRange(2, 50)][double]$AbsoluteBudgetUsd = 50,
     [switch]$PublicDemo,
-    [switch]$SkipScheduler
+    [switch]$SkipScheduler,
+    [switch]$EnablePatientAuth,
+    [string]$FirebaseApiKey = "",
+    [string]$FirebaseAuthDomain = "",
+    [string]$FirebaseAppId = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,9 +28,7 @@ $PushServiceAccount = "$PushServiceAccountName@$ProjectId.iam.gserviceaccount.co
 function Invoke-Gcloud {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
     & gcloud @Arguments | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "gcloud fallo: gcloud $($Arguments -join ' ')"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "gcloud fallo: gcloud $($Arguments -join ' ')" }
 }
 
 function Test-GcloudResource {
@@ -45,7 +49,6 @@ function Ensure-SecretWithVersion {
         Invoke-Gcloud "secrets" "create" $SecretName "--replication-policy=automatic" "--project" $ProjectId "--quiet"
         Write-Host "El secreto fue creado, pero aun no contiene la API key." -ForegroundColor Yellow
     }
-
     $versions = & gcloud secrets versions list $SecretName --project $ProjectId --filter="state=ENABLED" --format="value(name)" 2>$null
     if (-not $versions) {
         Write-Host "Introduce la Gemini API key. No se mostrara ni se guardara en el repositorio." -ForegroundColor Cyan
@@ -56,11 +59,8 @@ function Ensure-SecretWithVersion {
             if ([string]::IsNullOrWhiteSpace($plain)) { throw "La API key esta vacia." }
             $temp = Join-Path ([IO.Path]::GetTempPath()) ("healthia-key-" + [guid]::NewGuid().ToString("N") + ".txt")
             [IO.File]::WriteAllText($temp, $plain, [Text.UTF8Encoding]::new($false))
-            try {
-                Invoke-Gcloud "secrets" "versions" "add" $SecretName "--data-file=$temp" "--project" $ProjectId "--quiet"
-            } finally {
-                Remove-Item $temp -Force -ErrorAction SilentlyContinue
-            }
+            try { Invoke-Gcloud "secrets" "versions" "add" $SecretName "--data-file=$temp" "--project" $ProjectId "--quiet" }
+            finally { Remove-Item $temp -Force -ErrorAction SilentlyContinue }
         } finally {
             if ($ptr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
             $plain = $null
@@ -68,59 +68,56 @@ function Ensure-SecretWithVersion {
     }
 }
 
-if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
-    throw "gcloud CLI no esta instalado o no esta en PATH."
+if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) { throw "gcloud CLI no esta instalado o no esta en PATH." }
+if ($BudgetTargetUsd -ge $AbsoluteBudgetUsd) { throw "BudgetTargetUsd debe quedar por debajo del limite absoluto." }
+if ($EnablePatientAuth -and ([string]::IsNullOrWhiteSpace($FirebaseApiKey) -or [string]::IsNullOrWhiteSpace($FirebaseAuthDomain) -or [string]::IsNullOrWhiteSpace($FirebaseAppId))) {
+    throw "Para -EnablePatientAuth debes proporcionar FirebaseApiKey, FirebaseAuthDomain y FirebaseAppId desde la app web registrada en Identity Platform/Firebase."
 }
 
-Write-Host "" 
+Write-Host ""
 Write-Host "HEALTHIA ONE · CLOUD AGENTIC DEMO" -ForegroundColor Cyan
 Write-Host "Proyecto: $ProjectId" -ForegroundColor White
 Write-Host "Region Cloud Run/PubSub: $Region" -ForegroundColor White
-Write-Host "Firestore: $FirestoreLocation" -ForegroundColor White
 Write-Host "Runtime: Google ADK + Gemini + Pub/Sub + Firestore" -ForegroundColor White
-Write-Host "Costo: Cloud Run min=0/max=1, request-based CPU, scheduler PAUSADO por defecto." -ForegroundColor Green
-Write-Host "IA: reserva conservadora de hasta 2 llamadas por mision ADK; techo del proceso=$RequestLimit." -ForegroundColor Green
-Write-Host "No sustituye Budgets/Alerts de Cloud Billing. El techo del proceso se reinicia con una instancia nueva." -ForegroundColor Yellow
-if ($PublicDemo) {
-    Write-Host "ADVERTENCIA: -PublicDemo hace publica la UI/API. Para la evidencia cloud se recomienda mantener el servicio privado." -ForegroundColor Yellow
-}
+Write-Host "Agentes: A DEMANDA. Los eventos sin trabajo util no llaman a Gemini." -ForegroundColor Green
+Write-Host "Cloud Run: min=0, max=1, CPU por solicitud; Scheduler PAUSADO por defecto." -ForegroundColor Green
+Write-Host "Presupuesto de trabajo: aviso/objetivo USD $BudgetTargetUsd; limite absoluto deseado USD $AbsoluteBudgetUsd." -ForegroundColor Yellow
+Write-Host "IMPORTANTE: el corte monetario real debe configurarse en Cloud Billing Spend Caps/Budgets. El contador de $RequestLimit solicitudes es solo un fusible tecnico de emergencia por instancia." -ForegroundColor Yellow
+Write-Host "Recomendacion: spend cap Gemini <= USD 25, Cloud Run <= USD 10 y presupuesto global del proyecto USD $BudgetTargetUsd, dejando margen para Firestore/otros cargos y latencia." -ForegroundColor Yellow
+if ($EnablePatientAuth) { Write-Host "Identidad: Google Identity Platform/Firebase Auth (Google + email/password)." -ForegroundColor Green }
+else { Write-Host "Identidad: desactivada para prueba infra estricta. Usa -EnablePatientAuth en la demo para jueces." -ForegroundColor DarkYellow }
+if ($PublicDemo -and -not $EnablePatientAuth) { Write-Host "ADVERTENCIA: servicio publico sin identidad de paciente. Recomendado solo para una ventana de prueba muy corta." -ForegroundColor Red }
 
+$budgetAck = Read-Host "Confirma que configuraste controles de Billing por debajo de USD $AbsoluteBudgetUsd escribiendo BUDGET"
+if ($budgetAck -ne "BUDGET") { throw "Despliegue cancelado: primero configura el presupuesto/spend caps." }
 $confirmation = Read-Host "Escribe DEPLOY para continuar"
 if ($confirmation -ne "DEPLOY") { throw "Despliegue cancelado." }
 
 Invoke-Gcloud "config" "set" "project" $ProjectId
-
 $services = @(
-    "run.googleapis.com",
-    "cloudbuild.googleapis.com",
-    "artifactregistry.googleapis.com",
-    "firestore.googleapis.com",
-    "secretmanager.googleapis.com",
-    "pubsub.googleapis.com",
-    "cloudscheduler.googleapis.com"
+    "run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com",
+    "firestore.googleapis.com", "secretmanager.googleapis.com", "pubsub.googleapis.com",
+    "cloudscheduler.googleapis.com", "identitytoolkit.googleapis.com"
 )
 Invoke-Gcloud "services" "enable" @services "--project" $ProjectId
 
 Ensure-ServiceAccount $RuntimeServiceAccountName "HealthIA ONE runtime"
 Ensure-ServiceAccount $PushServiceAccountName "HealthIA PubSub push identity"
 Ensure-SecretWithVersion
-
-# Runtime least-privilege roles needed by the application.
 foreach ($role in @("roles/datastore.user", "roles/pubsub.publisher", "roles/logging.logWriter")) {
     Invoke-Gcloud "projects" "add-iam-policy-binding" $ProjectId "--member=serviceAccount:$RuntimeServiceAccount" "--role=$role" "--quiet"
 }
 Invoke-Gcloud "secrets" "add-iam-policy-binding" $SecretName "--project" $ProjectId "--member=serviceAccount:$RuntimeServiceAccount" "--role=roles/secretmanager.secretAccessor" "--quiet"
 
-# Firestore Native is created once. Do not delete it automatically during normal cleanup.
 if (-not (Test-GcloudResource @("firestore", "databases", "describe", "--database=(default)", "--project", $ProjectId))) {
     Invoke-Gcloud "firestore" "databases" "create" "--database=(default)" "--location=$FirestoreLocation" "--type=firestore-native" "--project" $ProjectId "--quiet"
 }
-
 if (-not (Test-GcloudResource @("pubsub", "topics", "describe", $TopicName, "--project", $ProjectId))) {
     Invoke-Gcloud "pubsub" "topics" "create" $TopicName "--project" $ProjectId "--quiet"
 }
 
-$envVars = @(
+$authMode = if ($EnablePatientAuth) { "identity_platform" } else { "local" }
+$envItems = @(
     "GOOGLE_CLOUD_PROJECT=$ProjectId",
     "HEALTHIA_ENV=cloud",
     "HEALTHIA_MODEL=gemini-3.6-flash",
@@ -131,30 +128,31 @@ $envVars = @(
     "HEALTHIA_COST_GUARD_START_ENABLED=true",
     "HEALTHIA_COST_CONTROL_UI=false",
     "HEALTHIA_AI_MAX_OUTPUT_TOKENS=$MaxOutputTokens",
+    "HEALTHIA_CLOUD_BUDGET_TARGET_USD=$BudgetTargetUsd",
+    "HEALTHIA_CLOUD_BUDGET_ABSOLUTE_USD=$AbsoluteBudgetUsd",
     "HEALTHIA_PROACTIVE_ENABLED=false",
     "HEALTHIA_MISSION_RUNTIME=adk",
     "HEALTHIA_AGENTIC_EVENTS_ENABLED=true",
     "HEALTHIA_EVENT_DISPATCH_BACKEND=pubsub",
     "HEALTHIA_PUBSUB_TOPIC=$TopicName",
-    "HEALTHIA_CLOUD_REGION=$Region"
-) -join ","
+    "HEALTHIA_CLOUD_REGION=$Region",
+    "HEALTHIA_AUTH_MODE=$authMode"
+)
+if ($EnablePatientAuth) {
+    $envItems += @(
+        "HEALTHIA_FIREBASE_API_KEY=$FirebaseApiKey",
+        "HEALTHIA_FIREBASE_AUTH_DOMAIN=$FirebaseAuthDomain",
+        "HEALTHIA_FIREBASE_PROJECT_ID=$ProjectId",
+        "HEALTHIA_FIREBASE_APP_ID=$FirebaseAppId"
+    )
+}
+$envVars = $envItems -join ","
 
 $deployArgs = @(
-    "run", "deploy", $ServiceName,
-    "--source", ".",
-    "--project", $ProjectId,
-    "--region", $Region,
-    "--service-account", $RuntimeServiceAccount,
-    "--min-instances", "0",
-    "--max-instances", "1",
-    "--concurrency", "8",
-    "--cpu", "1",
-    "--memory", "512Mi",
-    "--timeout", "60",
-    "--cpu-throttling",
-    "--set-env-vars", $envVars,
-    "--set-secrets", "GEMINI_API_KEY=${SecretName}:latest",
-    "--quiet"
+    "run", "deploy", $ServiceName, "--source", ".", "--project", $ProjectId, "--region", $Region,
+    "--service-account", $RuntimeServiceAccount, "--min-instances", "0", "--max-instances", "1",
+    "--concurrency", "8", "--cpu", "1", "--memory", "512Mi", "--timeout", "60", "--cpu-throttling",
+    "--set-env-vars", $envVars, "--set-secrets", "GEMINI_API_KEY=${SecretName}:latest", "--quiet"
 )
 if ($PublicDemo) { $deployArgs += "--allow-unauthenticated" } else { $deployArgs += "--no-allow-unauthenticated" }
 Invoke-Gcloud @deployArgs
@@ -163,7 +161,6 @@ $url = (& gcloud run services describe $ServiceName --project $ProjectId --regio
 if (-not $url) { throw "Cloud Run no devolvio una URL." }
 $revision = (& gcloud run services describe $ServiceName --project $ProjectId --region $Region --format "value(status.latestReadyRevisionName)").Trim()
 
-# Authenticated Pub/Sub push -> private Cloud Run endpoint.
 Invoke-Gcloud "run" "services" "add-iam-policy-binding" $ServiceName "--project" $ProjectId "--region" $Region "--member=serviceAccount:$PushServiceAccount" "--role=roles/run.invoker" "--quiet"
 $projectNumber = (& gcloud projects describe $ProjectId --format "value(projectNumber)").Trim()
 if (-not $projectNumber) { throw "No se pudo resolver el numero del proyecto." }
@@ -183,7 +180,7 @@ if (-not $SkipScheduler) {
     } else {
         Invoke-Gcloud "scheduler" "jobs" "create" "pubsub" $SchedulerName "--location=$Region" "--project=$ProjectId" "--schedule=0 * * * *" "--topic=$TopicName" "--message-body=$scheduledEvent" "--max-retry-attempts=1" "--quiet"
     }
-    Invoke-Gcloud "scheduler" "jobs" "pause" $SchedulerName "--location=$Region" "--project=$ProjectId" "--quiet"
+    Invoke-Gcloud "scheduler" "jobs" "pause" $SchedulerName "--location=$Region" "--project" $ProjectId "--quiet"
 }
 
 Write-Host ""
@@ -191,11 +188,12 @@ Write-Host "DESPLIEGUE AGENTIC COMPLETADO" -ForegroundColor Green
 Write-Host "Cloud Run URL: $url" -ForegroundColor Cyan
 Write-Host "Revision: $revision" -ForegroundColor Cyan
 Write-Host "Pub/Sub topic: $TopicName" -ForegroundColor Cyan
-Write-Host "Push subscription: $SubscriptionName -> /api/internal/pubsub/mission" -ForegroundColor Cyan
-if (-not $SkipScheduler) { Write-Host "Scheduler: $SchedulerName (PAUSADO; ejecutar manualmente para evidencia)." -ForegroundColor Cyan }
+Write-Host "Fusible tecnico: $RequestLimit solicitudes por instancia; agentes a demanda." -ForegroundColor Cyan
+Write-Host "Objetivo de Billing: USD $BudgetTargetUsd / limite deseado USD $AbsoluteBudgetUsd." -ForegroundColor Cyan
+if (-not $SkipScheduler) { Write-Host "Scheduler: $SchedulerName (PAUSADO)." -ForegroundColor Cyan }
+if ($EnablePatientAuth) { Write-Host "Login: Google + correo/contraseña habilitado. Añade $url a los dominios autorizados de Firebase/Identity Platform." -ForegroundColor Cyan }
 Write-Host ""
-Write-Host "Siguiente paso de evidencia real:" -ForegroundColor White
+Write-Host "Prueba infra estricta (puedes redesplegar con -RequestLimit 6 para reservar solo seis llamadas):" -ForegroundColor White
 Write-Host ".\deployment\capture-cloud-proof.ps1 -ProjectId $ProjectId -Region $Region -ServiceName $ServiceName -SchedulerName $SchedulerName" -ForegroundColor Yellow
-Write-Host ""
 Write-Host "Limpieza al terminar:" -ForegroundColor White
 Write-Host ".\deployment\remove-cloud-demo.ps1 -ProjectId $ProjectId -Region $Region -ServiceName $ServiceName -TopicName $TopicName -SubscriptionName $SubscriptionName -SchedulerName $SchedulerName" -ForegroundColor Yellow
