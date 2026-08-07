@@ -7,12 +7,21 @@ on:
         description: Candidate branch or commit to test
         required: true
         default: kira/event-driven-results-twin-p1
+  pull_request:
+    branches: [main]
+    paths:
+      - "healthia_one/**"
+      - "healthia_agent/**"
+      - "scripts/live_taskmaster_proof.py"
+      - "deployment/**"
+      - "pyproject.toml"
 
 permissions:
   contents: read
 
 jobs:
   taskmaster-proof:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     env:
@@ -26,7 +35,7 @@ jobs:
       HEALTHIA_AUTH_REQUIRED: "true"
       HEALTHIA_ALLOW_REGISTRATION: "true"
       HEALTHIA_LLM_BACKEND: gemini_api
-      HEALTHIA_MODEL: gemini-2.5-flash
+      HEALTHIA_MODEL: gemini-3.5-flash
       HEALTHIA_COST_MODE: guarded
       HEALTHIA_AI_REQUEST_LIMIT: "1"
       HEALTHIA_COST_GUARD_START_ENABLED: "true"
@@ -35,10 +44,10 @@ jobs:
       HEALTHIA_PROACTIVE_ENABLED: "false"
       HEALTHIA_COST_CONTROL_UI: "true"
     steps:
-      - name: Checkout requested candidate
+      - name: Checkout exact candidate
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.candidate_ref }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_ref }}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -52,12 +61,16 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Confirm Vertex configuration without exposing credentials
+      - name: Confirm hackathon-compliant Vertex configuration
         shell: bash
         run: |
           if [ -z "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
             echo "::error title=Google Cloud auth missing::ADC credential file was not created."
             exit 2
+          fi
+          if [ "$HEALTHIA_MODEL" != "gemini-3.5-flash" ]; then
+            echo "::error title=Hackathon model mismatch::Taskmaster proof must run Gemini 3.5 Flash."
+            exit 3
           fi
           echo "### Vertex Taskmaster proof" >> "$GITHUB_STEP_SUMMARY"
           echo "- Project: \`$GOOGLE_CLOUD_PROJECT\`" >> "$GITHUB_STEP_SUMMARY"
@@ -65,6 +78,7 @@ jobs:
           echo "- Model: \`$HEALTHIA_MODEL\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Authentication: **Google Cloud ADC**" >> "$GITHUB_STEP_SUMMARY"
           echo "- Gemini API key: **not used**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Model gate: **Gemini 3.5 hackathon requirement satisfied**" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create and mask ephemeral signing secrets
         shell: bash
