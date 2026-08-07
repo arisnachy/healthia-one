@@ -29,6 +29,19 @@ def test_frontend_sends_verified_identity_token_and_uses_authenticated_event_str
     assert "Agentes a demanda" in app
 
 
+def test_every_patient_module_uses_the_single_authenticated_transport() -> None:
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "window.healthiaFetch = healthiaFetch" in app
+    offenders: list[str] = []
+    for path in WEB.glob("*.js"):
+        if path.name in {"app.js", "auth.js"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "fetch(" in source:
+            offenders.append(path.name)
+    assert offenders == [], f"raw unauthenticated fetch remains in: {offenders}"
+
+
 def test_sidebar_has_one_patient_identity_not_account_plus_patient_duplicates() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert html.count('id="patientName"') == 1
