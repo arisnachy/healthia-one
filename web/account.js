@@ -13,7 +13,7 @@ if (!window.__HEALTHIA_ACCOUNT__) {
     }
 
     function openView(view) {
-      const button = document.querySelector(`[data-open="${view}"]`);
+      const button = document.querySelector(`.main-nav [data-open="${view}"]`);
       if (button) button.click();
     }
 
@@ -68,10 +68,30 @@ if (!window.__HEALTHIA_ACCOUNT__) {
       }
     }
 
+    function protectAuthenticatedNewConsultation() {
+      const button = $("#newConsultation");
+      if (!button) return;
+      button.addEventListener("click", event => {
+        if (!session?.authenticated) return;
+        // The legacy demo button resets synthetic fixtures. A real patient
+        // account must never erase longitudinal state just to begin a new chat.
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        openView("chat");
+        const input = $("#chatInput");
+        if (input) {
+          input.value = "";
+          input.style.height = "auto";
+          input.focus();
+        }
+      }, true);
+    }
+
     async function boot() {
       ensureDialog();
       try { session = await api("/api/auth/session"); } catch { session = null; }
       renderSession();
+      protectAuthenticatedNewConsultation();
       const pill = $("#accountPill");
       pill?.addEventListener("click", () => {
         renderSession();
