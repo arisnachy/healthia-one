@@ -85,7 +85,7 @@ class FakeClient:
 
 def answer_payload(interview: dict) -> str:
     answers = [
-        {"question_id": question["id"], "selected": [question["options"][0]], "detail": ""}
+        {"question_id": question["id"], "question_prompt": question["prompt"], "selected": [question["options"][0]], "detail": ""}
         for question in interview["question_block"]["questions"]
     ]
     return ANSWER_PREFIX + json.dumps(
@@ -151,13 +151,14 @@ window.fetch = async function(path, options={{}}) {{
     if(response.mission) window.__mockSnapshot.missions.push(response.mission);
     if(response.message?.metadata?.clinical_interview?.status==='completed') {{
       const mission=window.__mockSnapshot.missions.find(item=>item.id===response.message.mission_id);
-      if(mission) {{ mission.status='waiting_professional'; mission.closure_evidence=['interview_two_blocks_completed']; }}
+      if(mission) {{ mission.status='waiting_professional'; mission.next_action='Revisar la síntesis clínica y confirmar el nivel de atención con un profesional'; mission.closure_evidence=['interview_two_blocks_completed']; }}
     }}
+    setTimeout(() => window.__mockEventSource?.onmessage?.({{data: JSON.stringify({{type:'state',section:'chat'}})}}), 0);
     return new MockResponse(response);
   }}
   return new MockResponse({{}},200);
 }};
-window.EventSource = class {{ constructor(url){{this.url=url;}} close(){{}} }};
+window.EventSource = class {{ constructor(url){{this.url=url; window.__mockEventSource=this;}} close(){{}} }};
 """
 
 
@@ -246,6 +247,9 @@ def run() -> dict:
         page.wait_for_function("window.__mockChatIndex >= 3")
         page.wait_for_timeout(350)
         require(page.get_by_text("Síntesis para la junta clínica").count() > 0, "final clinical summary is missing")
+        require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final summary lost readable question labels")
+        require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient summary")
+        require(page.get_by_text("Revisar la síntesis clínica y confirmar el nivel de atención con un profesional").count() > 0, "mission card remained stale after completion")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after completion")
         require(not report["console_errors"] and not report["page_errors"], "browser emitted errors")
         page.screenshot(path=str(OUTPUT / "04-final.png"), full_page=True)
@@ -259,6 +263,8 @@ def run() -> dict:
         "two_five_question_blocks": "pass",
         "pending_race_removed": "pass",
         "final_summary": "pass",
+        "readable_summary_labels": "pass",
+        "mission_state_refresh": "pass",
     }
     (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
