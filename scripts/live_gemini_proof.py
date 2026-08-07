@@ -78,6 +78,20 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def fallback_diagnostic(message: dict) -> str:
+    metadata = message.get("metadata") or {}
+    review = metadata.get("judge_review") or {}
+    blockers = review.get("blockers") or []
+    parts = [str(item) for item in blockers if str(item).strip()]
+    if metadata.get("llm_error"):
+        parts.append(str(metadata["llm_error"]))
+    diagnostic = " | ".join(parts) or "no sanitized fallback diagnostic available"
+    secret = os.getenv("GEMINI_API_KEY") or ""
+    if secret:
+        diagnostic = diagnostic.replace(secret, "[redacted]")
+    return diagnostic[:900]
+
+
 def main() -> int:
     required_env = ["GEMINI_API_KEY", "HEALTHIA_SESSION_SECRET", "HEALTHIA_DEVICE_TOKEN_SECRET"]
     missing = [name for name in required_env if not os.getenv(name)]
@@ -101,9 +115,6 @@ def main() -> int:
     email_b = f"live-b-{suffix}@example.test"
 
     try:
-        # Production/CI sessions are Secure cookies. The proof therefore uses an
-        # HTTPS base URL so the test client exercises the real cookie boundary
-        # instead of silently dropping the session on the next request.
         with TestClient(app, base_url="https://healthia.test") as client:
             require(client.get("/api/bootstrap").status_code == 401, "protected API accepted anonymous request")
             proof["checks"].append("anonymous_patient_api_rejected")
@@ -130,7 +141,12 @@ def main() -> int:
             first_message = first.json()["message"]
             first_interview = first_message["metadata"].get("clinical_interview") or {}
             block1 = first_interview.get("question_block") or {}
-            require(first_message["metadata"].get("llm_status") == "dynamic_clinical_questions", f"first block did not come from live Gemini: {first_message['metadata'].get('llm_status')}")
+            first_status = first_message["metadata"].get("llm_status")
+            if first_status != "dynamic_clinical_questions":
+                diagnostic = fallback_diagnostic(first_message)
+                proof["first_clinical_status"] = first_status
+                proof["first_clinical_diagnostic"] = diagnostic
+                raise AssertionError(f"first block did not come from live Gemini: {first_status}; diagnostic: {diagnostic}")
             require(first_interview.get("question_source") == "gemini_dynamic", "first question source not Gemini")
             require(len(block1.get("questions") or []) == 5, "first block is not exactly five questions")
             proof["checks"].append("gemini_adk_first_five_questions")
@@ -141,7 +157,12 @@ def main() -> int:
             second_message = second.json()["message"]
             second_interview = second_message["metadata"].get("clinical_interview") or {}
             block2 = second_interview.get("question_block") or {}
-            require(second_message["metadata"].get("llm_status") == "dynamic_clinical_questions", f"second block did not come from live Gemini: {second_message['metadata'].get('llm_status')}")
+            second_status = second_message["metadata"].get("llm_status")
+            if second_status != "dynamic_clinical_questions":
+                diagnostic = fallback_diagnostic(second_message)
+                proof["second_clinical_status"] = second_status
+                proof["second_clinical_diagnostic"] = diagnostic
+                raise AssertionError(f"second block did not come from live Gemini: {second_status}; diagnostic: {diagnostic}")
             require(second_interview.get("question_source") == "gemini_dynamic", "second question source not Gemini")
             require(len(block2.get("questions") or []) == 5, "second block is not exactly five questions")
             previous = second_interview.get("previous_answers") or []
