@@ -167,7 +167,7 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             ("LUMEN", "Recuperar y explicar la evidencia solicitada", "Conversación anclada al resultado persistido"),
             ("HISTORIA", "Relacionar con la línea de tiempo y el gemelo", "Evitar interpretación aislada"),
             ("ARCHIVUM", "Conservar vínculo con el archivo original", "Procedencia verificable"),
-            ("KIRA", "Preparar preguntas y seguimiento", "Continuidad"),
+            ("KIRA", "Cerrar o mantener abierta la misión según la evidencia", "Continuidad verificable"),
         )
         context = conversational_result_context(state, patient_text)
         if context:
@@ -178,19 +178,26 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             if context["document_id"]:
                 content += "\n\nEl archivo original sigue vinculado a este resultado y puede volver a abrirse desde Resultados."
             evidence = [context["result_id"]]
+            closure_evidence = ["persisted_result_retrieved", "patient_explanation_returned"]
             if context["document_id"]:
                 evidence.append(context["document_id"])
-            next_action = "Continuar la conversación sobre esta evidencia o abrir el original desde Resultados"
+                closure_evidence.append("original_evidence_link_resolved")
+            mission_status = MissionStatus.COMPLETED
+            next_action = "Misión cerrada: resultado recuperado, explicado y vinculado a su evidencia persistida"
         else:
             content = "No veo resultados cargados todavía. Puedes adjuntar un JSON, CSV, TXT, PDF o imagen."
             evidence = []
+            closure_evidence = []
+            mission_status = MissionStatus.ACTIVE
             next_action = "Cargar el resultado que quieres revisar"
         mission = HealthMission(
             title="Comprender resultado de salud",
             mission_type="result_explanation",
+            status=mission_status,
             next_action=next_action,
             evidence_ids=evidence,
             agent_plan=plan,
+            closure_evidence=closure_evidence,
         )
         action_target = "results"
     elif any(word in lower for word in ("documento", "archivo", "expediente", "papel", "informe", "receta")):
