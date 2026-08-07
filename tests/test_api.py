@@ -47,7 +47,7 @@ def test_cost_control_defaults_to_local_zero_spend_and_cannot_be_enabled():
         toggle = client.post("/api/cost-control?enabled=true")
         assert toggle.status_code == 409
         detail = toggle.json()["detail"]
-        assert any(token in detail for token in ("API key", "límite", "modo"))
+        assert any(token in detail for token in ("Google AI", "API key", "límite", "modo"))
 
 
 def test_static_shell_has_collapsible_panels_and_clean_composer():
