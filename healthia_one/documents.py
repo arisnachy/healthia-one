@@ -16,19 +16,23 @@ def safe_filename(filename: str) -> str:
     return cleaned[:180] or "documento"
 
 
+def _filename_tokens(filename: str) -> set[str]:
+    stem = Path(filename).stem.lower()
+    return {token for token in re.split(r"[^a-záéíóúñ0-9]+", stem) if token}
+
+
 def category_from_filename(filename: str) -> DocumentCategory:
-    text = filename.lower()
-    if any(word in text for word in ("lab", "hemograma", "glucosa", "perfil", "resultado", "analitica")):
+    text = Path(filename).stem.lower()
+    tokens = _filename_tokens(filename)
+    if any(word in text for word in ("hemograma", "glucosa", "analitica", "analítica")) or tokens & {"lab", "perfil", "resultado"}:
         return DocumentCategory.LABORATORY
-    if any(
-        word in text
-        for word in (
-            "rx", "radiografia", "tomografia", "tac", "ct", "resonancia", "mri", "imagen",
-            "sono", "ultra", "ecografia", "ecg", "ekg", "electrocard",
-        )
-    ):
+    imaging_long = (
+        "radiografia", "radiografía", "tomografia", "tomografía", "resonancia", "imagen",
+        "sonografia", "sonografía", "ultrasonido", "ecografia", "ecografía", "electrocard",
+    )
+    if any(word in text for word in imaging_long) or tokens & {"rx", "tac", "ct", "mri", "rm", "sono", "ultra", "ecg", "ekg", "xray"}:
         return DocumentCategory.IMAGING
-    if any(word in text for word in ("receta", "prescripcion", "medicamento")):
+    if any(word in text for word in ("receta", "prescripcion", "prescripción", "medicamento")):
         return DocumentCategory.PRESCRIPTION
     if any(word in text for word in ("consulta", "nota", "informe")):
         return DocumentCategory.CONSULTATION
@@ -42,6 +46,7 @@ def build_document(
     size_bytes: int,
     category: str | None = None,
     title: str | None = None,
+    patient_id: str = "patient_demo",
 ) -> ClinicalDocument:
     safe = safe_filename(filename)
     suffix = Path(safe).suffix.lower()
@@ -51,12 +56,13 @@ def build_document(
     document_id = new_id("doc")
     return ClinicalDocument(
         id=document_id,
+        patient_id=patient_id,
         title=(title or Path(safe).stem.replace("_", " ").strip() or "Documento clínico"),
         filename=safe,
         category=selected,
         mime_type=content_type or "application/octet-stream",
         size_bytes=size_bytes,
-        storage_path=f"uploads/patient_demo/{document_id}_{safe}",
+        storage_path=f"uploads/{patient_id}/{document_id}_{safe}",
         status="pending_review" if suffix in MULTIMODAL_EXTENSIONS else "stored",
         summary=(
             "Documento original guardado. El análisis multimodal se ejecuta solo cuando Google AI real está habilitado; HealthIA no inventará contenido no leído."
