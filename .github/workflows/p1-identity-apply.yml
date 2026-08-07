@@ -4,15 +4,14 @@ on:
   push:
     branches:
       - kira/omega-100-agentic-runtime
-    paths:
-      - .github/p1-auth-*.patch
-      - .github/workflows/p1-identity-apply.yml
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
   assemble:
+    if: github.event_name == 'push' || github.head_ref == 'kira/omega-100-agentic-runtime'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +22,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ ! -f .github/p1-auth-1.patch ]; then
+            echo "P1 patch set already assembled."
+            exit 0
+          fi
           for patch in .github/p1-auth-{1..4}.patch; do
             git apply --check "$patch"
             git apply "$patch"
