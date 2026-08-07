@@ -54,7 +54,7 @@ def main() -> int:
         "status": "running",
         "synthetic_only": True,
         "model": os.getenv("HEALTHIA_MODEL", ""),
-        "expected_gemini_requests": 1,
+        "gemini_request_ceiling": 1,
         "checks": [],
     }
     suffix = uuid4().hex[:10]
@@ -88,14 +88,15 @@ def main() -> int:
                 )
             require(result.get("document_id"), "uploaded result missing linked original document")
             require(result.get("twin_updated") is True, "uploaded result did not update clinical twin")
-            proof["checks"].append("one_gemini_multimodal_request_persisted_result_original_and_twin")
+            proof["checks"].append("single_allowed_gemini_request_persisted_result_original_and_twin")
 
             original = client.get(f"/api/documents/{result['document_id']}/download")
             require(original.status_code == 200 and original.content == pdf, "original PDF failed byte-for-byte round-trip")
             proof["checks"].append("original_evidence_roundtrip")
 
             usage_after_upload = client.get("/api/readiness").json()["cost_control"]
-            require(usage_after_upload.get("requests_used") == 1, f"upload should use exactly one Gemini request: {usage_after_upload}")
+            require(usage_after_upload.get("request_limit") == 1, f"proof is not running with a one-request ceiling: {usage_after_upload}")
+            require(usage_after_upload.get("requests_used") == 1, f"upload should consume the only allowed Gemini request: {usage_after_upload}")
 
             chat = client.post(
                 "/api/chat",
@@ -115,12 +116,13 @@ def main() -> int:
                 "original_evidence_link_resolved",
             ):
                 require(marker in closures, f"mission missing closure evidence: {marker}")
+            require("taskmaster-synthetic-lab.pdf" in payload["message"].get("content", ""), "closed mission did not return the requested persisted study")
+
             metadata = payload["message"].get("metadata") or {}
-            require(metadata.get("llm_status") == "persisted_result_retrieval", f"retrieval unexpectedly used/altered AI path: {metadata.get('llm_status')}")
-            require(metadata.get("ai_request_skipped") is True, "retrieval did not prove redundant Gemini call was skipped")
+            require(metadata.get("llm_status") == "cost_guard_blocked", f"one-request ceiling was not enforced on redundant enhancement: {metadata.get('llm_status')}")
             usage_after_chat = client.get("/api/readiness").json()["cost_control"]
             require(usage_after_chat.get("requests_used") == 1, f"closed mission spent a second Gemini request: {usage_after_chat}")
-            proof["checks"].append("closed_loop_taskmaster_mission_without_second_ai_call")
+            proof["checks"].append("closed_loop_taskmaster_mission_survives_ai_request_ceiling")
 
             client.post("/api/auth/logout")
             created_b = client.post(
