@@ -2,7 +2,6 @@ param(
     [Parameter(Mandatory = $true)][string]$ProjectId,
     [string]$Region = "us-central1",
     [string]$ServiceName = "healthia-one-demo",
-    [string]$SecretName = "healthia-gemini-api-key",
     [string]$DeviceSecretName = "healthia-device-token-secret",
     [string]$SessionSecretName = "healthia-session-secret",
     [string]$BucketName = "",
@@ -10,7 +9,8 @@ param(
     [switch]$DeleteBucket,
     [switch]$DeleteSecret,
     [switch]$DeleteRuntimeServiceAccount,
-    [switch]$DeleteProject
+    [switch]$DeleteProject,
+    [switch]$Confirmed
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,14 +28,16 @@ if ($DeleteBucket) {
     Write-Host "Tambien se eliminara gs://$BucketName y TODA la evidencia sintetica de demo que contenga." -ForegroundColor Red
 }
 if ($DeleteSecret) {
-    Write-Host "Tambien se eliminaran $SecretName, $DeviceSecretName y $SessionSecretName." -ForegroundColor Red
+    Write-Host "Tambien se eliminaran $DeviceSecretName y $SessionSecretName." -ForegroundColor Red
 }
 if ($DeleteProject) {
     Write-Host "Tambien se programara la eliminacion COMPLETA del proyecto." -ForegroundColor Red
 }
-$confirmation = Read-Host "Escribe DELETE para continuar"
-if ($confirmation -ne "DELETE") {
-    throw "Limpieza cancelada."
+if (-not $Confirmed) {
+    $confirmation = Read-Host "Escribe DELETE para continuar"
+    if ($confirmation -ne "DELETE") {
+        throw "Limpieza cancelada."
+    }
 }
 
 & gcloud run services delete $ServiceName --project $ProjectId --region $Region --quiet | Out-Host
@@ -52,7 +54,7 @@ if ($DeleteBucket) {
 }
 
 if ($DeleteSecret) {
-    foreach ($name in @($SecretName, $DeviceSecretName, $SessionSecretName)) {
+    foreach ($name in @($DeviceSecretName, $SessionSecretName)) {
         & gcloud secrets delete $name --project $ProjectId --quiet | Out-Host
         if ($LASTEXITCODE -ne 0) {
             Write-Host "No se pudo eliminar $name o ya no existe." -ForegroundColor Yellow
@@ -73,6 +75,6 @@ if ($DeleteProject) {
     Write-Host "Proyecto programado para eliminacion." -ForegroundColor Green
 } else {
     Write-Host "Cloud Run eliminado." -ForegroundColor Green
-    Write-Host "Firestore, secretos, Artifact Registry y otros recursos siguen existiendo salvo que los hayas eliminado explicitamente." -ForegroundColor Yellow
-    Write-Host "Revisa Cloud Billing y Resource Manager. Usa -DeleteProject solo si este proyecto se creo exclusivamente para la demo." -ForegroundColor Yellow
+    Write-Host "Firestore, secretos, bucket y Artifact Registry siguen existiendo salvo eliminacion explicita." -ForegroundColor Yellow
+    Write-Host "Revisa Cloud Billing y Resource Manager. Usa -DeleteProject solo si el proyecto es descartable." -ForegroundColor Yellow
 }
