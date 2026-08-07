@@ -23,7 +23,6 @@ const refs = {
   signOutButton: $("#signOutButton"), accountMeta: $("#accountMeta"), accountAvatar: $("#accountAvatar")
 };
 
-
 let refreshPromise = null;
 let refreshQueued = false;
 let eventStream = null;
@@ -37,7 +36,6 @@ function safeFocusComposer() {
   refs.chatInput?.focus();
   refs.chatInput?.setSelectionRange(refs.chatInput.value.length, refs.chatInput.value.length);
 }
-
 
 function publicName(value) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -104,6 +102,13 @@ async function api(path, options = {}) {
     throw new Error(detail);
   }
   return response.json();
+}
+
+function upsertMission(mission) {
+  if (!mission || !state.data) return;
+  const index = state.data.missions.findIndex(item => item.id === mission.id);
+  if (index >= 0) state.data.missions[index] = mission;
+  else state.data.missions.push(mission);
 }
 
 function renderMessage(message) {
@@ -177,7 +182,7 @@ function renderContext() {
 function renderToday() {
   const proactive = state.data.messages.filter(message => message.metadata?.proactive);
   refs.todayBadge.textContent = proactive.length;
-  refs.todayList.innerHTML = proactive.slice().reverse().map(message => `<article class="data-card"><header><h3>${escapeHtml(publicName(message.author))}</h3><small>${timeLabel(message.created_at)}</small></header><div>${renderMarkdown(message.content)}</div></article>`).join("") || `<article class="data-card"><h3>Todo tranquilo</h3><p>No hay nuevas intervenciones proactivas.</p></article>`;
+  refs.todayList.innerHTML = proactive.slice().reverse().map(message => `<article class="data-card"><header><h3>${escapeHtml(publicName(message.author))}</h3><small>${timeLabel(message.created_at)}</small></header><div>${renderMarkdown(message.content)}</div></article>`).join("") || `<article class="data-card"><h3>Todo tranquilo</h3><p>HealthIA espera a que inicies la conversación.</p></article>`;
 }
 
 function renderMeasurements() {
@@ -189,7 +194,26 @@ function renderMeasurements() {
 }
 
 function renderResults() {
-  refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => `<article class="data-card"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} valores</p><div>${renderMarkdown(result.explanation)}</div></article>`).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
+  refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => `<article class="data-card" data-result-id="${escapeHtml(result.id)}"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} valores</p><div>${renderMarkdown(result.explanation)}</div><button type="button" class="secondary result-original" data-result-file="${escapeHtml(result.id)}">Ver archivo original</button></article>`).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
+}
+
+async function openResultFile(resultId) {
+  const preview = window.open("", "_blank");
+  try {
+    const response = await healthiaFetch(`/api/results/${encodeURIComponent(resultId)}/file`);
+    if (!response.ok) throw new Error(`No se pudo abrir el archivo (${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    if (preview) preview.location.href = url;
+    else {
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.target = "_blank"; anchor.rel = "noopener"; anchor.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) {
+    preview?.close();
+    showToast(error.message);
+  }
 }
 
 function publicRuntime(runtime) {
@@ -224,7 +248,7 @@ function renderMissionRuns() {
 }
 
 function renderMissions() {
-  refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} módulos · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán cuando HealthIA detecte o reciba un asunto de seguimiento.</p></article>`;
+  refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} módulos · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán solo cuando exista trabajo real pendiente.</p></article>`;
   renderMissionRuns();
 }
 
@@ -262,12 +286,12 @@ async function sendMessage(text) {
   refs.chatInput.value = "";
   refs.chatInput.style.height = "auto";
   setSendState();
-  refs.agentStatus.textContent = "HealthIA organizando el siguiente paso…";
+  refs.agentStatus.textContent = "HealthIA revisando el contexto…";
   const patient = {id:`local_${Date.now()}`, role:"patient", author:state.data.profile.display_name, content:clean, created_at:new Date().toISOString(), risk_level:"info", agent_plan:[]};
   state.data.messages.push(patient); renderMessage(patient); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
   try {
     const response = await api("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:clean})});
-    if (response.mission) state.data.missions.push(response.mission);
+    upsertMission(response.mission);
     state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
   } catch (error) { showToast(error.message); }
   refs.agentStatus.textContent = "Agentes a demanda";
@@ -277,10 +301,11 @@ async function sendMessage(text) {
 async function upload(file) {
   if (!file) return;
   const form = new FormData(); form.append("file", file);
-  refs.agentStatus.textContent = "HealthIA revisando el archivo…";
+  refs.agentStatus.textContent = "HealthIA identificando el resultado…";
   try {
     const result = await api("/api/results/upload", {method:"POST", body:form});
-    state.data.results.push(result); renderResults(); renderContext(); setView("results"); showToast("Resultado guardado y procesado.");
+    state.data.results.push(result); renderResults(); renderContext(); setView("results");
+    showToast(result.status === "parsed" ? "Resultado guardado e interpretado con procedencia." : "Resultado guardado; la interpretación quedó pendiente sin inventar datos.");
   } catch (error) { showToast(error.message); }
   refs.agentStatus.textContent = "Agentes a demanda";
 }
@@ -314,11 +339,10 @@ function handleEventPayload(payload) {
   if (payload.type === "message" && !state.data.messages.some(item => item.id === payload.message.id)) {
     state.data.messages.push(payload.message); renderMessage(payload.message); renderToday();
     refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
-    showToast("HealthIA completó una nueva acción autorizada.");
   } else if (payload.type === "state") {
     clearTimeout(handleEventPayload.refreshTimer);
     handleEventPayload.refreshTimer = setTimeout(() => refresh(), 120);
-  } else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
+  } else if (payload.type === "runtime_error") showToast("Una ejecución registrada reportó un error.");
 }
 
 async function connectEvents() {
@@ -355,6 +379,10 @@ $$('[data-dialog]').forEach(button => button.addEventListener("click", () => ope
 refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
 refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
 refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
+refs.resultList?.addEventListener("click", event => {
+  const button = event.target.closest("[data-result-file]");
+  if (button) openResultFile(button.dataset.resultFile);
+});
 refs.runCheck.addEventListener("click", async () => {
   refs.agentStatus.textContent = "Actualizando evidencia operacional…";
   try {
