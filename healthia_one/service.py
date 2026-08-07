@@ -43,6 +43,7 @@ from healthia_one.patient_control import maybe_control_response
 from healthia_one.proactive import evaluate_state
 from healthia_one.store import FirestoreStore, JsonStore, MemoryStore, StateStore
 from healthia_one.tenant import current_patient_id
+from healthia_one.twin_runtime import record_measurement_in_state, record_result_in_state
 
 
 logger = logging.getLogger("healthia.agentic")
@@ -176,6 +177,12 @@ def seed_state() -> PatientState:
             content="Hola, Ana. Ya revisé tus datos recientes. ¿Qué te gustaría revisar hoy?",
         )
     ]
+    for item in state.vitals:
+        record_measurement_in_state(state, item, "vital")
+    for item in state.weights:
+        record_measurement_in_state(state, item, "weight")
+    for item in state.activity:
+        record_measurement_in_state(state, item, "activity")
     audit(
         state,
         actor="system",
@@ -324,6 +331,16 @@ class HealthIAService:
             sort_key = SORT_KEYS.get(collection)
             if sort_key:
                 values.sort(key=sort_key)
+            if collection == "results":
+                record_result_in_state(state, item)
+            elif collection in {"vitals", "weights", "activity", "medication_checkins"}:
+                kind = {
+                    "vitals": "vital",
+                    "weights": "weight",
+                    "activity": "activity",
+                    "medication_checkins": "medication_checkin",
+                }[collection]
+                record_measurement_in_state(state, item, kind)
             audit(state, actor=actor, action=action, resource_type=section, resource_id=getattr(item, "id", ""))
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": section})
