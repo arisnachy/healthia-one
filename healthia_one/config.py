@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     llm_backend: str = "mock"
     store_backend: str = "json"
     data_path: Path = Path(".healthia-one/state.json")
+    blob_backend: str = "local"
+    result_bucket: str = ""
     # Event-driven by default: the twin persists, workers wake only for an explicit
     # patient action or an authorized external event. A periodic loop is opt-in.
     proactive_interval_seconds: int = 20
@@ -52,6 +54,12 @@ class Settings(BaseSettings):
     @property
     def auth_required(self) -> bool:
         return self.auth_mode == "identity_platform"
+
+    @property
+    def durable_result_storage_ready(self) -> bool:
+        if self.blob_backend == "local":
+            return self.env == "local"
+        return self.blob_backend == "gcs" and bool(self.result_bucket.strip())
 
 
 settings = Settings()
