@@ -34,18 +34,24 @@ DIRECT_SECTIONS = {
     "mi genograma",
     "mi familia",
     "mi linea de salud",
+    "mi linea de tiempo",
     "mi cronologia",
 }
 
 DIRECT_PREFIXES = (
-    "muestrame mis ",
-    "mostrar mis ",
-    "abre mis ",
-    "abrir mis ",
-    "lista mis ",
-    "listar mis ",
-    "quiero ver mis ",
-    "llevame a mis ",
+    "muestrame mi ", "muestrame mis ",
+    "mostrar mi ", "mostrar mis ",
+    "ensename mi ", "ensename mis ",
+    "abre mi ", "abre mis ",
+    "abrir mi ", "abrir mis ",
+    "lista mi ", "lista mis ",
+    "listar mi ", "listar mis ",
+    "quiero ver mi ", "quiero ver mis ",
+    "llevame a mi ", "llevame a mis ",
+    "organiza mi ", "organiza mis ",
+    "organizar mi ", "organizar mis ",
+    "prepara mi proxima consulta", "preparar mi proxima consulta",
+    "prepara mi consulta", "preparar mi consulta",
 )
 
 
