@@ -5,47 +5,87 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   vertex-probe:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     env:
-      VERTEX_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_CLOUD_PROJECT: healthia-6088a
       GOOGLE_CLOUD_LOCATION: global
-      VERTEX_MODEL: gemini-3.5-flash
+      VERTEX_MODEL: gemini-2.5-flash
+      WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER || secrets.WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT || secrets.WIF_SERVICE_ACCOUNT }}
+      GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+
     steps:
-      - uses: actions/setup-python@v5
+      - name: Detect Google Cloud authentication path
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$WIF_PROVIDER" && -n "$WIF_SERVICE_ACCOUNT" ]]; then
+            echo "mode=wif" >> "$GITHUB_OUTPUT"
+            echo "auth_mode=workload_identity_federation" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -n "$GCP_CREDENTIALS" ]]; then
+            echo "mode=json" >> "$GITHUB_OUTPUT"
+            echo "auth_mode=service_account_json" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "mode=missing" >> "$GITHUB_OUTPUT"
+            echo "::error title=Google Cloud credentials missing::Configure GCP_CREDENTIALS or the WIF provider/service-account secrets. Vertex AI does not use GEMINI_API_KEY for this authenticated project path."
+            exit 2
+          fi
+
+      - name: Authenticate with Workload Identity Federation
+        if: steps.detect.outputs.mode == 'wif'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Authenticate with service-account JSON
+        if: steps.detect.outputs.mode == 'json'
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ env.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install Google Gen AI SDK
         run: python -m pip install --quiet --upgrade google-genai
 
-      - name: Verify Vertex AI with encrypted Cloud key
+      - name: Verify Vertex AI through project billing
         shell: bash
         run: |
-          if [ -z "$VERTEX_API_KEY" ]; then
-            echo "::error title=Vertex key missing::The repository secret GEMINI_API_KEY is empty."
-            exit 2
-          fi
           python - <<'PY'
           import os
-          import sys
           from google import genai
           from google.genai import types
 
+          project = os.environ["GOOGLE_CLOUD_PROJECT"]
+          location = os.environ["GOOGLE_CLOUD_LOCATION"]
+          model = os.environ["VERTEX_MODEL"]
+
           try:
-              client = genai.Client(vertexai=True, api_key=os.environ["VERTEX_API_KEY"])
+              client = genai.Client(vertexai=True, project=project, location=location)
               response = client.models.generate_content(
-                  model=os.environ["VERTEX_MODEL"],
+                  model=model,
                   contents="Reply only with HEALTHIA_VERTEX_OK",
-                  config=types.GenerateContentConfig(max_output_tokens=32),
+                  config=types.GenerateContentConfig(
+                      max_output_tokens=128,
+                      temperature=0,
+                  ),
               )
               text = (response.text or "").strip()
               if "HEALTHIA_VERTEX_OK" not in text:
-                  raise RuntimeError(f"unexpected_response={text[:120]!r}")
+                  candidates = response.candidates or []
+                  finish = getattr(candidates[0], "finish_reason", None) if candidates else None
+                  raise RuntimeError(f"unexpected_response={text[:120]!r} finish_reason={finish!r}")
           except Exception as exc:
               detail = f"{type(exc).__name__}: {exc}".replace("\n", " ")[:900]
               print(f"HEALTHIA_VERTEX_ERROR {detail}")
@@ -53,15 +93,16 @@ jobs:
               raise
 
           print("HEALTHIA_VERTEX_READY")
-          print(f"project={os.environ['GOOGLE_CLOUD_PROJECT']}")
-          print(f"location={os.environ['GOOGLE_CLOUD_LOCATION']}")
-          print(f"model={os.environ['VERTEX_MODEL']}")
-          print("auth=encrypted_api_key")
+          print(f"project={project}")
+          print(f"location={location}")
+          print(f"model={model}")
+          print("auth=google_cloud_credentials")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
               fh.write("### Vertex AI credit probe passed\n\n")
-              fh.write(f"- Project: `{os.environ['GOOGLE_CLOUD_PROJECT']}`\n")
-              fh.write(f"- Location: `{os.environ['GOOGLE_CLOUD_LOCATION']}`\n")
-              fh.write(f"- Model: `{os.environ['VERTEX_MODEL']}`\n")
+              fh.write(f"- Project: `{project}`\n")
+              fh.write(f"- Location: `{location}`\n")
+              fh.write(f"- Model: `{model}`\n")
+              fh.write("- Authentication: **Google Cloud credentials**\n")
               fh.write("- Real Vertex AI model request: **passed**\n")
-              fh.write("- API key value: **not printed**\n")
+              fh.write("- Gemini API key: **not used**\n")
           PY
