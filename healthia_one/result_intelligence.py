@@ -4,6 +4,7 @@ import asyncio
 import json
 import mimetypes
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,13 @@ INLINE_MEDIA_TYPES = {
     "image/heic",
     "image/heif",
 }
+
+ARTIFACT_TYPES = {
+    "laboratory", "radiology_report", "xray_image", "ct_image", "mri_image",
+    "ultrasound_image", "ecg", "pathology", "other",
+}
+VERIFICATION_TYPES = {"document_reported", "ai_observed_unverified", "mixed_unverified"}
+CONFIDENCE_TYPES = {"low", "medium", "high"}
 
 RESULT_ANALYSIS_PROMPT = """
 You are HealthIA Result Intelligence. Inspect one patient-uploaded health artifact and return ONLY JSON.
@@ -41,7 +49,7 @@ Return exactly this JSON shape:
   "panel": "short patient-facing label",
   "modality": "",
   "anatomical_region": "",
-  "exam_date": "",
+  "exam_date": "YYYY-MM-DD when explicitly visible, otherwise empty",
   "summary": "short factual summary",
   "reported_impression": "text explicitly present in the uploaded report, or empty",
   "ai_observations": ["observation 1"],
@@ -80,6 +88,28 @@ def _clean_string(value: Any, limit: int = 1000) -> str:
     return str(value or "").strip()[:limit]
 
 
+def _clean_list(value: Any, limit: int = 700, count: int = 40) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [cleaned for item in value[:count] if (cleaned := _clean_string(item, limit))]
+
+
+def _exam_date(value: Any) -> date | None:
+    text = _clean_string(value, 40)
+    match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+    if not match:
+        return None
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+def _enum_value(value: Any, allowed: set[str], fallback: str) -> str:
+    candidate = _clean_string(value, 80).lower()
+    return candidate if candidate in allowed else fallback
+
+
 def _measurement_items(payload: dict[str, Any]) -> list[ResultItem]:
     items: list[ResultItem] = []
     for raw in payload.get("measurements") or []:
@@ -106,17 +136,17 @@ def _measurement_items(payload: dict[str, Any]) -> list[ResultItem]:
 
 
 def _render_explanation(payload: dict[str, Any], *, filename: str) -> str:
-    artifact_type = _clean_string(payload.get("artifact_type"), 80) or "other"
+    artifact_type = _enum_value(payload.get("artifact_type"), ARTIFACT_TYPES, "other")
     modality = _clean_string(payload.get("modality"), 100)
     region = _clean_string(payload.get("anatomical_region"), 160)
     exam_date = _clean_string(payload.get("exam_date"), 80)
     summary = _clean_string(payload.get("summary"), 1600)
     reported = _clean_string(payload.get("reported_impression"), 1800)
-    observations = [_clean_string(item, 700) for item in (payload.get("ai_observations") or []) if _clean_string(item, 700)]
-    safety = [_clean_string(item, 700) for item in (payload.get("safety_flags") or []) if _clean_string(item, 700)]
-    limitations = [_clean_string(item, 700) for item in (payload.get("quality_limitations") or []) if _clean_string(item, 700)]
-    confidence = _clean_string(payload.get("confidence"), 20) or "low"
-    verification = _clean_string(payload.get("verification_status"), 80) or "ai_observed_unverified"
+    observations = _clean_list(payload.get("ai_observations"))
+    safety = _clean_list(payload.get("safety_flags"))
+    limitations = _clean_list(payload.get("quality_limitations"))
+    confidence = _enum_value(payload.get("confidence"), CONFIDENCE_TYPES, "low")
+    verification = _enum_value(payload.get("verification_status"), VERIFICATION_TYPES, "ai_observed_unverified")
 
     details = [f"**Tipo identificado:** {artifact_type}"]
     if modality:
@@ -141,10 +171,32 @@ def _render_explanation(payload: dict[str, Any], *, filename: str) -> str:
         [
             "",
             f"**Procedencia:** {verification} · confianza {confidence}.",
-            "La extracción de IA queda separada de un diagnóstico confirmado. Conserva el archivo original para que pueda revisarse nuevamente.",
+            "La extracción de IA queda separada de un diagnóstico confirmado. El archivo original se conserva para poder revisarlo nuevamente.",
         ]
     )
     return "\n".join(lines)
+
+
+def apply_analysis_payload(result: HealthResult, payload: dict[str, Any], *, request_number: int) -> HealthResult:
+    result.panel = _clean_string(payload.get("panel"), 180) or "Resultado multimodal"
+    result.artifact_type = _enum_value(payload.get("artifact_type"), ARTIFACT_TYPES, "other")  # type: ignore[assignment]
+    result.modality = _clean_string(payload.get("modality"), 120)
+    result.anatomical_region = _clean_string(payload.get("anatomical_region"), 180)
+    result.exam_date = _exam_date(payload.get("exam_date"))
+    result.reported_impression = _clean_string(payload.get("reported_impression"), 4000)
+    result.ai_observations = _clean_list(payload.get("ai_observations"), 1000, 50)
+    result.safety_flags = _clean_list(payload.get("safety_flags"), 1000, 30)
+    result.quality_limitations = _clean_list(payload.get("quality_limitations"), 1000, 30)
+    result.ai_confidence = _enum_value(payload.get("confidence"), CONFIDENCE_TYPES, "low")  # type: ignore[assignment]
+    result.verification_status = _enum_value(
+        payload.get("verification_status"), VERIFICATION_TYPES, "ai_observed_unverified"
+    )  # type: ignore[assignment]
+    result.items = _measurement_items(payload)
+    result.status = "parsed"
+    result.explained = True
+    result.explanation = _render_explanation(payload, filename=result.filename)
+    result.source = SourceRef(source_type="AI_extraction", source_id=f"gemini_multimodal:{request_number}", verified=False)
+    return result
 
 
 async def analyze_uploaded_result(
@@ -156,6 +208,7 @@ async def analyze_uploaded_result(
     mime_type: str,
 ) -> HealthResult:
     """Use one guarded Gemini request only when deterministic parsing is insufficient."""
+    result.original_mime_type = mime_type
     if result.status != "pending_multimodal":
         return result
     if not supports_inline_multimodal(mime_type):
@@ -222,13 +275,7 @@ async def analyze_uploaded_result(
         responder.last_error = f"{type(exc).__name__}: {exc}"[:500]
         return result
 
-    panel = _clean_string(payload.get("panel"), 180)
-    result.panel = panel or "Resultado multimodal"
-    result.items = _measurement_items(payload)
-    result.status = "parsed"
-    result.explained = True
-    result.explanation = _render_explanation(payload, filename=result.filename)
-    result.source = SourceRef(source_type="AI_extraction", source_id=f"gemini_multimodal:{request_number}", verified=False)
+    apply_analysis_payload(result, payload, request_number=request_number)
     responder.last_status = "result_multimodal_completed"
     responder.last_error = ""
     return result
