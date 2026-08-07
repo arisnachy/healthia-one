@@ -74,6 +74,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-cloud-demo.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/remove-cloud-demo.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/capture-cloud-proof.ps1")) | Out-Null
       - name: Build verified release archive
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
       - name: Verify release archive
