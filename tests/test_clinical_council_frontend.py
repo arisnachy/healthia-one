@@ -17,6 +17,8 @@ def test_clinical_council_frontend_is_loaded() -> None:
     assert "Se activan según la consulta" in script
     assert "Coordinación clínica" in script
     assert "requestSubmit" in script
+    assert "data-question-prompt" in script
+    assert "question_prompt: fieldset.dataset.questionPrompt" in script
     assert ".left-collapsed .main-nav button" in styles
     assert ".patient-chip { display: none !important; }" in styles
 
