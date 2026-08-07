@@ -1,0 +1,67 @@
+name: Vertex AI credit probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vertex-probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      VERTEX_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_CLOUD_PROJECT: healthia-6088a
+      GOOGLE_CLOUD_LOCATION: global
+      VERTEX_MODEL: gemini-3.5-flash
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Google Gen AI SDK
+        run: python -m pip install --quiet --upgrade google-genai
+
+      - name: Verify Vertex AI with encrypted Cloud key
+        shell: bash
+        run: |
+          if [ -z "$VERTEX_API_KEY" ]; then
+            echo "::error title=Vertex key missing::The repository secret GEMINI_API_KEY is empty."
+            exit 2
+          fi
+          python - <<'PY'
+          import os
+          import sys
+          from google import genai
+          from google.genai import types
+
+          try:
+              client = genai.Client(vertexai=True, api_key=os.environ["VERTEX_API_KEY"])
+              response = client.models.generate_content(
+                  model=os.environ["VERTEX_MODEL"],
+                  contents="Reply only with HEALTHIA_VERTEX_OK",
+                  config=types.GenerateContentConfig(max_output_tokens=32),
+              )
+              text = (response.text or "").strip()
+              if "HEALTHIA_VERTEX_OK" not in text:
+                  raise RuntimeError(f"unexpected_response={text[:120]!r}")
+          except Exception as exc:
+              detail = f"{type(exc).__name__}: {exc}".replace("\n", " ")[:900]
+              print(f"HEALTHIA_VERTEX_ERROR {detail}")
+              print(f"::error title=Vertex AI probe failed::{detail}")
+              raise
+
+          print("HEALTHIA_VERTEX_READY")
+          print(f"project={os.environ['GOOGLE_CLOUD_PROJECT']}")
+          print(f"location={os.environ['GOOGLE_CLOUD_LOCATION']}")
+          print(f"model={os.environ['VERTEX_MODEL']}")
+          print("auth=encrypted_api_key")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("### Vertex AI credit probe passed\n\n")
+              fh.write(f"- Project: `{os.environ['GOOGLE_CLOUD_PROJECT']}`\n")
+              fh.write(f"- Location: `{os.environ['GOOGLE_CLOUD_LOCATION']}`\n")
+              fh.write(f"- Model: `{os.environ['VERTEX_MODEL']}`\n")
+              fh.write("- Real Vertex AI model request: **passed**\n")
+              fh.write("- API key value: **not printed**\n")
+          PY
