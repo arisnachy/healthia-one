@@ -5,10 +5,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
+from healthia_one.adk_gemini import AdkGeminiResponder
 from healthia_one.config import Settings
 from healthia_one.continuity import evaluate_continuity
 from healthia_one.devices import ingest_health_connect_batch
-from healthia_one.gemini import GeminiResponder
 from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
 from healthia_one.models import (
     ActivityRecord,
@@ -180,7 +180,7 @@ class HealthIAService:
         self.settings = settings
         self.store = self._build_store()
         self.broker = EventBroker()
-        self.gemini = GeminiResponder(settings)
+        self.gemini = AdkGeminiResponder(settings)
         self._mutation_lock = asyncio.Lock()
 
     def _build_store(self) -> StateStore:
