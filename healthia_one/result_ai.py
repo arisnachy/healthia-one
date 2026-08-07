@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
@@ -110,12 +111,12 @@ def _generate_analysis(responder, state: PatientState, filename: str, mime_type:
     interaction = responder._get_client().interactions.create(
         model=responder.settings.model,
         input=[
-            {"type": "text", "text": __import__("json").dumps(prompt, ensure_ascii=False)},
+            {"type": "text", "text": json.dumps(prompt, ensure_ascii=False)},
             _media_input(filename, mime_type, content),
         ],
         system_instruction=RESULT_ANALYSIS_SYSTEM_INSTRUCTION,
         generation_config={
-            "max_output_tokens": min(max(responder.cost_guard.max_output_tokens, 700), 1400),
+            "max_output_tokens": min(responder.cost_guard.max_output_tokens, 1400),
             "thinking_level": "minimal",
         },
         store=False,
