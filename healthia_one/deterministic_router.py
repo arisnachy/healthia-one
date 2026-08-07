@@ -11,6 +11,7 @@ from healthia_one.models import (
     PatientState,
     RiskLevel,
 )
+from healthia_one.result_search import conversational_result_context
 from healthia_one.safety import assess_text
 
 
@@ -163,23 +164,40 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             agent_plan=plan,
         )
         action_target = "documents"
-    elif any(word in lower for word in ("resultado", "laboratorio", "analítica", "análisis")):
+    elif any(
+        word in lower
+        for word in (
+            "resultado", "laboratorio", "analítica", "analisis", "análisis", "tac", "tomografía", "tomografia",
+            "tc", "ct", "resonancia", "mri", "rm", "sonografía", "sonografia", "ecografía", "ecografia",
+            "ultrasonido", "ecg", "ekg", "electrocardiograma", "radiografía", "radiografia", "rx", "biopsia",
+        )
+    ):
         plan = _plan(
-            ("LUMEN", "Localizar y explicar resultados", "Lenguaje comprensible"),
-            ("HISTORIA", "Comparar con la línea de tiempo", "Evitar interpretación aislada"),
+            ("LUMEN", "Recuperar y explicar la evidencia solicitada", "Conversación grounded en el resultado persistido"),
+            ("HISTORIA", "Relacionar con la línea de tiempo y el gemelo", "Evitar interpretación aislada"),
+            ("ARCHIVUM", "Conservar vínculo con el archivo original", "Procedencia verificable"),
             ("KIRA", "Preparar preguntas y seguimiento", "Continuidad"),
         )
-        latest = state.results[-1] if state.results else None
-        if latest:
-            content = latest.explanation or f"Encontré **{latest.filename}**, pero todavía está pendiente de explicación verificable."
-            evidence = [latest.id]
+        context = conversational_result_context(state, patient_text)
+        if context:
+            content = (
+                f"Encontré **{context['panel']}** (`{context['filename']}`), cargado el **{context['uploaded_at'][:10]}**.\n\n"
+                f"{context['explanation'] or 'El resultado está guardado, pero todavía no tiene una explicación verificable.'}"
+            )
+            if context["document_id"]:
+                content += "\n\nEl archivo original sigue vinculado a este resultado y puede volver a abrirse desde Resultados."
+            evidence = [context["result_id"]]
+            if context["document_id"]:
+                evidence.append(context["document_id"])
+            next_action = "Continuar la conversación sobre esta evidencia o abrir el original desde Resultados"
         else:
             content = "No veo resultados cargados todavía. Puedes adjuntar un JSON, CSV, TXT, PDF o imagen."
             evidence = []
+            next_action = "Cargar el resultado que quieres revisar"
         mission = HealthMission(
             title="Comprender resultado de salud",
             mission_type="result_explanation",
-            next_action="Esperar archivo o confirmar comprensión",
+            next_action=next_action,
             evidence_ids=evidence,
             agent_plan=plan,
         )
