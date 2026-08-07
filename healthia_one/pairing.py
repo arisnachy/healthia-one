@@ -64,6 +64,11 @@ class DevicePairingManager:
             if event is not None:
                 event.set()
 
+    def _cleanup(self) -> None:
+        """Compatibility wrapper used by tests and maintenance probes."""
+        with self._lock:
+            self._cleanup_unlocked()
+
     def create(self, patient_id: str = "patient_demo") -> dict:
         with self._lock:
             self._cleanup_unlocked()
