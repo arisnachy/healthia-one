@@ -21,6 +21,7 @@ Reglas de herramientas:
 3. Ejecuta una herramienta opcional solo si el caso realmente necesita esa información.
 4. No inventes resultados de herramientas. Usa exclusivamente lo que las funciones devuelven.
 5. No uses una herramienta como decoración; cada llamada debe cambiar qué preguntas haces o qué falta aclarar.
+6. No des la respuesta final hasta haber ejecutado las dos herramientas obligatorias.
 
 Reglas de memoria y naturalidad:
 - Trata chief_complaint y previous_answers como memoria clínica acumulada, no como texto decorativo.
@@ -85,10 +86,10 @@ def _answer_payload(previous_answers: list[dict[str, Any]]) -> list[dict[str, An
 class AdkClinicalRuntime:
     """Per-request ADK coordinator over the real authorized PatientState.
 
-    The ADK model chooses which deterministic HealthIA tools to invoke. Tool
-    closures capture only the current request's authorized state; no static demo
-    patient snapshot is used. The executed tool list, not model self-report, is
-    returned as public orchestration evidence.
+    The ADK model chooses optional tools. Interview and safety are hard runtime
+    requirements: if the first ADK turn omits either, the same ADK Runner/session
+    receives a corrective turn and must execute the missing tools before a plan
+    can be accepted. The executed tool list, not model self-report, is evidence.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -241,28 +242,58 @@ class AdkClinicalRuntime:
                 "must_not_diagnose_or_prescribe": True,
             },
         }
-        message = types.Content(
-            role="user",
-            parts=[types.Part(text=json.dumps(prompt, ensure_ascii=False, default=str))],
-        )
-        final_text = ""
-        event_count = 0
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session_id,
-            new_message=message,
-        ):
-            event_count += 1
-            content = getattr(event, "content", None)
-            for part in getattr(content, "parts", None) or []:
-                text = getattr(part, "text", None)
-                if isinstance(text, str) and text.strip():
-                    final_text = text.strip()
 
-        if "interview" not in executed_roles or "safety" not in executed_roles:
-            raise ValueError("ADK no ejecutó las herramientas obligatorias de entrevista y seguridad")
+        event_count = 0
+
+        async def run_turn(text: str) -> str:
+            nonlocal event_count
+            message = types.Content(role="user", parts=[types.Part(text=text)])
+            final_text = ""
+            async for event in runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=message,
+            ):
+                event_count += 1
+                content = getattr(event, "content", None)
+                for part in getattr(content, "parts", None) or []:
+                    part_text = getattr(part, "text", None)
+                    if isinstance(part_text, str) and part_text.strip():
+                        final_text = part_text.strip()
+            return final_text
+
+        final_text = await run_turn(json.dumps(prompt, ensure_ascii=False, default=str))
+
+        mandatory = ("interview", "safety")
+        missing = [role for role in mandatory if role not in executed_roles]
+        if missing:
+            missing_tools = [
+                "inspect_interview_requirements" if role == "interview" else "inspect_safety_context"
+                for role in missing
+            ]
+            correction = {
+                "task": "repair_missing_mandatory_tool_execution",
+                "missing_tools": missing_tools,
+                "instruction": (
+                    "La respuesta anterior no es aceptable porque faltan herramientas obligatorias. "
+                    "Ejecuta AHORA cada herramienta faltante mediante tool calling en esta misma sesión. "
+                    "Después devuelve de nuevo el objeto JSON clínico completo con exactamente cinco preguntas, "
+                    "incorporando los resultados de esas herramientas. No respondas antes de ejecutarlas."
+                ),
+                "original_task": prompt,
+            }
+            repaired_text = await run_turn(json.dumps(correction, ensure_ascii=False, default=str))
+            if repaired_text:
+                final_text = repaired_text
+
+        missing = [role for role in mandatory if role not in executed_roles]
+        if missing:
+            raise ValueError("ADK no ejecutó las herramientas obligatorias: " + ", ".join(missing))
         if len(executed_roles) > 4:
             raise ValueError("ADK activó más de cuatro herramientas para un solo bloque")
+        optional_roles = [role for role in executed_roles if role not in mandatory]
+        if len(optional_roles) > 2:
+            raise ValueError("ADK activó más de dos herramientas opcionales para un solo bloque")
         if not final_text:
             raise RuntimeError("Google ADK devolvió una respuesta clínica vacía")
 
