@@ -255,7 +255,9 @@ def run() -> dict:
         require(page.get_by_text("Lo que entendí de tu consulta").count() > 0, "final clinical summary is missing")
         require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final summary lost readable question labels")
         require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient summary")
-        require(page.get_by_text("Revisar la síntesis clínica y confirmar el nivel de atención con un profesional").count() == 1, "mission did not update cleanly or was duplicated")
+        mission_preview = page.locator("#missionPreview .mission-preview")
+        require(mission_preview.count() == 1, "mission state duplicated in context preview")
+        require(mission_preview.locator("span").inner_text() == "Revisar la síntesis clínica y confirmar el nivel de atención con un profesional", "mission preview did not receive final state")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after completion")
         page.screenshot(path=str(OUTPUT / "04-final.png"), full_page=True)
 
