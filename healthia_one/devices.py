@@ -14,6 +14,7 @@ from healthia_one.models import (
     VitalRecord,
     WeightRecord,
 )
+from healthia_one.twin_runtime import record_device_observation_in_state
 
 
 def device_source(record: DeviceObservation) -> SourceRef:
@@ -109,6 +110,7 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         state.synced_external_ids.append(record.external_id)
         existing.add(record.external_id)
         accepted += 1
+        record_device_observation_in_state(state, record)
         if section:
             sections.add(section)
     state.device_observations.sort(key=lambda item: item.observed_at)
@@ -140,6 +142,7 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         "sections": sorted(sections),
         "last_sync_at": batch.synced_at,
         "patient_id": owner_id,
+        "twin_events_added": accepted,
     }
 
 
