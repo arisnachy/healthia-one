@@ -52,12 +52,15 @@ def test_interview_preserves_context_and_completes_two_blocks() -> None:
 
     assert second_interview["stage"] == 2
     assert second_interview["id"] == first_interview["id"]
+    assert second_interview["chief_complaint"] == "Desde ayer me arde al orinar y tengo frecuencia urinaria"
     assert len(second_interview["previous_answers"]) == 5
     assert len(second_interview["question_block"]["questions"]) == 5
 
     final = respond(state, answer_payload(second_interview, 2))
 
     assert final.message.metadata["clinical_interview"]["status"] == "completed"
+    assert "Desde ayer me arde al orinar y tengo frecuencia urinaria" in final.message.content
+    assert "Las áreas clínicas necesarias" in final.message.content
     assert final.message.metadata["council_status"] == "completed"
     assert "Síntesis para la junta clínica" in final.message.content
     mission = next(item for item in state.missions if item.id == first_interview["mission_id"])
