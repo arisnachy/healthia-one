@@ -34,6 +34,37 @@ def patient_snapshot() -> dict:
     }
 
 
+MISSION_ACTIONS = {
+    "open_repeat_measurement",
+    "close_repeat_measurement",
+    "escalate_professional_review",
+    "prepare_consultation_packet",
+    "no_action",
+}
+
+
+def commit_mission_action(action: str, reason: str) -> dict:
+    """Commit one bounded action choice for the background mission worker.
+
+    Args:
+        action: One action from the documented HealthIA mission action catalog.
+        reason: Short evidence-based reason for selecting it.
+
+    Returns:
+        A validation result. The application applies the action only after its
+        deterministic safety oracle validates that this choice cannot downgrade safety.
+    """
+    normalized = str(action or "").strip()
+    if normalized not in MISSION_ACTIONS:
+        return {"accepted": False, "action": "no_action", "reason": "unsupported_action"}
+    return {
+        "accepted": True,
+        "action": normalized,
+        "reason": str(reason or "").strip()[:500],
+        "truth_boundary": "The application still validates this choice against deterministic safety before mutation.",
+    }
+
+
 def allowed_patient_actions() -> dict:
     return {
         "allowed": [
@@ -117,10 +148,15 @@ root_agent = LlmAgent(
         "The patient owns the context. Select the minimum specialist: HISTORIA, SENTINEL, LUMEN, VITA, "
         "NAVIGATOR, HEREDITAS, ARCHIVUM, MEDSAFE, ADVOCATE or BASTION. Be proactive only with authorized "
         "data and explain why. Never diagnose, prescribe, change medication or predict hereditary disease. "
-        "Expose public actions, evidence, uncertainty and next steps—not private reasoning."
+        "Expose public actions, evidence, uncertainty and next steps—not private reasoning. "
+        "When the input starts with AGENTIC_EVENT, you are the background mission coordinator. Read only the "
+        "provided compact event context and call commit_mission_action exactly once. Select only one of: "
+        "open_repeat_measurement, close_repeat_measurement, escalate_professional_review, "
+        "prepare_consultation_packet, no_action. Never downgrade an explicit deterministic safety instruction "
+        "included in the event. After the tool returns, briefly state that the bounded action was committed."
     ),
     sub_agents=[historian, sentinel, lumen, vita, navigator, hereditas, archivum, medsafe, advocate, bastion],
-    tools=[patient_snapshot, allowed_patient_actions],
+    tools=[patient_snapshot, allowed_patient_actions, commit_mission_action],
 )
 
 app = App(name="healthia_agent", root_agent=root_agent)
