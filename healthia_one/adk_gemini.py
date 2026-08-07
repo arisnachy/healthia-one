@@ -5,8 +5,9 @@ from typing import Any, Callable
 
 from healthia_one.adk_runtime import AdkClinicalRuntime
 from healthia_one.config import Settings
+from healthia_one.control import audit
 from healthia_one.gemini import GeminiResponder
-from healthia_one.models import ChatResponse, PatientState
+from healthia_one.models import PatientState
 
 
 class AdkGeminiResponder(GeminiResponder):
@@ -42,12 +43,27 @@ class AdkGeminiResponder(GeminiResponder):
                 authorized_clinical_context=self.compact_clinical_context(state),
             )
         )
+        public_tool_outputs = list(plan.tool_outputs)
+        audit(
+            state,
+            actor="google_adk",
+            action="execute_demand_driven_clinical_plan",
+            resource_type="agent_runtime",
+            resource_id=plan.session_id,
+            details={
+                "model": self.settings.model,
+                "stage": stage,
+                "executed_roles": list(plan.executed_roles),
+                "event_count": plan.event_count,
+                "tool_outputs": public_tool_outputs,
+            },
+        )
         payload = dict(plan.payload)
         payload["adk_execution"] = {
             "runtime": "google_adk_runner",
             "session_id": plan.session_id,
             "event_count": plan.event_count,
             "executed_roles": list(plan.executed_roles),
-            "tool_outputs": list(plan.tool_outputs),
+            "tool_outputs": public_tool_outputs,
         }
         return payload
