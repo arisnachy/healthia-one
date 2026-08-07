@@ -19,7 +19,8 @@ const refs = {
   resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast"),
   sendButton: $("#sendButton"), heroPatientName: $("#heroPatientName"), signalSummary: $("#signalSummary"),
   openMissionSummary: $("#openMissionSummary"), newConsultation: $("#newConsultation"), closeContext: $("#closeContext"),
-  expandLeft: $("#expandLeft")
+  expandLeft: $("#expandLeft"), accountPill: $("#accountPill"), accountMenu: $("#accountMenu"),
+  signOutButton: $("#signOutButton"), accountMeta: $("#accountMeta"), accountAvatar: $("#accountAvatar")
 };
 
 
@@ -84,8 +85,19 @@ function showToast(message) {
   showToast.timer = setTimeout(() => { refs.toast.hidden = true; }, 3200);
 }
 
+async function healthiaFetch(path, options = {}) {
+  if (window.healthiaAuthReady) await window.healthiaAuthReady;
+  const headers = new Headers(options.headers || {});
+  if (window.healthiaAuth?.enabled) {
+    const token = await window.healthiaAuth.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  }
+  return fetch(path, {...options, headers});
+}
+window.healthiaFetch = healthiaFetch;
+
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const response = await healthiaFetch(path, options);
   if (!response.ok) {
     let detail = `Error ${response.status}`;
     try { detail = (await response.json()).detail || detail; } catch {}
@@ -123,6 +135,11 @@ function renderAll() {
   const data = state.data;
   if (!data) return;
   refs.patientName.textContent = data.profile.display_name;
+  if (refs.accountMeta) refs.accountMeta.textContent = data.profile.email || (window.healthiaAuth?.enabled ? "Cuenta protegida" : "Demo local · cero gasto");
+  if (refs.accountAvatar) {
+    const parts = String(data.profile.display_name || "P").trim().split(/\s+/).slice(0,2);
+    refs.accountAvatar.textContent = parts.map(part => part[0] || "").join("").toUpperCase() || "P";
+  }
   if (refs.heroPatientName) refs.heroPatientName.textContent = data.profile.display_name || "—";
   if (refs.signalSummary) refs.signalSummary.textContent = `${(data.profile.authorized_signals || []).length || 0} activas`;
   if (refs.openMissionSummary) refs.openMissionSummary.textContent = data.missions.filter(item => !["completed","cancelled"].includes(item.status)).length;
@@ -253,7 +270,7 @@ async function sendMessage(text) {
     if (response.mission) state.data.missions.push(response.mission);
     state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Equipo en segundo plano";
+  refs.agentStatus.textContent = "Agentes a demanda";
   refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
 }
 
@@ -265,7 +282,7 @@ async function upload(file) {
     const result = await api("/api/results/upload", {method:"POST", body:form});
     state.data.results.push(result); renderResults(); renderContext(); setView("results"); showToast("Resultado guardado y procesado.");
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Equipo en segundo plano";
+  refs.agentStatus.textContent = "Agentes a demanda";
 }
 
 const dialogDefinitions = {
@@ -293,24 +310,40 @@ async function saveDialog() {
   catch (error) { showToast(error.message); }
 }
 
-function connectEvents() {
+function handleEventPayload(payload) {
+  if (payload.type === "message" && !state.data.messages.some(item => item.id === payload.message.id)) {
+    state.data.messages.push(payload.message); renderMessage(payload.message); renderToday();
+    refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+    showToast("HealthIA completó una nueva acción autorizada.");
+  } else if (payload.type === "state") {
+    clearTimeout(handleEventPayload.refreshTimer);
+    handleEventPayload.refreshTimer = setTimeout(() => refresh(), 120);
+  } else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
+}
+
+async function connectEvents() {
   if (eventStream) return;
-  eventStream = new EventSource("/api/events/stream");
-  let refreshTimer = null;
-  eventStream.onmessage = async event => {
-    const payload = JSON.parse(event.data);
-    if (payload.type === "message" && !state.data.messages.some(item => item.id === payload.message.id)) {
-      state.data.messages.push(payload.message);
-      renderMessage(payload.message);
-      renderToday();
-      refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
-      showToast("HealthIA se adelantó con una nueva observación.");
-    } else if (payload.type === "state") {
-      clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => refresh(), 120);
-    } else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
-  };
-  eventStream.onerror = () => showToast("La conexión de eventos se reconectará automáticamente.");
+  const controller = new AbortController();
+  eventStream = controller;
+  try {
+    const response = await healthiaFetch("/api/events/stream", {signal: controller.signal, headers:{Accept:"text/event-stream"}});
+    if (!response.ok || !response.body) throw new Error(`Eventos ${response.status}`);
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    while (!controller.signal.aborted) {
+      const {value, done} = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, {stream:true});
+      let boundary;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+        const data = frame.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
+        if (data) { try { handleEventPayload(JSON.parse(data)); } catch {} }
+      }
+    }
+  } catch (error) { if (!controller.signal.aborted) showToast("La conexión de eventos se reconectará automáticamente."); }
+  finally {
+    if (eventStream === controller) eventStream = null;
+    if (!controller.signal.aborted) setTimeout(() => connectEvents(), 1800);
+  }
 }
 
 refs.chatForm.addEventListener("submit", event => { event.preventDefault(); sendMessage(refs.chatInput.value); });
@@ -330,7 +363,7 @@ refs.runCheck.addEventListener("click", async () => {
     const latest = (state.data.mission_runs || []).at(-1);
     showToast(latest ? `Última ejecución: ${publicRuntime(latest.runtime)} · ${latest.status}` : "Aún no hay ejecuciones autónomas registradas.");
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Equipo en segundo plano";
+  refs.agentStatus.textContent = "Agentes a demanda";
 });
 function syncLeftToggle() {
   const collapsed = refs.shell.classList.contains("left-collapsed");
@@ -348,6 +381,14 @@ function syncContextToggle() {
 $("#collapseRight").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); syncContextToggle(); });
 $("#closeContext").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); syncContextToggle(); });
 $("#mobileMenu").addEventListener("click", () => refs.shell.classList.toggle("menu-open"));
+refs.accountPill?.addEventListener("click", () => { if (window.healthiaAuth?.enabled) refs.accountMenu.hidden = !refs.accountMenu.hidden; });
+refs.signOutButton?.addEventListener("click", async () => { refs.accountMenu.hidden = true; await window.healthiaAuth?.signOut?.(); });
+document.addEventListener("healthia:identity-changed", async () => {
+  if (!state.data) return;
+  if (eventStream?.abort) eventStream.abort();
+  eventStream = null;
+  await refresh(true); connectEvents();
+});
 refs.newConsultation?.addEventListener("click", async event => {
   event.preventDefault();
   refs.newConsultation.disabled = true;
@@ -366,6 +407,7 @@ refs.newConsultation?.addEventListener("click", async event => {
 
 (async function boot() {
   try {
+    if (window.healthiaAuthReady) await window.healthiaAuthReady;
     const readiness = await api("/api/readiness");
     refs.runtimeLabel.textContent = readiness.llm_backend === "gemini_api"
       ? (readiness.ai_ready ? `${readiness.model} · Google AI` : "Gemini · falta API key")

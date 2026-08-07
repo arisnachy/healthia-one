@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
@@ -15,6 +15,8 @@ from healthia_one.mission_engine import apply_mission_action
 from healthia_one.devices import ingest_health_connect_batch
 from healthia_one.gemini import GeminiResponder
 from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
+from healthia_one.identity import AuthPrincipal
+from healthia_one.identity_state import bind_state_identity, new_identity_state
 from healthia_one.models import (
     ActivityRecord,
     AgenticEvent,
@@ -39,6 +41,7 @@ from healthia_one.orchestrator import respond
 from healthia_one.patient_control import maybe_control_response
 from healthia_one.proactive import evaluate_state
 from healthia_one.store import FirestoreStore, JsonStore, MemoryStore, StateStore
+from healthia_one.tenant import current_patient_id
 
 
 logger = logging.getLogger("healthia.agentic")
@@ -46,28 +49,39 @@ logger = logging.getLogger("healthia.agentic")
 
 class EventBroker:
     def __init__(self) -> None:
-        self._subscribers: set[asyncio.Queue[dict]] = set()
+        self._subscribers: dict[str, set[asyncio.Queue[dict]]] = {}
 
-    async def publish(self, payload: dict) -> None:
-        for queue in list(self._subscribers):
+    async def publish(self, payload: dict, patient_id: str | None = None) -> None:
+        scope = patient_id or current_patient_id()
+        for queue in list(self._subscribers.get(scope, set())):
             try:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
-                self._subscribers.discard(queue)
+                self._subscribers.get(scope, set()).discard(queue)
 
-    async def subscribe(self) -> AsyncIterator[dict]:
+    async def subscribe(self, patient_id: str | None = None) -> AsyncIterator[dict]:
+        scope = patient_id or current_patient_id()
         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=100)
-        self._subscribers.add(queue)
+        subscribers = self._subscribers.setdefault(scope, set())
+        subscribers.add(queue)
         try:
             while True:
                 yield await queue.get()
         finally:
-            self._subscribers.discard(queue)
+            subscribers.discard(queue)
+            if not subscribers:
+                self._subscribers.pop(scope, None)
 
 
 def seed_state() -> PatientState:
     now = datetime.now(timezone.utc)
     state = PatientState()
+    state.profile.display_name = "Ana Martínez"
+    state.profile.birth_date = date(1982, 2, 20)
+    state.profile.sex_at_birth = "female"
+    state.profile.height_cm = 165.0
+    state.profile.confirmed_conditions = ["Hipertensión arterial"]
+    state.profile.care_plan.conditions = ["hypertension", "weight_management"]
     state.weights = [
         WeightRecord(measured_at=now - timedelta(days=12), weight_kg=78.0),
         WeightRecord(measured_at=now - timedelta(days=3), weight_kg=80.4, note="Misma balanza"),
@@ -204,16 +218,30 @@ class HealthIAService:
         return JsonStore(Path(self.settings.data_path))
 
     async def initialize(self) -> None:
+        if self.settings.auth_required:
+            return
         state = await self.store.load()
         if not state.messages and not state.vitals and not state.weights:
             await self.store.save(seed_state())
+
+    async def ensure_identity(self, principal: AuthPrincipal) -> PatientState:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            empty = not any([state.messages, state.vitals, state.weights, state.activity, state.results, state.documents])
+            if empty:
+                state = new_identity_state(principal)
+                audit(state, actor="identity_platform", action="initialize_authenticated_patient", resource_type="patient_state", resource_id=principal.uid, details={"provider": principal.provider})
+            else:
+                bind_state_identity(state, principal.uid, display_name=principal.display_name, email=principal.email)
+            await self.store.save(state)
+            return state
 
     async def snapshot(self) -> PatientState:
         return await self.store.load()
 
     async def reset_demo(self) -> PatientState:
         async with self._mutation_lock:
-            state = seed_state()
+            state = bind_state_identity(seed_state(), current_patient_id())
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": "reset"})
         return state
@@ -221,6 +249,7 @@ class HealthIAService:
     async def update_profile(self, profile: PatientProfile) -> PatientProfile:
         async with self._mutation_lock:
             state = await self.store.load()
+            profile.id = current_patient_id()
             state.profile = profile
             audit(
                 state,
@@ -256,13 +285,14 @@ class HealthIAService:
     async def add_patient_message(self, content: str):
         async with self._mutation_lock:
             state = await self.store.load()
-            patient_message = ChatMessage(role="patient", author=state.profile.display_name, content=content)
+            patient_message = ChatMessage(patient_id=state.profile.id, role="patient", author=state.profile.display_name, content=content)
             state.messages.append(patient_message)
             audit(state, actor="patient", action="send_chat_message", resource_type="chat_message", resource_id=patient_message.id)
             controlled_response = maybe_control_response(state, content)
             response = controlled_response or respond(state, content)
             if controlled_response is None:
                 response = await self.gemini.enhance(state, content, response)
+            response.message.patient_id = state.profile.id
             state.messages.append(response.message)
             audit(
                 state,
@@ -280,6 +310,8 @@ class HealthIAService:
     async def _append_and_publish(self, collection: str, item, section: str, *, actor: str = "patient", action: str = "create"):
         async with self._mutation_lock:
             state = await self.store.load()
+            if hasattr(item, "patient_id"):
+                item.patient_id = state.profile.id
             values = getattr(state, collection)
             values.append(item)
             sort_key = SORT_KEYS.get(collection)
@@ -296,7 +328,7 @@ class HealthIAService:
             await self.dispatch_agentic_event(
                 AgenticEvent(
                     event_type="vital_recorded",
-                    patient_id=vital.patient_id,
+                    patient_id=current_patient_id(),
                     source_id=vital.id,
                     payload={"source": vital.source.source_type},
                 )

@@ -12,11 +12,13 @@ from fastapi.staticfiles import StaticFiles
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
+from healthia_one.identity import IdentityError, IdentityVerifier
 from healthia_one.event_dispatch import decode_pubsub_push
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
 from healthia_one.family import family_summary
+from healthia_one.tenant import current_patient_id, patient_scope
 from healthia_one.profile import normalize_medication_text, profile_summary
 from healthia_one.models import (
     ActivityRecord,
@@ -44,9 +46,10 @@ from healthia_one.service import HealthIAService
 
 service = HealthIAService(settings)
 pairing_manager = DevicePairingManager()
+identity_verifier = IdentityVerifier(settings)
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
-UPLOAD_ROOT = ROOT / "uploads" / "patient_demo"
+UPLOAD_ROOT = ROOT / "uploads"
 
 
 @asynccontextmanager
@@ -70,6 +73,26 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="HealthIA ONE", version="0.5.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 
+AUTH_EXEMPT_API_PATHS = {
+    "/api/auth/config", "/api/readiness", "/api/devices/pairing/claim",
+    "/api/devices/health-connect/sync", "/api/internal/pubsub/mission",
+}
+
+@app.middleware("http")
+async def authenticated_patient_scope(request: Request, call_next):
+    path = request.url.path
+    requires_identity = settings.auth_required and path.startswith("/api/") and path not in AUTH_EXEMPT_API_PATHS
+    if not requires_identity:
+        return await call_next(request)
+    try:
+        principal = await identity_verifier.verify_bearer(request.headers.get("Authorization"))
+    except IdentityError as exc:
+        return JSONResponse(status_code=401, content={"detail": str(exc)})
+    with patient_scope(principal.uid):
+        await service.ensure_identity(principal)
+        request.state.principal = principal
+        return await call_next(request)
+
 
 @app.get("/")
 async def index() -> FileResponse:
@@ -80,6 +103,15 @@ async def index() -> FileResponse:
 async def healthz() -> dict:
     return {"status": "ok", "service": "healthia-one"}
 
+
+@app.get("/api/auth/config")
+async def auth_config() -> dict:
+    return identity_verifier.public_config()
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request) -> dict:
+    principal = request.state.principal
+    return {"uid": principal.uid, "email": principal.email, "display_name": principal.display_name, "provider": principal.provider}
 
 @app.get("/api/readiness")
 async def readiness() -> dict:
@@ -97,6 +129,8 @@ async def readiness() -> dict:
         "agentic_events_enabled": settings.agentic_events_enabled,
         "event_dispatch_backend": settings.event_dispatch_backend,
         "pubsub_topic": settings.pubsub_topic if settings.event_dispatch_backend == "pubsub" else None,
+        "identity": {"mode": settings.auth_mode, "required": settings.auth_required, "web_ready": identity_verifier.web_ready},
+        "cloud_budget": {"target_usd": settings.cloud_budget_target_usd, "absolute_usd": settings.cloud_budget_absolute_usd},
         "cost_control": service.gemini.cost_status(),
         "capabilities": [
             "chat",
@@ -128,6 +162,8 @@ async def readiness() -> dict:
             "pubsub_durable_events",
             "mission_execution_trace",
             "autonomous_closed_loop",
+            "google_identity_platform",
+            "per_user_state_isolation",
         ],
         "truth_boundary": (
             "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
@@ -211,7 +247,7 @@ async def devices() -> dict:
 
 @app.post("/api/devices/pairing")
 async def create_device_pairing(request: Request) -> dict:
-    payload = pairing_manager.create()
+    payload = pairing_manager.create(current_patient_id())
     payload["backend_url"] = str(request.base_url).rstrip("/")
     return payload
 
@@ -219,7 +255,7 @@ async def create_device_pairing(request: Request) -> dict:
 @app.get("/api/devices/pairing/{code}")
 async def device_pairing_status(code: str) -> dict:
     try:
-        return pairing_manager.status(code)
+        return pairing_manager.status(code, current_patient_id())
     except PairingError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -244,9 +280,11 @@ async def health_connect_sync(
     batch: HealthConnectSyncBatch,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    if not pairing_manager.validate(bearer_token(authorization), batch.device_id):
+    patient_id = pairing_manager.resolve_patient(bearer_token(authorization), batch.device_id)
+    if not patient_id:
         raise HTTPException(status_code=401, detail="Dispositivo no vinculado o token inválido.")
-    return await service.ingest_health_connect(batch)
+    with patient_scope(patient_id):
+        return await service.ingest_health_connect(batch)
 
 
 @app.post("/api/chat")
@@ -527,7 +565,8 @@ async def pubsub_mission(request: Request) -> dict:
         event = decode_pubsub_push(payload)
     except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    run = await service.process_agentic_event(event)
+    with patient_scope(event.patient_id):
+        run = await service.process_agentic_event(event)
     return {
         "acknowledged": True,
         "event_id": event.id,

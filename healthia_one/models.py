@@ -66,7 +66,7 @@ class SourceRef(BaseModel):
 
 
 class CarePlan(BaseModel):
-    conditions: list[str] = Field(default_factory=lambda: ["hypertension", "weight_management"])
+    conditions: list[str] = Field(default_factory=list)
     weight_due_days: int = 7
     blood_pressure_due_days: int = 3
     activity_goal_steps: int = 6000
@@ -124,14 +124,14 @@ class EmergencyContact(BaseModel):
 
 class PatientProfile(BaseModel):
     id: str = "patient_demo"
-    display_name: str = "Ana Martínez"
+    display_name: str = "Paciente"
     legal_name: str = ""
-    birth_date: date = date(1982, 2, 20)
-    sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "female"
+    birth_date: date | None = None
+    sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "unknown"
     gender_identity: str = ""
     preferred_pronouns: str = ""
     blood_type: str = ""
-    height_cm: float | None = Field(default=165.0, ge=50, le=250)
+    height_cm: float | None = Field(default=None, ge=50, le=250)
     email: str = ""
     phone: str = ""
     address: str = ""
@@ -139,8 +139,8 @@ class PatientProfile(BaseModel):
     locale: str = "es-DO"
     timezone: str = "America/Santo_Domingo"
     allergies: list[str] = Field(default_factory=list)
-    medications: list[str] = Field(default_factory=lambda: ["Losartán 50 mg cada 24 horas"])
-    confirmed_conditions: list[str] = Field(default_factory=lambda: ["Hipertensión arterial"])
+    medications: list[str] = Field(default_factory=list)
+    confirmed_conditions: list[str] = Field(default_factory=list)
     lifestyle: LifestyleHistory = Field(default_factory=LifestyleHistory)
     personal_history: PersonalHistory = Field(default_factory=PersonalHistory)
     reproductive_health: ReproductiveHealth = Field(default_factory=ReproductiveHealth)

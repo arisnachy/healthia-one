@@ -9,7 +9,25 @@
   <link rel="stylesheet" href="/assets/interactions.css">
 </head>
 <body>
-  <div id="app" class="app-shell">
+  <section id="authGate" class="auth-gate" hidden aria-label="Acceso seguro a HealthIA">
+    <div class="auth-card">
+      <div class="auth-brand"><div class="auth-mark">✦</div><div><strong>HealthIA ONE</strong><span>Tu continuidad, bajo tu control</span></div></div>
+      <div class="auth-copy"><span>ACCESO DEL PACIENTE</span><h1>Tu salud no vuelve a empezar desde cero.</h1><p>Inicia sesión para que HealthIA pueda separar tus datos, permisos, dispositivos y misiones de cualquier otra cuenta.</p></div>
+      <button id="googleSignIn" class="google-auth-button" type="button"><span>G</span> Continuar con Google</button>
+      <div class="auth-divider"><span>o</span></div>
+      <form id="emailAuthForm" class="auth-form">
+        <label hidden>Nombre<input id="authName" name="name" autocomplete="name" placeholder="Tu nombre"></label>
+        <label>Correo<input id="authEmail" name="email" type="email" autocomplete="email" required placeholder="tu@correo.com"></label>
+        <label>Contraseña<input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="6" required placeholder="••••••••"></label>
+        <button id="authSubmit" class="auth-submit" type="submit">Entrar</button>
+      </form>
+      <button id="authModeToggle" class="auth-mode-toggle" type="button">Crear cuenta con correo</button>
+      <p id="authMessage" class="auth-message" aria-live="polite"></p>
+      <small class="auth-trust">HealthIA no recibe tu contraseña de Google. El backend acepta únicamente un token de identidad verificado y usa tu UID para aislar tus datos.</small>
+    </div>
+  </section>
+
+  <div id="app" class="app-shell" hidden>
     <aside id="leftRail" class="left-rail">
       <div class="brand-row">
         <div class="brand-mark" aria-hidden="true">
@@ -38,19 +56,19 @@
         <button data-open="missions"><span class="nav-icon">◎</span><b>Misiones de salud</b></button>
       </nav>
       <section class="rail-section">
-        <p>Módulos de salud</p>
-        <div class="agent-mini"><span>HX</span><div><strong>Health history</strong><small>Longitudinal memory</small></div></div>
-        <div class="agent-mini"><span>SM</span><div><strong>Safety monitoring</strong><small>Signals and trends</small></div></div>
-        <div class="agent-mini"><span>RV</span><div><strong>Results review</strong><small>Explain findings</small></div></div>
-        <div class="agent-mini"><span>HH</span><div><strong>Healthy habits</strong><small>Routines and barriers</small></div></div>
-        <div class="agent-mini"><span>FU</span><div><strong>Follow-up</strong><small>Next safe step</small></div></div>
+        <p>Áreas disponibles · se activan a demanda</p>
+        <div class="agent-mini"><span>HX</span><div><strong>Historia clínica</strong><small>Contexto longitudinal</small></div></div>
+        <div class="agent-mini"><span>SM</span><div><strong>Seguridad clínica</strong><small>Señales y tendencias</small></div></div>
+        <div class="agent-mini"><span>RV</span><div><strong>Resultados</strong><small>Explicación y límites</small></div></div>
+        <div class="agent-mini"><span>RX</span><div><strong>Farmacología</strong><small>Solo cuando aporta valor</small></div></div>
+        <div class="agent-mini"><span>FU</span><div><strong>Seguimiento</strong><small>Siguiente paso verificable</small></div></div>
       </section>
       </div>
-      <button id="accountPill" class="user-pill" type="button" aria-label="Perfil del usuario">
-        <div class="patient-avatar">AG</div>
-        <div><strong>Arisnachy Gomez</strong><span>Plus</span></div>
+      <button id="accountPill" class="user-pill" type="button" aria-label="Cuenta del paciente">
+        <div id="accountAvatar" class="patient-avatar">AM</div>
+        <div><strong id="patientName">Paciente</strong><span id="accountMeta">Datos autorizados</span></div>
       </button>
-      <div class="patient-chip"><div class="patient-avatar">AM</div><div><strong id="patientName">Paciente</strong><span>Sintético · demo segura</span></div></div>
+      <div id="accountMenu" class="account-menu" hidden><button id="signOutButton" type="button">Cerrar sesión</button></div>
     </aside>
 
     <main class="conversation-column">
@@ -58,7 +76,7 @@
         <button id="mobileMenu" class="icon-button mobile-only" aria-label="Abrir navegación">☰</button>
         <button id="expandLeft" class="icon-button rail-reopen" aria-label="Expandir navegación" title="Expandir navegación">☰</button>
         <div class="topbar-title"><span class="status-dot"></span><div><strong>HealthIA</strong><small id="runtimeLabel">Preparando continuidad</small></div></div>
-        <div class="topbar-actions"><span id="agentStatus" class="status-pill">Equipo en segundo plano</span><button id="runCheck" class="secondary-button">Ejecución autónoma</button><button id="collapseRight" class="icon-button" aria-label="Mostrar u ocultar contexto">▥</button></div>
+        <div class="topbar-actions"><span id="agentStatus" class="status-pill">Agentes a demanda</span><button id="runCheck" class="secondary-button">Ejecución autónoma</button><button id="collapseRight" class="icon-button" aria-label="Mostrar u ocultar contexto">▥</button></div>
       </header>
 
       <section id="view-chat" class="view is-active">
@@ -103,6 +121,7 @@
 
   <dialog id="dataDialog"><form id="dataForm" method="dialog" class="dialog-card"><header><div><small>REGISTRO DEL PACIENTE</small><h2 id="dialogTitle">Nueva medición</h2></div><button value="cancel" aria-label="Cerrar">×</button></header><div id="dialogFields"></div><footer><button value="cancel" class="secondary-button">Cancelar</button><button id="saveData" value="default" class="primary-save">Guardar</button></footer></form></dialog>
   <div id="toast" class="toast" hidden></div>
+  <script src="/assets/auth.js" defer></script>
   <script src="/assets/app.js" defer></script>
   <script src="/assets/patient-record.js" defer></script>
   <script src="/assets/family-documents.js" defer></script>
