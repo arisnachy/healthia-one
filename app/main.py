@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from healthia_one.config import settings
@@ -15,6 +15,7 @@ from healthia_one.control import export_patient_state
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
+from healthia_one.evidence_store import evidence_backend, load_evidence, local_evidence_path, persist_evidence
 from healthia_one.family import family_summary
 from healthia_one.profile import normalize_medication_text, profile_summary
 from healthia_one.models import (
@@ -51,13 +52,14 @@ UPLOAD_ROOT = ROOT / "uploads" / "patient_demo"
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await service.initialize()
-    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    if evidence_backend() == "local":
+        UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     # No permanent polling loop. Agents run because the patient talks, evidence
     # arrives, a device syncs, or an explicit review is requested.
     yield
 
 
-app = FastAPI(title="HealthIA ONE", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="HealthIA ONE", version="0.7.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 
 
@@ -81,6 +83,7 @@ async def readiness() -> dict:
         "ai_ready": settings.adk_ready,
         "ai_status": service.gemini.last_status,
         "store_backend": settings.store_backend,
+        "evidence_backend": evidence_backend(),
         "agent_execution": "demand_driven",
         "proactive_enabled": False,
         "cost_control": service.gemini.cost_status(),
@@ -93,6 +96,7 @@ async def readiness() -> dict:
             "results",
             "multimodal_result_interpretation",
             "clinical_twin",
+            "durable_original_evidence",
             "family_genogram",
             "document_archive",
             "unified_timeline",
@@ -314,21 +318,27 @@ async def upload_document(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    destination = ROOT / document.storage_path
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(destination.write_bytes, content)
+    document = await persist_evidence(document, content, ROOT)
     return (await service.add_document(document)).model_dump(mode="json")
 
 
 @app.get("/api/documents/{document_id}/download")
-async def download_document(document_id: str) -> FileResponse:
+async def download_document(document_id: str):
     document = await service.get_document(document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
-    path = (ROOT / document.storage_path).resolve()
-    if ROOT.resolve() not in path.parents or not path.exists():
-        raise HTTPException(status_code=404, detail="Archivo no disponible")
-    return FileResponse(path, media_type=document.mime_type, filename=document.filename)
+    path = local_evidence_path(document, ROOT)
+    if path is not None:
+        return FileResponse(path, media_type=document.mime_type, filename=document.filename)
+    try:
+        content = await load_evidence(document, ROOT)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail="Archivo no disponible") from exc
+    return Response(
+        content=content,
+        media_type=document.mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{document.filename}"'},
+    )
 
 
 @app.get("/api/timeline")
@@ -436,9 +446,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"No se pudo interpretar el archivo: {exc}") from exc
 
-    destination = ROOT / document.storage_path
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(destination.write_bytes, content)
+    document = await persist_evidence(document, content, ROOT)
 
     if result.status == "pending_multimodal" and multimodal_supported(filename, content_type):
         analysis = await analyze_uploaded_result(
@@ -461,6 +469,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     payload = stored.model_dump(mode="json")
     payload["document_id"] = document.id
     payload["original_available"] = True
+    payload["evidence_backend"] = evidence_backend()
     payload["twin_updated"] = True
     return payload
 
