@@ -170,13 +170,7 @@ def seed_state() -> PatientState:
             review_at=now + timedelta(days=4),
         )
     ]
-    state.messages = [
-        ChatMessage(
-            role="assistant",
-            author="HealthIA",
-            content="Hola, Ana. Ya revisé tus datos recientes. ¿Qué te gustaría revisar hoy?",
-        )
-    ]
+    state.messages = []
     for item in state.vitals:
         record_measurement_in_state(state, item, "vital")
     for item in state.weights:
