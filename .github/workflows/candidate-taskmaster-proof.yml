@@ -1,0 +1,128 @@
+name: Candidate Taskmaster one-request proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Candidate branch or commit to test
+        required: true
+        default: kira/event-driven-results-twin-p1
+
+permissions:
+  contents: read
+
+jobs:
+  taskmaster-proof:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      HEALTHIA_ENV: ci_live
+      HEALTHIA_STORE_BACKEND: json
+      HEALTHIA_DATA_PATH: /tmp/healthia-taskmaster/state.json
+      HEALTHIA_ACCOUNTS_PATH: /tmp/healthia-taskmaster/accounts.json
+      HEALTHIA_AUTH_REQUIRED: "true"
+      HEALTHIA_ALLOW_REGISTRATION: "true"
+      HEALTHIA_LLM_BACKEND: gemini_api
+      HEALTHIA_MODEL: gemini-3.6-flash
+      HEALTHIA_COST_MODE: guarded
+      HEALTHIA_AI_REQUEST_LIMIT: "1"
+      HEALTHIA_COST_GUARD_START_ENABLED: "true"
+      HEALTHIA_AI_MAX_OUTPUT_TOKENS: "1400"
+      HEALTHIA_LLM_TIMEOUT_SECONDS: "45"
+      HEALTHIA_PROACTIVE_ENABLED: "false"
+      HEALTHIA_COST_CONTROL_UI: "true"
+    steps:
+      - name: Checkout requested candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_ref }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Require encrypted repository Gemini secret
+        shell: bash
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error title=Gemini secret missing::Repository Actions secret GEMINI_API_KEY is unavailable."
+            exit 2
+          fi
+          echo "Encrypted Gemini secret is available; value is intentionally not printed." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create and mask ephemeral signing secrets
+        shell: bash
+        run: |
+          session_secret=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')
+          device_secret=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')
+          echo "::add-mask::$session_secret"
+          echo "::add-mask::$device_secret"
+          {
+            echo "HEALTHIA_SESSION_SECRET=$session_secret"
+            echo "HEALTHIA_DEVICE_TOKEN_SECRET=$device_secret"
+          } >> "$GITHUB_ENV"
+
+      - name: Install exact candidate
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Execute one-request Taskmaster proof
+        shell: bash
+        run: |
+          set +e
+          python scripts/live_taskmaster_proof.py > /tmp/healthia-taskmaster-proof.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/healthia-taskmaster-proof.log
+
+          echo "### One-request Taskmaster proof" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f deployment/live-taskmaster-proof-latest.json ]; then
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('deployment/live-taskmaster-proof-latest.json').read_text(encoding='utf-8'))
+          print(f"- Status: **{payload.get('status', 'unknown')}**")
+          print(f"- Gemini request ceiling: **{payload.get('gemini_request_ceiling', 1)}**")
+          if payload.get('checks'):
+              print(f"- Checks completed: **{len(payload['checks'])}**")
+              for check in payload['checks']:
+                  print(f"  - {check}")
+          mission = payload.get('mission') or {}
+          if mission:
+              print(f"- Mission: `{mission.get('type')}` → **{mission.get('status')}**")
+              print(f"- Correlated evidence IDs: **{mission.get('evidence_count', 0)}**")
+          if payload.get('error_type'):
+              print(f"- Error type: `{payload['error_type']}`")
+          if payload.get('error'):
+              print(f"- Exact failure: `{str(payload['error'])[:900]}`")
+          PY
+          fi
+
+          if [ "$code" -ne 0 ]; then
+            detail=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('deployment/live-taskmaster-proof-latest.json')
+          if p.exists():
+              payload=json.loads(p.read_text(encoding='utf-8'))
+              print(str(payload.get('error') or payload.get('error_type') or 'Taskmaster proof failed')[:700].replace('\n',' '))
+          else:
+              print('Taskmaster proof failed before producing sanitized evidence')
+          PY
+            )
+            echo "::error title=Taskmaster live proof failed::$detail"
+            exit "$code"
+          fi
+
+      - name: Upload sanitized Taskmaster proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-taskmaster-one-request-proof
+          path: deployment/live-taskmaster-proof-latest.json
+          if-no-files-found: warn
+          retention-days: 7

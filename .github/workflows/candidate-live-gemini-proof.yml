@@ -1,0 +1,159 @@
+name: Candidate live Gemini + ADK proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Candidate branch or commit to test
+        required: true
+        default: kira/event-driven-results-twin-p1
+
+permissions:
+  contents: read
+
+jobs:
+  live-proof:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      HEALTHIA_ENV: ci_live
+      HEALTHIA_STORE_BACKEND: json
+      HEALTHIA_DATA_PATH: /tmp/healthia-live/state.json
+      HEALTHIA_ACCOUNTS_PATH: /tmp/healthia-live/accounts.json
+      HEALTHIA_AUTH_REQUIRED: "true"
+      HEALTHIA_ALLOW_REGISTRATION: "true"
+      HEALTHIA_LLM_BACKEND: gemini_api
+      HEALTHIA_MODEL: gemini-3.6-flash
+      HEALTHIA_COST_MODE: guarded
+      HEALTHIA_AI_REQUEST_LIMIT: "12"
+      HEALTHIA_COST_GUARD_START_ENABLED: "true"
+      HEALTHIA_AI_MAX_OUTPUT_TOKENS: "1400"
+      HEALTHIA_LLM_TIMEOUT_SECONDS: "45"
+      HEALTHIA_PROACTIVE_ENABLED: "false"
+      HEALTHIA_COST_CONTROL_UI: "true"
+    steps:
+      - name: Checkout requested candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_ref }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Require encrypted repository Gemini secret
+        shell: bash
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error title=Gemini secret missing::Repository Actions secret GEMINI_API_KEY is not available to this workflow."
+            echo "### Live proof blocked" >> "$GITHUB_STEP_SUMMARY"
+            echo "The encrypted repository secret GEMINI_API_KEY is missing or unavailable." >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+          echo "Encrypted Gemini secret is available (value intentionally not printed)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create and mask ephemeral signing secrets
+        shell: bash
+        run: |
+          session_secret=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')
+          device_secret=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')
+          echo "::add-mask::$session_secret"
+          echo "::add-mask::$device_secret"
+          {
+            echo "HEALTHIA_SESSION_SECRET=$session_secret"
+            echo "HEALTHIA_DEVICE_TOKEN_SECRET=$device_secret"
+          } >> "$GITHUB_ENV"
+
+      - name: Install exact candidate
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Classify live Gemini connectivity before the full proof
+        shell: bash
+        run: |
+          set +e
+          python deployment/verify_google_ai.py > /tmp/healthia-gemini-preflight.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/healthia-gemini-preflight.log
+          if [ "$code" -ne 0 ]; then
+            mkdir -p deployment
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          log = Path('/tmp/healthia-gemini-preflight.log').read_text(encoding='utf-8', errors='replace').strip()
+          payload = {
+              'status': 'failed',
+              'stage': 'gemini_preflight',
+              'synthetic_only': True,
+              'error': log[:1000],
+          }
+          Path('deployment/live-gemini-proof-latest.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+            detail=$(tr '\n' ' ' < /tmp/healthia-gemini-preflight.log | cut -c1-700)
+            echo "::error title=Gemini preflight failed::$detail"
+            echo "### Gemini preflight failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            head -c 1000 /tmp/healthia-gemini-preflight.log >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit "$code"
+          fi
+          echo "### Gemini preflight passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "A real stateless Gemini interaction succeeded before running the clinical proof." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Execute strict synthetic live proof
+        shell: bash
+        run: |
+          set +e
+          python scripts/live_gemini_proof.py > /tmp/healthia-live-proof.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/healthia-live-proof.log
+
+          if [ -f deployment/live-gemini-proof-latest.json ]; then
+            echo "### Strict synthetic proof result" >> "$GITHUB_STEP_SUMMARY"
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('deployment/live-gemini-proof-latest.json').read_text(encoding='utf-8'))
+          print(f"- Status: **{payload.get('status', 'unknown')}**")
+          if payload.get('checks'):
+              print(f"- Checks completed: **{len(payload['checks'])}**")
+              for item in payload['checks']:
+                  print(f"  - {item}")
+          if payload.get('error_type'):
+              print(f"- Error type: `{payload['error_type']}`")
+          if payload.get('error'):
+              print(f"- Exact failure: `{str(payload['error'])[:900]}`")
+          PY
+          fi
+
+          if [ "$code" -ne 0 ]; then
+            detail=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('deployment/live-gemini-proof-latest.json')
+          if p.exists():
+              payload = json.loads(p.read_text(encoding='utf-8'))
+              print(str(payload.get('error') or payload.get('error_type') or 'Strict synthetic proof failed')[:700].replace('\n', ' '))
+          else:
+              print('Strict synthetic proof failed before producing its sanitized proof file')
+          PY
+            )
+            echo "::error title=HealthIA live proof failed::$detail"
+            exit "$code"
+          fi
+
+      - name: Upload sanitized proof only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-candidate-live-gemini-proof
+          path: deployment/live-gemini-proof-latest.json
+          if-no-files-found: warn
+          retention-days: 7
