@@ -23,11 +23,13 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     expected = (
         "app.js",
+        "clinical-council.js",
         "patient-record.js",
         "family-documents.js",
         "continuity.js",
         "privacy-controls.js",
         "profile-devices.js",
+        "account.js",
         "icons.js",
     )
     assert html.count("<script ") == len(expected)
