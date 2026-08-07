@@ -59,7 +59,9 @@ def build_timeline(state: PatientState) -> list[dict[str, Any]]:
 
     New longitudinal facts flow through `twin_events`. Legacy collections remain as
     a compatibility source only when the same entity has not already been reduced
-    into the Twin. This avoids duplicate rows while preserving older saved states.
+    into the Twin. Timeline rows expose both the append-only event id and the linked
+    clinical entity id so callers can trace an event back to the original result,
+    measurement or interview without collapsing event sourcing semantics.
     """
     events: list[dict[str, Any]] = []
     twin_entity_keys: set[tuple[str, str]] = set()
@@ -72,6 +74,7 @@ def build_timeline(state: PatientState) -> list[dict[str, Any]]:
         detail: str,
         source: str,
         *,
+        entity_id: str | None = None,
         recorded_at: datetime | None = None,
         certainty: str = "unknown",
         verification_status: str = "unverified",
@@ -79,6 +82,7 @@ def build_timeline(state: PatientState) -> list[dict[str, Any]]:
         events.append(
             {
                 "id": event_id,
+                "entity_id": entity_id or event_id,
                 "type": event_type,
                 "occurred_at": occurred_at.isoformat(),
                 "recorded_at": (recorded_at or occurred_at).isoformat(),
@@ -99,6 +103,7 @@ def build_timeline(state: PatientState) -> list[dict[str, Any]]:
             event.title or event.entity_type.replace("_", " ").title(),
             event.summary,
             event.source.source_type,
+            entity_id=event.entity_id,
             recorded_at=event.recorded_at,
             certainty=event.certainty,
             verification_status=event.verification_status,
