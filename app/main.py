@@ -4,11 +4,13 @@ import asyncio
 import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from healthia_one.blob_store import build_result_blob_store
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
@@ -40,7 +42,7 @@ from healthia_one.models import (
     VitalRecord,
     WeightRecord,
 )
-from healthia_one.result_intelligence import analyze_uploaded_result, normalized_mime_type, result_storage_path
+from healthia_one.result_intelligence import analyze_uploaded_result, normalized_mime_type
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.pairing import DevicePairingManager, PairingError
 from healthia_one.service import HealthIAService
@@ -51,6 +53,7 @@ identity_verifier = IdentityVerifier(settings)
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
 UPLOAD_ROOT = ROOT / "uploads"
+result_blob_store = build_result_blob_store(settings, ROOT)
 
 
 @asynccontextmanager
@@ -127,6 +130,11 @@ async def readiness() -> dict:
         "ai_ready": settings.adk_ready,
         "ai_status": service.gemini.last_status,
         "store_backend": settings.store_backend,
+        "result_storage": {
+            "backend": settings.blob_backend,
+            "durable_ready": settings.durable_result_storage_ready,
+            "bucket_configured": bool(settings.result_bucket.strip()) if settings.blob_backend == "gcs" else None,
+        },
         "proactive_interval_seconds": settings.proactive_interval_seconds,
         "proactive_enabled": settings.proactive_enabled,
         "mission_runtime": settings.mission_runtime,
@@ -144,7 +152,7 @@ async def readiness() -> dict:
             "activity",
             "results",
             "multimodal_result_ingestion",
-            "original_result_archive",
+            "private_durable_result_archive",
             "family_genogram",
             "document_archive",
             "unified_timeline",
@@ -466,14 +474,20 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"No se pudo interpretar el archivo: {exc}") from exc
 
-    # The original artifact is part of the patient-owned longitudinal record and
-    # remains available even when Gemini is disabled or multimodal extraction fails.
-    relative_path = result_storage_path(current_patient_id(), result.id, filename)
-    destination = (ROOT / relative_path).resolve()
-    if ROOT.resolve() not in destination.parents:
-        raise HTTPException(status_code=422, detail="Ruta de resultado inválida")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(destination.write_bytes, content)
+    result.original_mime_type = mime_type
+    try:
+        result.original_storage_uri = await result_blob_store.put_result(
+            patient_id=current_patient_id(),
+            result_id=result.id,
+            filename=filename,
+            content=content,
+            mime_type=mime_type,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo conservar el archivo original; el resultado no fue agregado al expediente.",
+        ) from exc
 
     if result.status == "pending_multimodal":
         result = await analyze_uploaded_result(
@@ -491,16 +505,28 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
 
 
 @app.get("/api/results/{result_id}/file")
-async def result_file(result_id: str) -> FileResponse:
+async def result_file(result_id: str) -> Response:
     state = await service.snapshot()
     result = next((item for item in state.results if item.id == result_id), None)
     if result is None:
         raise HTTPException(status_code=404, detail="Resultado no encontrado")
-    relative_path = result_storage_path(state.profile.id, result.id, result.filename)
-    path = (ROOT / relative_path).resolve()
-    if ROOT.resolve() not in path.parents or not path.exists():
-        raise HTTPException(status_code=404, detail="Archivo original no disponible")
-    return FileResponse(path, media_type=normalized_mime_type(result.filename, None), filename=result.filename)
+    try:
+        content = await result_blob_store.get_result(
+            patient_id=state.profile.id,
+            result_id=result.id,
+            filename=result.filename,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Archivo original no disponible") from exc
+    mime_type = result.original_mime_type or normalized_mime_type(result.filename, None)
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(result.filename)}",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @app.post("/api/demo/reset")
