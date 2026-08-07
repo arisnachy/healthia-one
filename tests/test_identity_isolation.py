@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
+from fastapi.testclient import TestClient
+
+from app.main import app, identity_verifier, settings
 from healthia_one.config import Settings
 from healthia_one.documents import build_document
-from healthia_one.identity import AuthPrincipal, IdentityVerifier
+from healthia_one.identity import AuthPrincipal, IdentityError, IdentityVerifier
 from healthia_one.models import PatientProfile, WeightRecord
 from healthia_one.pairing import DevicePairingManager
 from healthia_one.service import HealthIAService
@@ -96,3 +99,44 @@ def test_document_storage_and_device_pairing_are_bound_to_patient_uid() -> None:
     claim = manager.claim(pairing["code"], "phone-1", "Pixel")
     assert manager.resolve_patient(claim["access_token"], "phone-1") == "uid-alpha"
     assert manager.resolve_patient(claim["access_token"], "phone-2") is None
+
+
+def test_http_api_isolates_two_verified_users_and_rejects_missing_identity(monkeypatch) -> None:
+    principals = {
+        "token-alpha": AuthPrincipal(uid="http-alpha", email="alpha@example.com", display_name="Alpha", provider="password"),
+        "token-beta": AuthPrincipal(uid="http-beta", email="beta@example.com", display_name="Beta", provider="google.com"),
+    }
+
+    async def fake_verify(authorization: str | None) -> AuthPrincipal:
+        token = str(authorization or "").removeprefix("Bearer ")
+        if token not in principals:
+            raise IdentityError("Authentication required")
+        return principals[token]
+
+    monkeypatch.setattr(settings, "auth_mode", "identity_platform")
+    monkeypatch.setattr(identity_verifier, "verify_bearer", fake_verify)
+
+    with TestClient(app) as client:
+        assert client.get("/api/bootstrap").status_code == 401
+
+        alpha_headers = {"Authorization": "Bearer token-alpha"}
+        beta_headers = {"Authorization": "Bearer token-beta"}
+        assert client.post("/api/weight", headers=alpha_headers, json={"weight_kg": 71.2}).status_code == 200
+        assert client.post("/api/weight", headers=beta_headers, json={"weight_kg": 84.3}).status_code == 200
+
+        alpha = client.get("/api/bootstrap", headers=alpha_headers).json()
+        beta = client.get("/api/bootstrap", headers=beta_headers).json()
+        assert alpha["profile"]["id"] == "http-alpha"
+        assert beta["profile"]["id"] == "http-beta"
+        assert [item["weight_kg"] for item in alpha["weights"]] == [71.2]
+        assert [item["weight_kg"] for item in beta["weights"]] == [84.3]
+        assert alpha["profile"]["confirmed_conditions"] == []
+        assert beta["profile"]["confirmed_conditions"] == []
+
+
+def test_internal_pubsub_endpoint_requires_trusted_oidc_identity(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "local")
+    monkeypatch.setattr(settings, "pubsub_push_service_account", "healthia-push@example.iam.gserviceaccount.com")
+    with TestClient(app) as client:
+        response = client.post("/api/internal/pubsub/mission", json={"message": {"data": "e30="}})
+        assert response.status_code == 401
