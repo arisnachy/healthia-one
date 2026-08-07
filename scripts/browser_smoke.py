@@ -152,10 +152,10 @@ window.fetch = async function(path, options={{}}) {{
     const patient={{id:'browser_patient_'+Date.now()+'_'+window.__mockChatIndex,patient_id:'patient_demo',role:'patient',author:window.__mockSnapshot.profile.display_name,content:payload.message,created_at:new Date().toISOString(),risk_level:'info',mission_id:null,agent_plan:[],metadata:{{}}}};
     const response=window.__mockChatResponses[window.__mockChatIndex++];
     window.__mockSnapshot.messages.push(patient,response.message);
-    if(response.mission) window.__mockSnapshot.missions.push(response.mission);
-    if(response.message?.metadata?.clinical_interview?.status==='completed') {{
-      const mission=window.__mockSnapshot.missions.find(item=>item.id===response.message.mission_id);
-      if(mission) {{ mission.status='waiting_professional'; mission.next_action='Revisar la síntesis clínica y confirmar el nivel de atención con un profesional'; mission.closure_evidence=['interview_two_blocks_completed']; }}
+    if(response.mission) {{
+      const index=window.__mockSnapshot.missions.findIndex(item=>item.id===response.mission.id);
+      if(index>=0) window.__mockSnapshot.missions[index]=response.mission;
+      else window.__mockSnapshot.missions.push(response.mission);
     }}
     setTimeout(() => window.__mockEventSource?.onmessage?.({{data: JSON.stringify({{type:'state',section:'chat'}})}}), 0);
     return new MockResponse(response);
@@ -175,6 +175,7 @@ def run() -> dict:
     bootstrap, responses, model_calls, agentic_bootstrap = backend_fixture()
     require(model_calls == 2, f"expected two model calls, found {model_calls}")
     require(all(item["message"]["metadata"].get("question_source") == "gemini_dynamic" for item in responses[:2]), "dynamic question source missing")
+    require(responses[-1].get("mission", {}).get("status") == "waiting_professional", "final response did not return updated mission")
 
     html = (WEB / "index.html").read_text(encoding="utf-8")
     html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", html)
@@ -251,10 +252,10 @@ def run() -> dict:
         second_block.locator(".clinical-submit").click()
         page.wait_for_function("window.__mockChatIndex >= 3")
         page.wait_for_timeout(350)
-        require(page.get_by_text("Síntesis para la junta clínica").count() > 0, "final clinical summary is missing")
+        require(page.get_by_text("Lo que entendí de tu consulta").count() > 0, "final clinical summary is missing")
         require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final summary lost readable question labels")
         require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient summary")
-        require(page.get_by_text("Revisar la síntesis clínica y confirmar el nivel de atención con un profesional").count() > 0, "mission card remained stale after completion")
+        require(page.get_by_text("Revisar la síntesis clínica y confirmar el nivel de atención con un profesional").count() == 1, "mission did not update cleanly or was duplicated")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after completion")
         page.screenshot(path=str(OUTPUT / "04-final.png"), full_page=True)
 
@@ -276,9 +277,9 @@ def run() -> dict:
         "dynamic_question_source": "pass",
         "two_five_question_blocks": "pass",
         "pending_race_removed": "pass",
-        "final_summary": "pass",
+        "natural_final_summary": "pass",
         "readable_summary_labels": "pass",
-        "mission_state_refresh": "pass",
+        "mission_state_upsert": "pass",
         "judge_visible_agentic_trace": "pass",
         "closed_loop_stage_visible": "pass",
     }
