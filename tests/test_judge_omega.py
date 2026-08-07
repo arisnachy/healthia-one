@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "judge_omega.py"
 SCORECARD = ROOT / "hackathon" / "judge_omega_scorecard.json"
-CURRENT_EVIDENCE_SCORE = 76
+CURRENT_EVIDENCE_SCORE = 80
 
 
 def test_judge_omega_preserves_official_weights_and_current_baseline() -> None:
