@@ -197,7 +197,8 @@ def _answer_lines(payload: dict[str, Any]) -> list[str]:
         if detail:
             value = f"{value}. {detail}" if value else detail
         if value:
-            lines.append(f"- **{answer.get('question_id', 'dato')}:** {value}")
+            label = str(answer.get("question_prompt") or answer.get("question_id") or "Dato clínico").strip()
+            lines.append(f"- **{label}:** {value}")
     return lines
 
 
