@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from healthia_one.deterministic_router import respond
 from healthia_one.llm_policy import should_use_patient_chat_model
-from healthia_one.models import ChatMessage, ChatResponse, PatientState, RiskLevel
+from healthia_one.models import ChatMessage, ChatResponse, RiskLevel
 from healthia_one.service import seed_state
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_resolved_domain_actions_do_not_need_a_second_model_call() -> None:
@@ -52,3 +57,10 @@ def test_clinical_interview_remains_model_eligible_but_urgent_safety_never_is() 
         )
     )
     assert should_use_patient_chat_model("dolor de pecho intenso", urgent) is False
+
+
+def test_service_enforces_demand_policy_before_gemini_enhancement() -> None:
+    source = (ROOT / "healthia_one" / "service.py").read_text(encoding="utf-8")
+    assert "should_use_patient_chat_model(content, response)" in source
+    assert '"llm_status": "not_needed"' in source
+    assert '"model_call_saved": True' in source
