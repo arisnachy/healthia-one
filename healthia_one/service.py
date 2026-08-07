@@ -327,6 +327,11 @@ class HealthIAService:
             if controlled_response is None:
                 response = await self.gemini.enhance(state, content, response)
             response.message.patient_id = state.profile.id
+            if response.mission is None and response.message.mission_id:
+                response.mission = next(
+                    (item for item in state.missions if item.id == response.message.mission_id),
+                    None,
+                )
             if response.mission is not None:
                 response.mission.patient_id = state.profile.id
             state.messages.append(response.message)
