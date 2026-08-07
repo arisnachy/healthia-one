@@ -55,15 +55,17 @@ jobs:
           fi
           echo "Encrypted Gemini secret is available (value intentionally not printed)." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create ephemeral signing secrets
+      - name: Create and mask ephemeral signing secrets
         shell: bash
         run: |
-          python - <<'PY'
-          import os, secrets
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write(f"HEALTHIA_SESSION_SECRET={secrets.token_urlsafe(48)}\n")
-              output.write(f"HEALTHIA_DEVICE_TOKEN_SECRET={secrets.token_urlsafe(48)}\n")
-          PY
+          session_secret=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')
+          device_secret=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')
+          echo "::add-mask::$session_secret"
+          echo "::add-mask::$device_secret"
+          {
+            echo "HEALTHIA_SESSION_SECRET=$session_secret"
+            echo "HEALTHIA_DEVICE_TOKEN_SECRET=$device_secret"
+          } >> "$GITHUB_ENV"
 
       - name: Install exact candidate
         run: |
