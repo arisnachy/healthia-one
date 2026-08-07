@@ -5,20 +5,6 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
     const $ = (selector, root = document) => root.querySelector(selector);
     const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
     const ANSWER_PREFIX = "[ENTREVISTA_CLINICA]";
-    const publicRoles = {
-      INTERVIEWER: "Entrevista clínica",
-      SENTINEL: "Seguridad clínica",
-      HISTORIA: "Archivo longitudinal",
-      MEDSAFE: "Seguridad farmacológica",
-      ARCHIVUM: "Notas y documentos",
-      NAVIGATOR: "Seguimiento",
-      ADVOCATE: "Preparación de consulta",
-      HEREDITAS: "Historia familiar",
-      LUMEN: "Explicación de resultados",
-      VITA: "Hábitos y barreras",
-      BASTION: "Privacidad y consentimiento",
-      KIRA: "Coordinación",
-    };
     const sidebarCouncil = [
       ["EC", "Entrevista clínica", "Motivo, evolución y síntomas"],
       ["SC", "Seguridad clínica", "Alarmas y nivel de atención"],
@@ -104,6 +90,11 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       body.innerHTML = "<p>Respondí el bloque de entrevista clínica.</p>";
     }
 
+    function publicAreaLabel(step) {
+      const reason = String(step?.reason || "").trim();
+      return reason || "Área clínica coordinada";
+    }
+
     function renderCouncil(article, message) {
       if (!message?.agent_plan?.length) return;
       $(".agent-plan", article)?.remove();
@@ -114,8 +105,8 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
         <summary>Junta de salud · ${message.agent_plan.length} áreas coordinadas</summary>
         ${message.agent_plan.map(step => `
           <div class="council-member">
-            <strong>${esc(publicRoles[step.agent] || "Área clínica")}</strong>
-            <span>${esc(step.action)} · ${esc(step.reason)}</span>
+            <strong>${esc(publicAreaLabel(step))}</strong>
+            <span>${esc(step.action || "Revisión clínica")}</span>
           </div>`).join("")}`;
       $(".message-content", article)?.append(details);
     }
