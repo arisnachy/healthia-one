@@ -20,12 +20,7 @@ class AuthPrincipal:
 
 
 class IdentityVerifier:
-    """Verify Identity Platform/Firebase ID tokens for the custom FastAPI backend.
-
-    Local mode deliberately bypasses remote identity so CI and zero-spend local
-    development remain self-contained. Cloud mode requires a signed bearer token
-    and derives the patient scope exclusively from its verified ``uid``.
-    """
+    """Verify patient Identity Platform tokens and trusted Google service OIDC tokens."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -62,8 +57,8 @@ class IdentityVerifier:
             "ready": self.web_ready,
             "providers": ["google.com", "password"],
             "firebase": {
-                # Firebase web configuration values are project identifiers, not
-                # server credentials. Secret keys remain in Secret Manager.
+                # Firebase web configuration values are project identifiers used
+                # by the client SDK. Server credentials never enter this payload.
                 "apiKey": self.settings.firebase_api_key,
                 "authDomain": self.settings.firebase_auth_domain,
                 "projectId": self.settings.firebase_project_id,
@@ -88,8 +83,6 @@ class IdentityVerifier:
             pass
 
         options = {"projectId": self.settings.firebase_project_id} if self.settings.firebase_project_id else None
-        # Application Default Credentials are used on Cloud Run. Locally, an
-        # explicitly configured ADC/service account can be used for a live auth test.
         try:
             credential = credentials.ApplicationDefault()
             self._firebase_app = firebase_admin.initialize_app(
@@ -127,3 +120,39 @@ class IdentityVerifier:
             display_name=str(decoded.get("name") or "").strip(),
             provider=str(firebase_claim.get("sign_in_provider") or "").strip(),
         )
+
+    async def verify_google_service_bearer(
+        self,
+        authorization: str | None,
+        *,
+        audience: str,
+        expected_email: str,
+    ) -> dict[str, Any]:
+        """Verify the OIDC token used by authenticated Pub/Sub push.
+
+        This remains necessary when the judge-facing Cloud Run service itself is
+        public for browser access: the internal push endpoint must not become a
+        public mutation endpoint merely because the web UI is public.
+        """
+        value = str(authorization or "").strip()
+        if not value.lower().startswith("bearer "):
+            raise IdentityError("Trusted service authentication required")
+        token = value.split(" ", 1)[1].strip()
+        if not token or not audience or not expected_email:
+            raise IdentityError("Trusted service identity is not configured")
+        try:
+            from google.auth.transport.requests import Request as GoogleRequest
+            from google.oauth2 import id_token
+
+            claims = await asyncio.to_thread(
+                id_token.verify_oauth2_token,
+                token,
+                GoogleRequest(),
+                audience,
+            )
+        except Exception as exc:  # pragma: no cover - requires live Google OIDC
+            raise IdentityError("Trusted service token is invalid or expired") from exc
+        email = str(claims.get("email") or "").strip().lower()
+        if email != expected_email.strip().lower() or claims.get("email_verified") is False:
+            raise IdentityError("Trusted service identity does not match the Pub/Sub push account")
+        return claims
