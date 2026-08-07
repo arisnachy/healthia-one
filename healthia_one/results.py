@@ -34,19 +34,41 @@ def _coerce_item(raw: dict[str, Any]) -> ResultItem:
 
 
 def parse_result_file(filename: str, content: bytes) -> HealthResult:
+    """Parse deterministic result formats before considering a model call."""
     suffix = Path(filename).suffix.lower()
     if suffix == ".json":
         payload = json.loads(content.decode("utf-8"))
         rows = payload.get("results", payload if isinstance(payload, list) else [])
         items = [_coerce_item(row) for row in rows]
-        return HealthResult(filename=filename, panel=payload.get("panel", "Laboratorio") if isinstance(payload, dict) else "Laboratorio", items=items)
+        return HealthResult(
+            filename=filename,
+            original_mime_type="application/json",
+            panel=payload.get("panel", "Laboratorio") if isinstance(payload, dict) else "Laboratorio",
+            artifact_type="laboratory",
+            verification_status="document_reported",
+            items=items,
+        )
     if suffix == ".csv":
         reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
-        return HealthResult(filename=filename, panel="Laboratorio CSV", items=[_coerce_item(row) for row in reader])
+        return HealthResult(
+            filename=filename,
+            original_mime_type="text/csv",
+            panel="Laboratorio CSV",
+            artifact_type="laboratory",
+            verification_status="document_reported",
+            items=[_coerce_item(row) for row in reader],
+        )
     if suffix == ".txt":
         lines = [line.strip() for line in content.decode("utf-8").splitlines() if line.strip()]
         items = [ResultItem(name="Texto informado", value=line) for line in lines[:30]]
-        return HealthResult(filename=filename, panel="Resultado de texto", items=items)
+        return HealthResult(
+            filename=filename,
+            original_mime_type="text/plain",
+            panel="Resultado de texto",
+            artifact_type="other",
+            verification_status="document_reported",
+            items=items,
+        )
     return HealthResult(filename=filename, status="pending_multimodal", items=[])
 
 
