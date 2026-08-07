@@ -22,9 +22,16 @@ Reglas de herramientas:
 4. No inventes resultados de herramientas. Usa exclusivamente lo que las funciones devuelven.
 5. No uses una herramienta como decoración; cada llamada debe cambiar qué preguntas haces o qué falta aclarar.
 
+Reglas de memoria y naturalidad:
+- Trata chief_complaint y previous_answers como memoria clínica acumulada, no como texto decorativo.
+- Cada previous_answer incluye la pregunta original, opciones elegidas y detalle libre. No vuelvas a preguntar ese hecho con otras palabras salvo que exista una contradicción concreta.
+- Cada pregunta nueva debe poder justificarse por una incertidumbre específica del caso actual.
+- Evita plantillas genéricas como "¿qué otros síntomas tienes?" cuando ya puedes preguntar por un discriminante concreto.
+- Si la respuesta previa ya contiene duración, intensidad, medicamento, alergia, exposición, signo vital o señal de alarma, considéralo conocido.
+- Las opciones deben corresponder a la pregunta concreta; no uses la misma lista fija entre casos distintos.
+
 Reglas clínicas:
 - Usa el motivo actual, respuestas anteriores y contexto autorizado del mensaje.
-- No repitas datos ya contestados salvo contradicción explícita.
 - Incluye una pregunta sobre señales de alarma específicas del caso.
 - Nunca confirmes diagnósticos ni indiques iniciar, suspender o cambiar medicamentos/dosis.
 - No conviertas antecedentes familiares en predicciones.
@@ -33,7 +40,7 @@ Devuelve únicamente JSON válido, sin Markdown ni texto exterior:
 {
   "intent": "clinical_consultation",
   "clinical_focus": "frase breve",
-  "why_these_questions": ["razón 1", "razón 2"],
+  "why_these_questions": ["razón 1 ligada a un dato concreto", "razón 2 ligada a un dato concreto"],
   "missing_information": ["dato 1", "dato 2"],
   "selected_specialists": [{"role": "interview", "reason": "ejecutado por ADK"}],
   "questions": [
@@ -61,14 +68,15 @@ class AdkClinicalPlan:
 
 def _answer_payload(previous_answers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     clean: list[dict[str, Any]] = []
-    for item in previous_answers[-15:]:
+    for item in previous_answers[-30:]:
         if not isinstance(item, dict):
             continue
         clean.append(
             {
                 "question_id": str(item.get("question_id") or "")[:80],
+                "question_prompt": str(item.get("question_prompt") or "")[:320],
                 "selected": [str(value)[:160] for value in (item.get("selected") or [])[:8]],
-                "detail": str(item.get("detail") or "")[:400],
+                "detail": str(item.get("detail") or "")[:500],
             }
         )
     return clean
@@ -178,7 +186,7 @@ class AdkClinicalRuntime:
             return execute_role("family")
 
         def inspect_follow_up_context() -> dict[str, Any]:
-            """Call when the second block needs a concrete next step or mission closure condition."""
+            """Call when a later block needs a concrete next step or mission closure condition."""
             return execute_role("follow_up")
 
         def inspect_privacy_scope() -> dict[str, Any]:
@@ -228,6 +236,8 @@ class AdkClinicalRuntime:
                 "question_options_max": 7,
                 "must_execute_tools": ["interview", "safety"],
                 "maximum_total_tools": 4,
+                "must_not_repeat_known_answers": True,
+                "must_not_use_generic_template_when_case_specific_question_is_possible": True,
                 "must_not_diagnose_or_prescribe": True,
             },
         }
