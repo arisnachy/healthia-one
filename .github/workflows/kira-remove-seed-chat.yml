@@ -1,0 +1,48 @@
+name: KIRA remove unsolicited seed chat
+
+on:
+  push:
+    branches: [kira/omega-100-agentic-runtime]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/omega-100-agentic-runtime
+      - name: Remove synthetic assistant message and self-delete
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("healthia_one/service.py")
+          text = path.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r'\n    state\.messages = \[\n'
+              r'        ChatMessage\(\n'
+              r'            role="assistant",\n'
+              r'            author="HealthIA",\n'
+              r'            content="Hola, Ana\. Ya revisé tus datos recientes\. ¿Qué te gustaría revisar hoy\?",\n'
+              r'        \)\n'
+              r'    \]\n'
+          )
+          updated, count = pattern.subn("\n    state.messages = []\n", text, count=1)
+          if count != 1:
+              raise SystemExit("Expected synthetic assistant seed message was not found exactly once")
+          path.write_text(updated, encoding="utf-8")
+          Path(".github/workflows/kira-remove-seed-chat.yml").unlink()
+      - name: Commit migration and self-delete
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add healthia_one/service.py .github/workflows/kira-remove-seed-chat.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: open patient chat without unsolicited assistant message"
+          git push origin HEAD:kira/omega-100-agentic-runtime
