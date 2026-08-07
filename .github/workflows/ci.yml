@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-22.04
-    timeout-minutes: 18
+    timeout-minutes: 35
     env:
       HEALTHIA_LLM_BACKEND: mock
       HEALTHIA_STORE_BACKEND: memory
@@ -28,7 +28,21 @@ jobs:
           node-version: "22"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[test]"
+      - name: Install Chromium for browser verification
+        run: python -m playwright install --with-deps chromium
       - run: pytest
+      - name: Full system verification
+        run: python scripts/full_system_check.py
+      - name: Browser end-to-end verification
+        run: python scripts/browser_smoke.py
+      - name: Upload browser verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-browser-smoke
+          path: dist/browser-smoke
+          if-no-files-found: warn
+          retention-days: 30
       - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py
       - run: python scripts/smoke_test.py
       - name: JUDGE OMEGA evidence review
@@ -64,6 +78,22 @@ jobs:
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
       - name: Verify release archive
         run: python scripts/verify_release_zip.py dist/HealthIA-ONE-release-candidate.zip --source-ref "$GITHUB_SHA"
+      - name: Verify tests inside extracted release
+        shell: bash
+        run: |
+          rm -rf dist/release-verification
+          mkdir -p dist/release-verification
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          archive = Path("dist/HealthIA-ONE-release-candidate.zip")
+          target = Path("dist/release-verification")
+          with ZipFile(archive) as bundle:
+              bundle.extractall(target)
+          PY
+          release_root=$(find dist/release-verification -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          test -n "$release_root"
+          (cd "$release_root" && PYTHONPATH=. HEALTHIA_LLM_BACKEND=mock HEALTHIA_STORE_BACKEND=memory python -m pytest -q)
       - name: Upload verified release archive
         uses: actions/upload-artifact@v4
         with:
