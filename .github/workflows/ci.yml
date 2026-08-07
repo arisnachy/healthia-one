@@ -30,7 +30,20 @@ jobs:
       - run: python -m pip install -e ".[test]"
       - name: Install Chromium for browser verification
         run: python -m playwright install --with-deps chromium
-      - run: pytest
+      - name: Run pytest
+        shell: bash
+        run: |
+          mkdir -p dist/test-evidence
+          set -o pipefail
+          pytest -q --tb=short 2>&1 | tee dist/test-evidence/pytest.log
+      - name: Upload pytest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-pytest-evidence
+          path: dist/test-evidence/pytest.log
+          if-no-files-found: error
+          retention-days: 30
       - name: Full system verification
         run: python scripts/full_system_check.py
       - name: Browser end-to-end verification
