@@ -11,235 +11,47 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout candidate
+        uses: actions/checkout@v4
         with:
           ref: kira/event-driven-results-twin-p1
           fetch-depth: 0
+          token: ${{ github.token }}
 
-      - uses: actions/setup-python@v6
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
 
-      - name: Apply reversible Vertex AI transport
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
+      - name: Apply Vertex transport migration
+        run: python scripts/apply_vertex_transport_migration.py
 
-          path = Path('healthia_one/config.py')
-          text = path.read_text(encoding='utf-8')
-          old = '''    @property
-    def adk_ready(self) -> bool:
-        if self.llm_backend == "mock":
-            return False
-        import os
-        return bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
-'''
-          new = '''    @property
-    def vertex_ai_enabled(self) -> bool:
-        import os
-
-        flag = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
-        return self.llm_backend == "vertex_ai" or flag in {"1", "true", "yes", "on"}
-
-    @property
-    def adk_ready(self) -> bool:
-        if self.llm_backend == "mock":
-            return False
-        import os
-
-        if self.vertex_ai_enabled:
-            return bool(os.getenv("GOOGLE_CLOUD_PROJECT"))
-        return bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
-'''
-          if old not in text:
-              raise SystemExit('config.py readiness anchor not found')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          path = Path('healthia_one/gemini.py')
-          text = path.read_text(encoding='utf-8')
-          text = text.replace('import asyncio\nimport json\nimport os\n', 'import asyncio\nimport base64\nimport json\nimport os\n', 1)
-          text = text.replace('from typing import Any\n', 'from types import SimpleNamespace\nfrom typing import Any\n', 1)
-
-          class_anchor = '\n\nclass GeminiResponder:\n'
-          adapter = r'''
-
-class _VertexInteractionsAdapter:
-    """Adapt HealthIA's stateless Interactions-style calls to Vertex generateContent."""
-
-    def __init__(self, client: Any) -> None:
-        self._client = client
-
-    @staticmethod
-    def _contents(value: Any):
-        from google.genai import types
-
-        if not isinstance(value, list):
-            return value
-        parts = []
-        for item in value:
-            if isinstance(item, str):
-                parts.append(types.Part.from_text(text=item))
-                continue
-            if not isinstance(item, dict):
-                parts.append(item)
-                continue
-            kind = str(item.get("type") or "").lower()
-            if kind == "text":
-                parts.append(types.Part.from_text(text=str(item.get("text") or "")))
-                continue
-            if kind in {"image", "document"}:
-                encoded = str(item.get("data") or "")
-                mime_type = str(item.get("mime_type") or "application/octet-stream")
-                parts.append(types.Part.from_bytes(data=base64.b64decode(encoded), mime_type=mime_type))
-                continue
-            parts.append(types.Part.from_text(text=json.dumps(item, ensure_ascii=False, default=str)))
-        return [types.Content(role="user", parts=parts)]
-
-    def create(
-        self,
-        *,
-        model: str,
-        input: Any,
-        system_instruction: str | None = None,
-        generation_config: dict[str, Any] | None = None,
-        store: bool | None = None,
-        **_kwargs: Any,
-    ) -> Any:
-        from google.genai import types
-
-        raw = dict(generation_config or {})
-        config_kwargs: dict[str, Any] = {}
-        if system_instruction:
-            config_kwargs["system_instruction"] = system_instruction
-        if raw.get("max_output_tokens") is not None:
-            config_kwargs["max_output_tokens"] = int(raw["max_output_tokens"])
-        if raw.get("temperature") is not None:
-            config_kwargs["temperature"] = float(raw["temperature"])
-        response = self._client.models.generate_content(
-            model=model,
-            contents=self._contents(input),
-            config=types.GenerateContentConfig(**config_kwargs),
-        )
-        return SimpleNamespace(output_text=str(response.text or ""), raw=response, store=False)
-
-
-class _VertexClientAdapter:
-    def __init__(self, client: Any) -> None:
-        self._client = client
-        self.models = client.models
-        self.interactions = _VertexInteractionsAdapter(client)
-'''
-          if class_anchor not in text:
-              raise SystemExit('gemini.py class anchor not found')
-          text = text.replace(class_anchor, adapter + class_anchor, 1)
-
-          init_anchor = '''        self.last_status = "not_called"\n        self.last_error = ""\n'''
-          init_replacement = '''        self.last_status = "not_called"\n        self.last_error = ""\n        if self.settings.vertex_ai_enabled:\n            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"\n            os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")\n'''
-          if init_anchor not in text:
-              raise SystemExit('gemini.py init anchor not found')
-          text = text.replace(init_anchor, init_replacement, 1)
-
-          status_anchor = '''                "api_key_configured": self.settings.adk_ready,\n                "ui_control_available": bool(self.settings.cost_control_ui and self.settings.env == "local"),\n'''
-          status_replacement = '''                "api_key_configured": self.settings.adk_ready and not self.settings.vertex_ai_enabled,\n                "ai_transport": "vertex_ai" if self.settings.vertex_ai_enabled else self.settings.llm_backend,\n                "vertex_project": os.getenv("GOOGLE_CLOUD_PROJECT", "") if self.settings.vertex_ai_enabled else "",\n                "ui_control_available": bool(self.settings.cost_control_ui and self.settings.env == "local"),\n'''
-          if status_anchor not in text:
-              raise SystemExit('gemini.py cost status anchor not found')
-          text = text.replace(status_anchor, status_replacement, 1)
-          text = text.replace('raise CostGuardBlocked("No hay una API key configurada para esta ejecución local.")', 'raise CostGuardBlocked("Google AI no está configurado para esta ejecución local.")', 1)
-
-          client_anchor = '''                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")\n                if not api_key:\n                    raise RuntimeError("GEMINI_API_KEY no está configurada para el proceso actual")\n                self._client = genai.Client(api_key=api_key)\n'''
-          client_replacement = '''                if self.settings.vertex_ai_enabled:\n                    project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()\n                    location = os.getenv("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"\n                    if not project:\n                        raise RuntimeError("GOOGLE_CLOUD_PROJECT no está configurado para Vertex AI")\n                    self._client = _VertexClientAdapter(\n                        genai.Client(vertexai=True, project=project, location=location)\n                    )\n                else:\n                    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")\n                    if not api_key:\n                        raise RuntimeError("GEMINI_API_KEY no está configurada para el proceso actual")\n                    self._client = genai.Client(api_key=api_key)\n'''
-          if client_anchor not in text:
-              raise SystemExit('gemini.py client anchor not found')
-          text = text.replace(client_anchor, client_replacement, 1)
-          path.write_text(text, encoding='utf-8')
-
-          path = Path('deployment/verify_google_ai.py')
-          text = path.read_text(encoding='utf-8')
-          api_anchor = '''    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")\n    model_name = os.getenv("HEALTHIA_MODEL", "gemini-3.6-flash").strip()\n    if not api_key:\n        print("HEALTHIA_GOOGLE_AI_ERROR category=auth detail=missing_api_key", file=sys.stderr)\n        return 2\n'''
-          api_replacement = '''    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")\n    model_name = os.getenv("HEALTHIA_MODEL", "gemini-3.6-flash").strip()\n    vertex_enabled = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in {"1", "true", "yes", "on"}\n    project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()\n    location = os.getenv("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"\n    if vertex_enabled and not project:\n        print("HEALTHIA_GOOGLE_AI_ERROR category=auth detail=missing_google_cloud_project", file=sys.stderr)\n        return 2\n    if not vertex_enabled and not api_key:\n        print("HEALTHIA_GOOGLE_AI_ERROR category=auth detail=missing_api_key", file=sys.stderr)\n        return 2\n'''
-          if api_anchor not in text:
-              raise SystemExit('verify_google_ai api anchor not found')
-          text = text.replace(api_anchor, api_replacement, 1)
-
-          request_anchor = '''        client = genai.Client(api_key=api_key)\n        if not hasattr(client, "interactions"):\n            raise RuntimeError("Interactions API is unavailable in the installed google-genai SDK")\n        interaction = client.interactions.create(\n            model=model_name,\n            input="Reply only with HEALTHIA_OK",\n            system_instruction="Minimal technical readiness check. Return no other text.",\n            store=False,\n        )\n        text = interaction_text(interaction)\n        if not text:\n            raise RuntimeError("Gemini returned no usable text")\n'''
-          request_replacement = '''        if vertex_enabled:\n            from google.genai import types\n\n            client = genai.Client(vertexai=True, project=project, location=location)\n            response = client.models.generate_content(\n                model=model_name,\n                contents="Reply only with HEALTHIA_OK",\n                config=types.GenerateContentConfig(\n                    system_instruction="Minimal technical readiness check. Return no other text.",\n                    max_output_tokens=128,\n                    temperature=0,\n                ),\n            )\n            text = str(response.text or "").strip()\n        else:\n            client = genai.Client(api_key=api_key)\n            if not hasattr(client, "interactions"):\n                raise RuntimeError("Interactions API is unavailable in the installed google-genai SDK")\n            interaction = client.interactions.create(\n                model=model_name,\n                input="Reply only with HEALTHIA_OK",\n                system_instruction="Minimal technical readiness check. Return no other text.",\n                store=False,\n            )\n            text = interaction_text(interaction)\n        if not text:\n            raise RuntimeError("Gemini returned no usable text")\n'''
-          if request_anchor not in text:
-              raise SystemExit('verify_google_ai request anchor not found')
-          text = text.replace(request_anchor, request_replacement, 1)
-          ready_anchor = '''        "HEALTHIA_GOOGLE_AI_READY "\n        f"model={model_name} sdk={sdk_version} stateless=true response={text[:32].replace(' ', '_')}"\n'''
-          ready_replacement = '''        "HEALTHIA_GOOGLE_AI_READY "\n        f"model={model_name} sdk={sdk_version} stateless=true "\n        f"transport={'vertex_ai' if vertex_enabled else 'developer_api'} "\n        f"response={text[:32].replace(' ', '_')}"\n'''
-          if ready_anchor not in text:
-              raise SystemExit('verify_google_ai ready anchor not found')
-          text = text.replace(ready_anchor, ready_replacement, 1)
-          path.write_text(text, encoding='utf-8')
-
-          path = Path('scripts/live_taskmaster_proof.py')
-          text = path.read_text(encoding='utf-8')
-          req_anchor = '''    required = ["GEMINI_API_KEY", "HEALTHIA_SESSION_SECRET", "HEALTHIA_DEVICE_TOKEN_SECRET"]\n    if any(not os.getenv(name) for name in required):\n        print("HEALTHIA_TASKMASTER_PROOF_BLOCKED: missing required secret environment")\n        return 2\n'''
-          req_replacement = '''    vertex_enabled = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in {"1", "true", "yes", "on"}\n    required = ["HEALTHIA_SESSION_SECRET", "HEALTHIA_DEVICE_TOKEN_SECRET"]\n    if vertex_enabled:\n        required.append("GOOGLE_CLOUD_PROJECT")\n    else:\n        required.append("GEMINI_API_KEY")\n    if any(not os.getenv(name) for name in required):\n        print("HEALTHIA_TASKMASTER_PROOF_BLOCKED: missing required AI/auth environment")\n        return 2\n'''
-          if req_anchor not in text:
-              raise SystemExit('live_taskmaster proof requirement anchor not found')
-          text = text.replace(req_anchor, req_replacement, 1)
-          proof_anchor = '''        "expected_gemini_requests": 1,\n        "checks": [],\n'''
-          proof_replacement = '''        "expected_gemini_requests": 1,\n        "ai_transport": "vertex_ai" if vertex_enabled else "developer_api",\n        "google_cloud_project": os.getenv("GOOGLE_CLOUD_PROJECT", "") if vertex_enabled else "",\n        "checks": [],\n'''
-          if proof_anchor not in text:
-              raise SystemExit('live_taskmaster proof metadata anchor not found')
-          text = text.replace(proof_anchor, proof_replacement, 1)
-          path.write_text(text, encoding='utf-8')
-
-          path = Path('.env.example')
-          text = path.read_text(encoding='utf-8')
-          env_anchor = '''# Configure only for an explicit guarded run. Never commit a real key.\nGEMINI_API_KEY=\nGOOGLE_CLOUD_PROJECT=\nHEALTHIA_GCS_BUCKET=\n'''
-          env_replacement = '''# Configure one Google AI transport for an explicit guarded run. Never commit credentials.\n# Developer API / AI Studio:\nGEMINI_API_KEY=\n# Vertex AI / Google Cloud ADC (preferred for Cloud deployment):\nGOOGLE_GENAI_USE_VERTEXAI=false\nGOOGLE_CLOUD_PROJECT=\nGOOGLE_CLOUD_LOCATION=global\nHEALTHIA_GCS_BUCKET=\n'''
-          if env_anchor not in text:
-              raise SystemExit('.env.example anchor not found')
-          path.write_text(text.replace(env_anchor, env_replacement, 1), encoding='utf-8')
-
-          Path('tests/test_vertex_transport.py').write_text(r'''from __future__ import annotations
-
-from healthia_one.config import Settings
-
-
-def test_vertex_transport_readiness_uses_project_not_gemini_key(monkeypatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "healthia-test-project")
-    settings = Settings(llm_backend="gemini_api")
-    assert settings.vertex_ai_enabled is True
-    assert settings.adk_ready is True
-
-
-def test_vertex_transport_requires_project(monkeypatch) -> None:
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
-    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
-    settings = Settings(llm_backend="gemini_api")
-    assert settings.vertex_ai_enabled is True
-    assert settings.adk_ready is False
-''', encoding='utf-8')
-          PY
-
-      - name: Install candidate and run migration regressions
+      - name: Install candidate
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
-          python -m pytest -q tests/test_vertex_transport.py tests/test_result_taskmaster_closure.py tests/test_patient_auth_isolation.py
-          python -m compileall -q healthia_one deployment scripts
 
-      - name: Run complete deterministic suite
+      - name: Run focused migration regressions
+        run: |
+          python -m pytest -q tests/test_vertex_transport.py tests/test_result_taskmaster_closure.py tests/test_patient_auth_isolation.py
+          python -m compileall -q healthia_one scripts deployment
+
+      - name: Run complete deterministic verification
+        env:
+          HEALTHIA_LLM_BACKEND: mock
+          HEALTHIA_STORE_BACKEND: memory
         run: |
           python -m pytest -q
           python scripts/full_system_check.py
 
-      - name: Publish only after green verification
+      - name: Publish only after all tests pass
         shell: bash
         run: |
+          set -euo pipefail
+          git rm scripts/apply_vertex_transport_migration.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add healthia_one/config.py healthia_one/gemini.py deployment/verify_google_ai.py scripts/live_taskmaster_proof.py .env.example tests/test_vertex_transport.py
-          git commit -m "feat: route HealthIA Gemini through authenticated Vertex AI"
+          git add .env.example healthia_one scripts/live_taskmaster_proof.py tests/test_vertex_transport.py
+          git commit -m "feat: route HealthIA Google AI through Vertex ADC"
           git push origin HEAD:kira/event-driven-results-twin-p1
