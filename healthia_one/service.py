@@ -469,7 +469,16 @@ class HealthIAService:
             findings = evaluate_state(state)
             created: list[ChatMessage] = []
             for finding in findings:
-                if not finding_allowed(state, finding):
+                # A deterministic finding is emitted once for its evidence key.
+                # New evidence must produce a new key before HealthIA speaks again.
+                if finding.key in state.emitted_rule_keys:
+                    continue
+                allowed, permission_reason = finding_allowed(
+                    state,
+                    finding,
+                    manual_requested=manual_requested,
+                )
+                if not allowed:
                     continue
                 message = ChatMessage(
                     patient_id=state.profile.id,
@@ -482,9 +491,15 @@ class HealthIAService:
                 )
                 state.messages.append(message)
                 created.append(message)
-                if finding.key not in state.emitted_rule_keys:
-                    state.emitted_rule_keys.append(finding.key)
-                audit(state, actor="healthia", action="emit_requested_continuity_finding", resource_type="chat_message", resource_id=message.id, details={"rule_key": finding.key})
+                state.emitted_rule_keys.append(finding.key)
+                audit(
+                    state,
+                    actor="healthia",
+                    action="emit_requested_continuity_finding",
+                    resource_type="chat_message",
+                    resource_id=message.id,
+                    details={"rule_key": finding.key, "permission_reason": permission_reason},
+                )
             if created:
                 await self.store.save(state)
         for message in created:
