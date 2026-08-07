@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "judge_omega.py"
 SCORECARD = ROOT / "hackathon" / "judge_omega_scorecard.json"
-CURRENT_EVIDENCE_SCORE = 66
+CURRENT_EVIDENCE_SCORE = 76
 
 
 def test_judge_omega_preserves_official_weights_and_current_baseline() -> None:
@@ -21,6 +21,7 @@ def test_judge_omega_preserves_official_weights_and_current_baseline() -> None:
     }
     assert sum(item["max_points"] for item in payload["criteria"]) == 100
     assert sum(item["awarded_points"] for item in payload["criteria"]) == CURRENT_EVIDENCE_SCORE
+    assert any(item["status"] != "proven" for item in payload["hard_gates"])
 
 
 def test_judge_omega_evaluator_validates_repository_evidence() -> None:
