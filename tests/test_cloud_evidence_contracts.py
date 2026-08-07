@@ -94,18 +94,24 @@ def test_permanent_background_loop_is_absent() -> None:
     assert "setInterval(" not in device_source
 
 
-def test_cloud_deploy_requires_durable_evidence_and_strict_proof() -> None:
+def test_cloud_deploy_requires_authenticated_durable_evidence_and_strict_proof() -> None:
     deploy = Path("deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
     verifier = Path("deployment/verify_cloud_demo.py").read_text(encoding="utf-8")
     assert "HEALTHIA_STORE_BACKEND=firestore" in deploy
+    assert "HEALTHIA_AUTH_REQUIRED=true" in deploy
     assert "HEALTHIA_GCS_BUCKET=$BucketName" in deploy
     assert "HEALTHIA_PROACTIVE_ENABLED=false" in deploy
     assert "HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest" in deploy
+    assert "HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest" in deploy
     assert "verify_cloud_demo.py" in deploy
     assert '"live_gemini_interactions_call"' in verifier
     assert '"google_adk_runner_tool_trajectory"' in verifier
-    assert '"five_dynamic_clinical_questions"' in verifier
+    assert '"two_memory_preserving_dynamic_question_blocks"' in verifier
+    assert '"gemini_followup_or_orientation_decision"' in verifier
+    assert '"restart_safe_browser_session_identity"' in verifier
     assert '"restart_safe_device_identity"' in verifier
-    assert '"gcs_original_evidence"' in verifier
+    assert '"two_patient_state_isolation"' in verifier
+    assert '"cross_patient_document_denied"' in verifier
+    assert '"gcs_patient_scoped_original_evidence"' in verifier
     assert '"clinical_twin_provenance"' in verifier
     assert '"original_evidence_roundtrip"' in verifier
