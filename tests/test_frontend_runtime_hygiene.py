@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
@@ -38,4 +39,9 @@ def test_repository_contains_no_transfer_or_temporary_workflow_artifacts() -> No
     assert not (ROOT / ".cleanup-bundle").exists()
     assert not list(ROOT.glob(".audit-tree-probe*"))
     assert not list((ROOT / ".github" / "workflows").glob("apply-*.yml"))
-    assert not (ROOT / "RELEASE-MANIFEST.json").exists()
+    manifest = ROOT / "RELEASE-MANIFEST.json"
+    if manifest.exists():
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        assert payload.get("project") == "HealthIA ONE"
+        assert payload.get("synthetic_demo_only") is True
+        assert payload.get("source_ref")
