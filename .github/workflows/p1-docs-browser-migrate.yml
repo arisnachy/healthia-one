@@ -1,0 +1,77 @@
+name: P1 docs and browser migration
+
+on:
+  push:
+    branches:
+      - kira/omega-100-agentic-runtime
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/omega-100-agentic-runtime
+          fetch-depth: 1
+      - name: Align Chromium, README and verification evidence then self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p=Path(path); text=p.read_text(encoding="utf-8")
+              if old not in text: raise SystemExit(f"Missing block in {path}: {old[:100]!r}")
+              p.write_text(text.replace(old,new,1),encoding="utf-8")
+
+          replace("scripts/browser_smoke.py",
+              "  if(url.includes('/api/readiness')) return new MockResponse({ready:true,llm_backend:'gemini_api',model:'gemini-3.6-flash',ai_ready:true,adk_ready:true});",
+              "  if(url.includes('/api/auth/config')) return new MockResponse({enabled:false,mode:'local',providers:[]});\n  if(url.includes('/api/readiness')) return new MockResponse({ready:true,llm_backend:'gemini_api',model:'gemini-3.6-flash',ai_ready:true,adk_ready:true});")
+          replace("scripts/browser_smoke.py",
+              '''        for script in (\n            "app.js",''',
+              '''        for script in (\n            "auth.js",\n            "app.js",''')
+
+          replace("README.md",
+              'This repository is a clean hackathon implementation. The public demo uses a synthetic patient only.',
+              'This repository is a clean hackathon implementation. The judge build supports isolated patient accounts, while the clinical proof path uses clearly labeled synthetic data. Do not enter real protected health information in the hackathon demo.')
+          replace("README.md",
+              '''- Visible Google AI on/off switch with a hard request ceiling per process.\n- Model output-token ceiling and low-thinking configuration.\n- Guarded Cloud Run deployment and explicit cleanup scripts.''',
+              '''- Agents execute on demand; inactive specialists consume no model calls.\n- Zero-spend deterministic path for non-actionable events and local development.\n- Per-instance request ceiling retained only as an emergency technical fuse.\n- Cloud budget target of USD 45 with a desired absolute envelope below USD 50, backed by eligible service spend caps, alerts, scale-to-zero and cleanup.\n- Google Identity Platform/Firebase Auth with Google sign-in and email/password account creation in the judge build.\n- Firestore, uploads, device pairing and event streams isolated by the verified immutable user UID.''')
+          replace("README.md",
+              'python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py\nnode --check web/app.js',
+              'python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py\nnode --check web/auth.js\nnode --check web/app.js')
+          old_cloud='''Use a dedicated hackathon Google Cloud project. The deployment helper creates the low-spend proof path: private Cloud Run, Firestore, Secret Manager, Pub/Sub authenticated push and a Cloud Scheduler job that is **paused immediately**.\n\n```powershell\n.\\deployment\\deploy-cloud-demo.ps1 `\n  -ProjectId YOUR_PROJECT_ID `\n  -Region us-central1 `\n  -FirestoreLocation us-central1 `\n  -RequestLimit 6 `\n  -MaxOutputTokens 350\n```\n\nThe cloud runtime uses minimum instances `0`, maximum instances `1`, request-based CPU and no process-local proactive loop. An actionable ADK mission reserves the complete two-model-call worst-case budget before it starts; a non-actionable event uses zero Gemini calls.'''
+          new_cloud='''Use a dedicated hackathon Google Cloud project. Before deployment configure Cloud Billing alerts/spend caps so the **working target is USD 45 and the desired total envelope remains below USD 50**. Spend-cap enforcement is service-specific and not instantaneous, so HealthIA also uses scale-to-zero, one maximum instance, a paused scheduler, on-demand agents and cleanup.\n\nFor the strict six-call infrastructure proof:\n\n```powershell\n.\\deployment\\deploy-cloud-demo.ps1 `\n  -ProjectId YOUR_PROJECT_ID `\n  -Region us-central1 `\n  -FirestoreLocation us-central1 `\n  -RequestLimit 6 `\n  -MaxOutputTokens 350\n```\n\nFor the judge-facing authenticated build, register a Firebase/Identity Platform web app, enable Google and email/password providers, then deploy with `-PublicDemo -EnablePatientAuth` and the public Firebase web configuration values documented in [`docs/IDENTITY_AND_BUDGET.md`](docs/IDENTITY_AND_BUDGET.md). The Gemini key remains only in Secret Manager.\n\nThe cloud runtime uses minimum instances `0`, maximum instances `1`, request-based CPU and no process-local proactive loop. Specialists are selected only when useful; an actionable ADK mission reserves its bounded worst-case calls before it starts and a non-actionable event uses zero Gemini calls.'''
+          replace("README.md", old_cloud, new_cloud)
+          replace("README.md",
+              'See [`docs/CLOUD_AGENTIC_PROOF.md`](docs/CLOUD_AGENTIC_PROOF.md) for the exact evidence contract and [`docs/SUBMISSION_PACKAGE.md`](docs/SUBMISSION_PACKAGE.md) for the four-minute judge path.',
+              'See [`docs/CLOUD_AGENTIC_PROOF.md`](docs/CLOUD_AGENTIC_PROOF.md) for the exact evidence contract, [`docs/IDENTITY_AND_BUDGET.md`](docs/IDENTITY_AND_BUDGET.md) for login/isolation and the USD 50 safety envelope, and [`docs/SUBMISSION_PACKAGE.md`](docs/SUBMISSION_PACKAGE.md) for the four-minute judge path.')
+          replace("README.md",
+              'Production beyond the hackathon still requires authenticated multi-patient isolation, hardened Firestore authorization, private encrypted object storage for document bytes, malware scanning, retention/deletion policy, clinical validation and independent privacy/security/legal review.',
+              'The hackathon build now verifies authenticated per-user isolation at the application/store boundary. Production beyond the hackathon still requires hardened authorization policy review, private encrypted object storage for document bytes, malware scanning, retention/deletion policy, clinical validation and independent privacy/security/legal review.')
+
+          # Add verified identity isolation to the architecture and verification matrix.
+          arch=Path("docs/ARCHITECTURE.md"); text=arch.read_text(encoding="utf-8")
+          marker='## The autonomous mission contract\n'
+          identity='''## Identity and tenant isolation\n\nThe judge-facing UI uses Google Identity Platform/Firebase Auth. Google sign-in and email/password accounts produce an ID token that the FastAPI backend verifies with Firebase Admin. The immutable verified `uid` becomes the only patient scope for Firestore, local state adapters, uploads, audit events and SSE subscriptions. Device pairing codes created by an authenticated user bind the resulting hashed device token to the same UID.\n\nA public Cloud Run judge UI does not make the internal Pub/Sub mutation endpoint public: Pub/Sub sends an OIDC token from a dedicated push service account and HealthIA verifies both its audience and service-account email before accepting the envelope.\n\n'''
+          if identity not in text:
+              if marker not in text: raise SystemExit("Architecture insertion marker missing")
+              arch.write_text(text.replace(marker, identity+marker,1),encoding="utf-8")
+
+          matrix=Path("docs/VERIFICATION_MATRIX.md"); text=matrix.read_text(encoding="utf-8")
+          row='| Patient control | Consent, quiet hours, snooze and mute | System check |\n'
+          newrow=row+'| Authenticated isolation | Two verified UIDs cannot read each other; uploads, SSE and device tokens remain scoped | Identity isolation tests + HTTP API test |\n'
+          if 'Authenticated isolation' not in text:
+              if row not in text: raise SystemExit("Verification matrix insertion marker missing")
+              matrix.write_text(text.replace(row,newrow,1),encoding="utf-8")
+          PY
+          rm .github/workflows/p1-docs-browser-migrate.yml
+          git config user.name "KIRA FORJA verification"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "docs: align authenticated judge build and browser evidence"
+          git push origin HEAD:kira/omega-100-agentic-runtime
