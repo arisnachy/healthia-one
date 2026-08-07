@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from healthia_one.models import ClinicalDocument, HealthResult, PatientState
 from healthia_one.pairing import DevicePairingManager, PairingError
 from healthia_one.result_ai import apply_multimodal_analysis, infer_result_kind, multimodal_supported
+from healthia_one.result_search import conversational_result_context
 from healthia_one.twin import clinical_twin_summary
 
 
@@ -103,6 +104,36 @@ def test_clinical_twin_links_result_to_original_evidence() -> None:
     assert node["regions"] == ["Corazón"]
     assert twin["region_index"]["corazón"] == [result.id]
     assert twin["source_of_truth"] == "patient_state"
+
+
+def test_chat_retrieval_finds_requested_tac_instead_of_latest_lab() -> None:
+    state = PatientState()
+    tac = HealthResult(
+        filename="TAC_torax_enero.png",
+        panel="TC de tórax",
+        explanation="Estudio de tórax de enero.",
+    )
+    lab = HealthResult(
+        filename="laboratorio_julio.json",
+        panel="Laboratorio de julio",
+        explanation="Laboratorio más reciente.",
+    )
+    document = ClinicalDocument(
+        title="TAC original",
+        filename=tac.filename,
+        mime_type="image/png",
+        storage_path="uploads/patient_demo/tac.png",
+        status="parsed",
+        related_result_id=tac.id,
+    )
+    state.results.extend([tac, lab])
+    state.documents.append(document)
+
+    context = conversational_result_context(state, "Háblame de mi TAC de tórax")
+    assert context is not None
+    assert context["result_id"] == tac.id
+    assert context["document_id"] == document.id
+    assert context["filename"] == "TAC_torax_enero.png"
 
 
 def test_browser_pairing_has_no_repetitive_interval_polling() -> None:
