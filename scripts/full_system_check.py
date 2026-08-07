@@ -27,6 +27,7 @@ def answers_for(interview: dict) -> str:
     answers = [
         {
             "question_id": question["id"],
+            "question_prompt": question["prompt"],
             "selected": [question["options"][0]],
             "detail": "",
         }
