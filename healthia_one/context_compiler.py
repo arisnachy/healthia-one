@@ -14,6 +14,13 @@ STOPWORDS = {
     "resultado", "resultados", "archivo", "estudio",
 }
 
+RESULT_REFERENCE_TERMS = (
+    "resultado", "laboratorio", "analitica", "analisis", "reporte", "informe", "estudio",
+    "tomografia", "tac", "ct", "resonancia", "mri", "radiografia", "rayos x", "rx",
+    "ecg", "ekg", "electrocardiograma", "ultrasonido", "sonografia", "imagen", "pdf",
+    "lo que subi", "lo que te subi", "archivo que subi", "estudio que subi",
+)
+
 
 def _normalize(text: str) -> str:
     value = unicodedata.normalize("NFKD", str(text or "").lower())
@@ -43,13 +50,13 @@ def relevant_results(state: PatientState, query: str, *, limit: int = 3) -> list
     if not state.results:
         return []
     query_tokens = _tokens(query)
+    normalized_query = _normalize(query)
     scored: list[tuple[int, int, HealthResult]] = []
     total = len(state.results)
     for index, result in enumerate(state.results):
         result_tokens = _tokens(_result_text(result))
         overlap = len(query_tokens & result_tokens)
         phrase_bonus = 0
-        normalized_query = _normalize(query)
         panel = _normalize(result.panel)
         filename = _normalize(result.filename)
         if panel and len(panel) > 4 and panel in normalized_query:
@@ -63,9 +70,13 @@ def relevant_results(state: PatientState, query: str, *, limit: int = 3) -> list
     matched = [item for score, _, item in sorted(scored, key=lambda row: (row[0], row[1]), reverse=True) if score > 0]
     if matched:
         return matched[:limit]
-    # When the user refers generically to "lo que subí" there may be no lexical
-    # overlap. Recent artifacts are the least-surprising deterministic fallback.
-    return list(reversed(state.results[-limit:]))
+
+    # Generic references such as "¿qué decía la tomografía que subí?" may not
+    # overlap a filename. Only then fall back to recent result artifacts; unrelated
+    # conversation receives no result context and therefore spends fewer tokens.
+    if any(term in normalized_query for term in RESULT_REFERENCE_TERMS):
+        return list(reversed(state.results[-limit:]))
+    return []
 
 
 def compile_query_context(state: PatientState, query: str) -> dict[str, Any]:
