@@ -92,6 +92,7 @@ def main() -> int:
         "model": os.getenv("HEALTHIA_MODEL", ""),
         "checks": [],
         "synthetic_only": True,
+        "transport": "https_testclient",
     }
 
     suffix = uuid4().hex[:10]
@@ -100,7 +101,10 @@ def main() -> int:
     email_b = f"live-b-{suffix}@example.test"
 
     try:
-        with TestClient(app) as client:
+        # Production/CI sessions are Secure cookies. The proof therefore uses an
+        # HTTPS base URL so the test client exercises the real cookie boundary
+        # instead of silently dropping the session on the next request.
+        with TestClient(app, base_url="https://healthia.test") as client:
             require(client.get("/api/bootstrap").status_code == 401, "protected API accepted anonymous request")
             proof["checks"].append("anonymous_patient_api_rejected")
 
@@ -112,10 +116,13 @@ def main() -> int:
             session_a = created_a.json()
             patient_a = session_a["account"]["patient_id"]
             require(patient_a.startswith("patient_"), "patient A id not bound")
+            require(client.get("/api/auth/session").json().get("authenticated") is True, "secure patient session cookie was not retained")
             proof["checks"].append("patient_a_authenticated")
+            proof["checks"].append("secure_session_cookie_roundtrip")
 
             weight = client.post("/api/weight", json={"weight_kg": 81.2, "note": "synthetic isolation marker"})
-            require(weight.status_code == 200, "patient A weight write failed")
+            require(weight.status_code == 200, f"patient A weight write failed: HTTP {weight.status_code} {weight.text[:300]}")
+            proof["checks"].append("patient_a_scoped_write")
 
             complaint = "Desde ayer tengo ardor al orinar y voy al baño muy seguido. Quiero saber qué información necesitas para orientarme."
             first = client.post("/api/chat", json={"message": complaint})
@@ -123,7 +130,7 @@ def main() -> int:
             first_message = first.json()["message"]
             first_interview = first_message["metadata"].get("clinical_interview") or {}
             block1 = first_interview.get("question_block") or {}
-            require(first_message["metadata"].get("llm_status") == "dynamic_clinical_questions", "first block did not come from live Gemini")
+            require(first_message["metadata"].get("llm_status") == "dynamic_clinical_questions", f"first block did not come from live Gemini: {first_message['metadata'].get('llm_status')}")
             require(first_interview.get("question_source") == "gemini_dynamic", "first question source not Gemini")
             require(len(block1.get("questions") or []) == 5, "first block is not exactly five questions")
             proof["checks"].append("gemini_adk_first_five_questions")
@@ -134,7 +141,7 @@ def main() -> int:
             second_message = second.json()["message"]
             second_interview = second_message["metadata"].get("clinical_interview") or {}
             block2 = second_interview.get("question_block") or {}
-            require(second_message["metadata"].get("llm_status") == "dynamic_clinical_questions", "second block did not come from live Gemini")
+            require(second_message["metadata"].get("llm_status") == "dynamic_clinical_questions", f"second block did not come from live Gemini: {second_message['metadata'].get('llm_status')}")
             require(second_interview.get("question_source") == "gemini_dynamic", "second question source not Gemini")
             require(len(block2.get("questions") or []) == 5, "second block is not exactly five questions")
             previous = second_interview.get("previous_answers") or []
@@ -193,6 +200,7 @@ def main() -> int:
             proof["checks"].append("live_gemini_multimodal_original_twin_roundtrip")
 
             client.post("/api/auth/logout")
+            require(client.get("/api/bootstrap").status_code == 401, "logout did not revoke browser access")
             created_b = client.post(
                 "/api/auth/register",
                 json={"display_name": "Paciente Sintético B", "email": email_b, "password": password},
@@ -200,7 +208,9 @@ def main() -> int:
             require(created_b.status_code == 201, "patient B registration failed")
             patient_b = created_b.json()["account"]["patient_id"]
             require(patient_b != patient_a, "two accounts share patient identity")
-            state_b = client.get("/api/bootstrap").json()
+            state_b_response = client.get("/api/bootstrap")
+            require(state_b_response.status_code == 200, "patient B bootstrap failed")
+            state_b = state_b_response.json()
             require(state_b["profile"]["id"] == patient_b, "patient B state identity mismatch")
             require(not any(abs(float(item["weight_kg"]) - 81.2) < 0.001 for item in state_b.get("weights") or []), "patient B can see patient A weight")
             require(all(item.get("patient_id", patient_b) == patient_b for item in state_b.get("messages") or []), "patient B received patient A messages")
@@ -209,7 +219,9 @@ def main() -> int:
             client.post("/api/auth/logout")
             login_a = client.post("/api/auth/login", json={"email": email_a, "password": password})
             require(login_a.status_code == 200, "patient A re-login failed")
-            state_a = client.get("/api/bootstrap").json()
+            state_a_response = client.get("/api/bootstrap")
+            require(state_a_response.status_code == 200, "patient A bootstrap failed after login")
+            state_a = state_a_response.json()
             require(state_a["profile"]["id"] == patient_a, "patient A state identity mismatch after login")
             require(any(abs(float(item["weight_kg"]) - 81.2) < 0.001 for item in state_a.get("weights") or []), "patient A own longitudinal state was not recovered")
             proof["checks"].append("logout_relogin_restores_only_own_state")
