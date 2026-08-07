@@ -1,0 +1,156 @@
+diff --git a/healthia_one/models.py b/healthia_one/models.py
+--- a/healthia_one/models.py
++++ b/healthia_one/models.py
+@@ -69,7 +69,7 @@ class SourceRef(BaseModel):
+ 
+ 
+ class CarePlan(BaseModel):
+-    conditions: list[str] = Field(default_factory=lambda: ["hypertension", "weight_management"])
++    conditions: list[str] = Field(default_factory=list)
+     weight_due_days: int = 7
+     blood_pressure_due_days: int = 3
+     activity_goal_steps: int = 6000
+@@ -126,14 +126,14 @@ class EmergencyContact(BaseModel):
+ 
+ 
+ class PatientProfile(BaseModel):
+     id: str = "patient_demo"
+-    display_name: str = "Ana Martínez"
++    display_name: str = "Paciente"
+     legal_name: str = ""
+-    birth_date: date = date(1982, 2, 20)
+-    sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "female"
++    birth_date: date | None = None
++    sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "unknown"
+     gender_identity: str = ""
+     preferred_pronouns: str = ""
+     blood_type: str = ""
+-    height_cm: float | None = Field(default=165.0, ge=50, le=250)
++    height_cm: float | None = Field(default=None, ge=50, le=250)
+     email: str = ""
+     phone: str = ""
+@@ -141,8 +141,8 @@ class PatientProfile(BaseModel):
+     occupation: str = ""
+     locale: str = "es-DO"
+     timezone: str = "America/Santo_Domingo"
+     allergies: list[str] = Field(default_factory=list)
+-    medications: list[str] = Field(default_factory=lambda: ["Losartán 50 mg cada 24 horas"])
+-    confirmed_conditions: list[str] = Field(default_factory=lambda: ["Hipertensión arterial"])
++    medications: list[str] = Field(default_factory=list)
++    confirmed_conditions: list[str] = Field(default_factory=list)
+     lifestyle: LifestyleHistory = Field(default_factory=LifestyleHistory)
+     personal_history: PersonalHistory = Field(default_factory=PersonalHistory)
+     reproductive_health: ReproductiveHealth = Field(default_factory=ReproductiveHealth)
+diff --git a/healthia_one/service.py b/healthia_one/service.py
+--- a/healthia_one/service.py
++++ b/healthia_one/service.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ import asyncio
+ import json
+ import logging
+-from datetime import datetime, timedelta, timezone
++from datetime import date, datetime, timedelta, timezone
+ from pathlib import Path
+ from typing import AsyncIterator, Callable
+ 
+@@ -14,6 +14,8 @@ from healthia_one.mission_engine import apply_mission_action
+ from healthia_one.devices import ingest_health_connect_batch
+ from healthia_one.gemini import GeminiResponder
+ from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
++from healthia_one.identity import AuthPrincipal
++from healthia_one.identity_state import bind_state_identity, new_identity_state
+ from healthia_one.models import (
+@@ -38,6 +40,7 @@ from healthia_one.patient_control import maybe_control_response
+ from healthia_one.proactive import evaluate_state
+ from healthia_one.store import FirestoreStore, JsonStore, MemoryStore, StateStore
++from healthia_one.tenant import current_patient_id
+@@ -63,6 +66,12 @@ class EventBroker:
+ def seed_state() -> PatientState:
+     now = datetime.now(timezone.utc)
+     state = PatientState()
++    state.profile.display_name = "Ana Martínez"
++    state.profile.birth_date = date(1982, 2, 20)
++    state.profile.sex_at_birth = "female"
++    state.profile.height_cm = 165.0
++    state.profile.confirmed_conditions = ["Hipertensión arterial"]
++    state.profile.care_plan.conditions = ["hypertension", "weight_management"]
+     state.weights = [
+@@ -205,17 +214,39 @@ class HealthIAService:
+         return JsonStore(Path(self.settings.data_path))
+ 
+     async def initialize(self) -> None:
++        if self.settings.auth_required:
++            return
+         state = await self.store.load()
+         if not state.messages and not state.vitals and not state.weights:
+             await self.store.save(seed_state())
++
++    async def ensure_identity(self, principal: AuthPrincipal) -> PatientState:
++        """Create or refresh only the state belonging to the verified request uid."""
++        async with self._mutation_lock:
++            state = await self.store.load()
++            empty = not any(
++                [state.messages, state.vitals, state.weights, state.activity, state.results, state.documents]
++            )
++            if empty:
++                state = new_identity_state(principal)
++                audit(
++                    state,
++                    actor="identity_platform",
++                    action="initialize_authenticated_patient",
++                    resource_type="patient_state",
++                    resource_id=principal.uid,
++                    details={"provider": principal.provider},
++                )
++            else:
++                bind_state_identity(
++                    state,
++                    principal.uid,
++                    display_name=principal.display_name,
++                    email=principal.email,
++                )
++            await self.store.save(state)
++            return state
+ 
+     async def snapshot(self) -> PatientState:
+         return await self.store.load()
+ 
+     async def reset_demo(self) -> PatientState:
+         async with self._mutation_lock:
+-            state = seed_state()
++            state = bind_state_identity(seed_state(), current_patient_id())
+             await self.store.save(state)
+@@ -226,7 +257,8 @@ class HealthIAService:
+     async def update_profile(self, profile: PatientProfile) -> PatientProfile:
+         async with self._mutation_lock:
+             state = await self.store.load()
++            profile.id = current_patient_id()
+             state.profile = profile
+@@ -259,14 +291,16 @@ class HealthIAService:
+     async def add_patient_message(self, content: str):
+         async with self._mutation_lock:
+             state = await self.store.load()
+-            patient_message = ChatMessage(role="patient", author=state.profile.display_name, content=content)
++            patient_message = ChatMessage(patient_id=state.profile.id, role="patient", author=state.profile.display_name, content=content)
+             state.messages.append(patient_message)
+@@ -276,6 +310,7 @@ class HealthIAService:
+             if controlled_response is None:
+                 response = await self.gemini.enhance(state, content, response)
++            response.message.patient_id = state.profile.id
+             state.messages.append(response.message)
+@@ -292,6 +327,8 @@ class HealthIAService:
+     async def _append_and_publish(self, collection: str, item, section: str, *, actor: str = "patient", action: str = "create"):
+         async with self._mutation_lock:
+             state = await self.store.load()
++            if hasattr(item, "patient_id"):
++                item.patient_id = state.profile.id
+             values = getattr(state, collection)
+@@ -310,7 +347,7 @@ class HealthIAService:
+             await self.dispatch_agentic_event(
+                 AgenticEvent(
+                     event_type="vital_recorded",
+-                    patient_id=vital.patient_id,
++                    patient_id=current_patient_id(),
+                     source_id=vital.id,
+                     payload={"source": vital.source.source_type},
+                 )
