@@ -9,7 +9,7 @@ def test_google_sdk_matches_interactions_api() -> None:
     gemini = (ROOT / "healthia_one/gemini.py").read_text(encoding="utf-8")
     assert '"google-genai>=2.13,<3"' in pyproject
     assert '"google-adk[gcp]>=2.5,<3"' in pyproject
-    assert "client.interactions.create" in gemini
+    assert gemini.count(".interactions.create(") >= 2
     assert "def _interaction_text" in gemini
     assert 'genai.Client(api_key=api_key)' in gemini
     assert "cost_guard.authorize" in gemini
