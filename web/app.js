@@ -389,6 +389,15 @@ document.addEventListener("healthia:identity-changed", async () => {
   eventStream = null;
   await refresh(true); connectEvents();
 });
+document.addEventListener("healthia:signed-out", () => {
+  if (eventStream?.abort) eventStream.abort();
+  eventStream = null;
+  state.data = null;
+  refs.messageList?.replaceChildren();
+  refs.missionList?.replaceChildren();
+  refs.missionRunList?.replaceChildren();
+  refs.resultList?.replaceChildren();
+});
 refs.newConsultation?.addEventListener("click", async event => {
   event.preventDefault();
   refs.newConsultation.disabled = true;

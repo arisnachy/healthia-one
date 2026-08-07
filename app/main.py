@@ -559,7 +559,15 @@ async def demo_agentic_closed_loop() -> dict:
 
 @app.post("/api/internal/pubsub/mission")
 async def pubsub_mission(request: Request) -> dict:
-    """Authenticated Cloud Run target for durable Pub/Sub push delivery."""
+    """OIDC-verified Pub/Sub push target, safe even when the judge UI is public."""
+    try:
+        await identity_verifier.verify_google_service_bearer(
+            request.headers.get("Authorization"),
+            audience=str(request.base_url).rstrip("/"),
+            expected_email=settings.pubsub_push_service_account,
+        )
+    except IdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     try:
         payload = await request.json()
         event = decode_pubsub_push(payload)
@@ -598,9 +606,11 @@ async def judge_mission_trace(correlation_id: str) -> dict:
 
 @app.get("/api/events/stream")
 async def events() -> StreamingResponse:
+    patient_id = current_patient_id()
+
     async def generate():
         yield "event: ready\ndata: {}\n\n"
-        async for payload in service.broker.subscribe():
+        async for payload in service.broker.subscribe(patient_id):
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
