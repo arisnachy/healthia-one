@@ -22,7 +22,6 @@ const refs = {
   expandLeft: $("#expandLeft")
 };
 
-
 let refreshPromise = null;
 let refreshQueued = false;
 let eventStream = null;
@@ -36,7 +35,6 @@ function safeFocusComposer() {
   refs.chatInput?.focus();
   refs.chatInput?.setSelectionRange(refs.chatInput.value.length, refs.chatInput.value.length);
 }
-
 
 function publicName(value) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -172,7 +170,14 @@ function renderMeasurements() {
 }
 
 function renderResults() {
-  refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => `<article class="data-card"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} valores</p><div>${renderMarkdown(result.explanation)}</div></article>`).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
+  const documents = state.data.documents || [];
+  refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => {
+    const original = documents.find(document => document.related_result_id === result.id);
+    const evidence = original
+      ? `<div class="result-evidence"><a href="/api/documents/${encodeURIComponent(original.id)}/download" target="_blank" rel="noopener">Ver archivo original ↗</a><span>Gemelo vinculado · evidencia ${escapeHtml(original.status)}</span></div>`
+      : `<div class="result-evidence"><span>Sin archivo original vinculado</span></div>`;
+    return `<article class="data-card" data-result-id="${escapeHtml(result.id)}"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} datos extraídos</p><div>${renderMarkdown(result.explanation)}</div>${evidence}</article>`;
+  }).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
 }
 
 function renderMissions() {
@@ -213,7 +218,7 @@ async function sendMessage(text) {
   refs.chatInput.value = "";
   refs.chatInput.style.height = "auto";
   setSendState();
-  refs.agentStatus.textContent = "HealthIA organizando el siguiente paso…";
+  refs.agentStatus.textContent = "HealthIA analizando tu mensaje…";
   const patient = {id:`local_${Date.now()}`, role:"patient", author:state.data.profile.display_name, content:clean, created_at:new Date().toISOString(), risk_level:"info", agent_plan:[]};
   state.data.messages.push(patient); renderMessage(patient); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
   try {
@@ -221,19 +226,21 @@ async function sendMessage(text) {
     if (response.mission) state.data.missions.push(response.mission);
     state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Equipo en segundo plano";
+  refs.agentStatus.textContent = "Listo";
   refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
 }
 
 async function upload(file) {
   if (!file) return;
   const form = new FormData(); form.append("file", file);
-  refs.agentStatus.textContent = "HealthIA revisando el archivo…";
+  refs.agentStatus.textContent = "HealthIA identificando y organizando el resultado…";
   try {
     const result = await api("/api/results/upload", {method:"POST", body:form});
-    state.data.results.push(result); renderResults(); renderContext(); setView("results"); showToast("Resultado guardado y procesado.");
+    await refresh(true);
+    setView("results");
+    showToast(result.status === "parsed" ? "Resultado interpretado, guardado y vinculado al gemelo." : "Original guardado; análisis multimodal pendiente sin inventar hallazgos.");
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Equipo en segundo plano";
+  refs.agentStatus.textContent = "Listo";
 }
 
 const dialogDefinitions = {
@@ -272,11 +279,11 @@ function connectEvents() {
       renderMessage(payload.message);
       renderToday();
       refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
-      showToast("HealthIA se adelantó con una nueva observación.");
+      showToast("HealthIA tiene una nueva observación solicitada por un evento clínico.");
     } else if (payload.type === "state") {
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => refresh(), 120);
-    } else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
+    } else if (payload.type === "runtime_error") showToast("HealthIA reportó un error auditable.");
   };
   eventStream.onerror = () => showToast("La conexión de eventos se reconectará automáticamente.");
 }
@@ -290,7 +297,7 @@ $$('[data-dialog]').forEach(button => button.addEventListener("click", () => ope
 refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
 refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
 refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
-refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "HealthIA revisando continuidad…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Equipo en segundo plano"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
+refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "HealthIA revisando continuidad…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Listo"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
 function syncLeftToggle() {
   const collapsed = refs.shell.classList.contains("left-collapsed");
   refs.expandLeft?.setAttribute("aria-hidden", String(!collapsed));
