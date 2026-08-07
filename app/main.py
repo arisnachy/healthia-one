@@ -308,6 +308,7 @@ async def upload_document(
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+    state = await service.snapshot()
     try:
         document = build_document(
             filename=file.filename or "documento",
@@ -315,6 +316,7 @@ async def upload_document(
             size_bytes=len(content),
             category=category,
             title=title,
+            patient_id=state.profile.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -435,6 +437,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+    state = await service.snapshot()
     try:
         result = parse_result_file(filename, content)
         document = build_document(
@@ -442,6 +445,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
             content_type=content_type,
             size_bytes=len(content),
             title=f"Evidencia · {Path(filename).stem}",
+            patient_id=state.profile.id,
         )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"No se pudo interpretar el archivo: {exc}") from exc
@@ -451,7 +455,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     if result.status == "pending_multimodal" and multimodal_supported(filename, content_type):
         analysis = await analyze_uploaded_result(
             service.gemini,
-            await service.snapshot(),
+            state,
             filename,
             content_type,
             content,
@@ -464,8 +468,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     document.related_result_id = result.id
     document.status = "parsed" if result.status == "parsed" else "pending_review"
     document.summary = result.explanation[:2000]
-    await service.add_document(document)
-    stored = await service._append_and_publish("results", result, "results", action="upload_result")
+    stored = await service.add_result_evidence(result, document)
     payload = stored.model_dump(mode="json")
     payload["document_id"] = document.id
     payload["original_available"] = True
