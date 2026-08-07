@@ -8,8 +8,9 @@ param(
     [string]$RuntimeServiceAccount = "healthia-one-demo",
     [string]$SecretName = "healthia-gemini-api-key",
     [string]$DeviceSecretName = "healthia-device-token-secret",
-    [ValidateRange(2, 25)][int]$RequestLimit = 20,
-    [ValidateRange(64, 2048)][int]$MaxOutputTokens = 700,
+    [string]$SessionSecretName = "healthia-session-secret",
+    [ValidateRange(8, 40)][int]$RequestLimit = 20,
+    [ValidateRange(256, 4096)][int]$MaxOutputTokens = 1400,
     [switch]$PublicDemo,
     [switch]$SkipStrictProof
 )
@@ -27,6 +28,38 @@ if ([string]::IsNullOrWhiteSpace($BucketName)) {
 }
 $RuntimeServiceAccountEmail = "$RuntimeServiceAccount@$ProjectId.iam.gserviceaccount.com"
 
+function New-CryptoSecretValue {
+    $bytes = New-Object byte[] 48
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+        return [Convert]::ToBase64String($bytes)
+    }
+    finally {
+        $rng.Dispose()
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+}
+
+function Ensure-Secret([string]$Name, [string]$Purpose) {
+    & gcloud secrets describe $Name --project $ProjectId --format "value(name)" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        return
+    }
+    Write-Host "Creando secreto criptografico para $Purpose..." -ForegroundColor Cyan
+    $secretValue = New-CryptoSecretValue
+    try {
+        $secretValue | & gcloud secrets create $Name `
+            --project $ProjectId `
+            --replication-policy="automatic" `
+            --data-file=- | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "No se pudo crear $Name." }
+    }
+    finally {
+        $secretValue = $null
+    }
+}
+
 Write-Host "MODO DEMO CLOUD VERIFICABLE" -ForegroundColor Cyan
 Write-Host "Proyecto: $ProjectId" -ForegroundColor White
 Write-Host "Cloud Run: $ServiceName ($Region)" -ForegroundColor White
@@ -35,8 +68,9 @@ Write-Host "Evidencia clinica: gs://$BucketName ($BucketLocation)" -ForegroundCo
 Write-Host "Runtime SA: $RuntimeServiceAccountEmail" -ForegroundColor White
 Write-Host "Cloud Run: min 0, max 1, facturacion por solicitud." -ForegroundColor Green
 Write-Host "Google AI: maximo $RequestLimit solicitudes por proceso y $MaxOutputTokens tokens de salida." -ForegroundColor Green
-Write-Host "La prueba estricta consumira al menos 2 solicitudes Gemini: probe + PDF multimodal sintetico." -ForegroundColor Yellow
+Write-Host "La prueba estricta usa varias solicitudes Gemini: probe, bloques clinicos adaptativos, decision de cierre y PDF multimodal." -ForegroundColor Yellow
 Write-Host "El limite por proceso se reinicia si Cloud Run reinicia la instancia; conserva budgets/quota del proyecto." -ForegroundColor Yellow
+Write-Host "Identidad: login/logout obligatorio; estado, SSE, documentos y dispositivos quedan vinculados al patient_id autenticado." -ForegroundColor Green
 
 $confirmation = Read-Host "Escribe DEPLOY para aprovisionar/desplegar y probar"
 if ($confirmation -ne "DEPLOY") {
@@ -64,20 +98,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "No existe el secreto $SecretName. Crea el secreto con la API key de Gemini antes de desplegar; el script nunca acepta ni imprime la clave."
 }
 
-& gcloud secrets describe $DeviceSecretName --project $ProjectId --format "value(name)" 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Creando secreto criptografico para identidad durable de dispositivos..." -ForegroundColor Cyan
-    $secretBytes = New-Object byte[] 48
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($secretBytes)
-    $deviceSecretValue = [Convert]::ToBase64String($secretBytes)
-    $deviceSecretValue | & gcloud secrets create $DeviceSecretName `
-        --project $ProjectId `
-        --replication-policy="automatic" `
-        --data-file=- | Out-Null
-    $deviceSecretValue = $null
-    $secretBytes = $null
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo crear $DeviceSecretName." }
-}
+Ensure-Secret $DeviceSecretName "identidad durable de dispositivos"
+Ensure-Secret $SessionSecretName "sesiones firmadas de pacientes"
 
 & gcloud iam service-accounts describe $RuntimeServiceAccountEmail --project $ProjectId --format "value(email)" 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -117,6 +139,8 @@ $envVars = @(
     "HEALTHIA_ENV=cloud",
     "HEALTHIA_LLM_BACKEND=gemini_api",
     "HEALTHIA_STORE_BACKEND=firestore",
+    "HEALTHIA_AUTH_REQUIRED=true",
+    "HEALTHIA_ALLOW_REGISTRATION=true",
     "HEALTHIA_COST_MODE=cloud_demo",
     "HEALTHIA_AI_REQUEST_LIMIT=$RequestLimit",
     "HEALTHIA_COST_GUARD_START_ENABLED=true",
@@ -140,7 +164,7 @@ $args = @(
     "--memory", "512Mi",
     "--timeout", "600",
     "--set-env-vars", $envVars,
-    "--set-secrets", "GEMINI_API_KEY=${SecretName}:latest,HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest",
+    "--set-secrets", "GEMINI_API_KEY=${SecretName}:latest,HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest,HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest",
     "--quiet"
 )
 
@@ -181,7 +205,7 @@ if (-not $SkipStrictProof) {
     if (-not [string]::IsNullOrWhiteSpace($identityToken)) {
         $proofArgs += @("--identity-token", $identityToken)
     }
-    Write-Host "Ejecutando prueba estricta Cloud Run + Firestore + GCS + Gemini..." -ForegroundColor Cyan
+    Write-Host "Ejecutando prueba estricta: auth A/B + aislamiento + Gemini/ADK + Firestore + GCS + gemelo..." -ForegroundColor Cyan
     & python @proofArgs | Tee-Object -FilePath "deployment/cloud-proof-latest.json" | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "El despliegue existe pero NO supero la prueba estricta. No lo declares probado."
@@ -191,5 +215,5 @@ if (-not $SkipStrictProof) {
 Write-Host ""
 Write-Host "CLOUD REAL PROBADO: $url" -ForegroundColor Green
 Write-Host "Captura Cloud Run revision $revision, Cloud Logging y deployment/cloud-proof-latest.json para el demo." -ForegroundColor Cyan
-Write-Host "Al terminar, elimina el servicio y opcionalmente el bucket con:" -ForegroundColor Yellow
+Write-Host "Al terminar, elimina el servicio y opcionalmente bucket/secretos con:" -ForegroundColor Yellow
 Write-Host ".\deployment\remove-cloud-demo.ps1 -ProjectId $ProjectId -Region $Region -ServiceName $ServiceName -BucketName $BucketName" -ForegroundColor Yellow
