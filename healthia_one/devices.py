@@ -26,10 +26,18 @@ def device_source(record: DeviceObservation) -> SourceRef:
 
 
 def apply_observation(state: PatientState, record: DeviceObservation) -> str | None:
+    """Apply one device observation inside the already-authenticated patient scope.
+
+    The caller owns tenant resolution. Never trust a patient_id sent by the phone:
+    every observation and every derived record is rebound to the state owner.
+    """
+    owner_id = state.profile.id
+    record.patient_id = owner_id
     source = device_source(record)
     if record.metric == DeviceMetric.STEPS:
         state.activity.append(
             ActivityRecord(
+                patient_id=owner_id,
                 measured_at=record.observed_at,
                 steps=max(int(record.value), 0),
                 active_minutes=max(int(record.metadata.get("active_minutes", 0)), 0),
@@ -42,6 +50,7 @@ def apply_observation(state: PatientState, record: DeviceObservation) -> str | N
     if record.metric == DeviceMetric.WEIGHT:
         state.weights.append(
             WeightRecord(
+                patient_id=owner_id,
                 measured_at=record.observed_at,
                 weight_kg=record.value,
                 note=f"Sincronizado desde {record.source_name}",
@@ -54,7 +63,7 @@ def apply_observation(state: PatientState, record: DeviceObservation) -> str | N
         state.profile.height_cm = round(record.value, 1)
         return "profile"
 
-    vital = VitalRecord(measured_at=record.observed_at, source=source)
+    vital = VitalRecord(patient_id=owner_id, measured_at=record.observed_at, source=source)
     if record.metric == DeviceMetric.HEART_RATE:
         vital.pulse = int(record.value)
     elif record.metric == DeviceMetric.BLOOD_PRESSURE:
@@ -87,7 +96,11 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
     duplicates = 0
     sections: set[str] = set()
     existing = set(state.synced_external_ids)
+    owner_id = state.profile.id
     for record in sorted(batch.records, key=lambda item: item.observed_at):
+        # The authenticated pairing token selects the patient state. Payload identity
+        # is untrusted input and is always overwritten before persistence.
+        record.patient_id = owner_id
         if record.external_id in existing:
             duplicates += 1
             continue
@@ -126,6 +139,7 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         "duplicates": duplicates,
         "sections": sorted(sections),
         "last_sync_at": batch.synced_at,
+        "patient_id": owner_id,
     }
 
 
