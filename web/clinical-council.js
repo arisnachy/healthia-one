@@ -47,7 +47,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
     function prepareIdentityShell() {
       const account = $("#accountPill");
       if (account) {
-        account.innerHTML = '<div class="patient-avatar">P</div><div><strong>Paciente</strong><span>Cargando perfil autorizado</span></div>';
+        account.innerHTML = '<div class="patient-avatar">P</div><div><strong>Paciente</strong><span>Cargando cuenta</span></div>';
       }
       $(".patient-chip")?.remove();
     }
@@ -58,7 +58,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       section.dataset.clinicalCouncil = "true";
       section.innerHTML = `
         <p>Áreas disponibles</p>
-        <small class="council-availability-note">Se activan según la consulta</small>
+        <small class="council-availability-note">Solo se activan cuando la consulta las necesita</small>
         ${sidebarCouncil.map(([code, label, detail]) => `
           <div class="agent-mini" title="${esc(label)}">
             <span>${esc(code)}</span><div><strong>${esc(label)}</strong><small>${esc(detail)}</small></div>
@@ -71,8 +71,8 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       if (!profile || !account) return;
       account.innerHTML = `
         <div class="patient-avatar">${esc(initials(profile.display_name))}</div>
-        <div><strong>${esc(profile.display_name)}</strong><span>Paciente · datos autorizados</span></div>`;
-      account.setAttribute("aria-label", `Perfil de ${profile.display_name}`);
+        <div><strong>${esc(profile.display_name)}</strong><span>Cuenta y configuración</span></div>`;
+      account.setAttribute("aria-label", `Cuenta y configuración de ${profile.display_name}`);
       $(".patient-chip")?.remove();
       renderSidebarCouncil();
       $$(".main-nav button").forEach(button => {
@@ -88,7 +88,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       if (!body) return;
       const text = body.textContent || "";
       if (!text.includes(ANSWER_PREFIX)) return;
-      body.innerHTML = "<p>Respondí el bloque de entrevista clínica.</p>";
+      body.innerHTML = "<p>Respondí las preguntas de esta parte de la consulta.</p>";
     }
 
     function publicAreaLabel(step) {
@@ -103,7 +103,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       const details = document.createElement("details");
       details.className = "council-summary";
       details.innerHTML = `
-        <summary>Coordinación clínica · ${message.agent_plan.length} áreas activadas</summary>
+        <summary>Contexto usado · ${message.agent_plan.length} áreas necesarias</summary>
         ${message.agent_plan.map(step => `
           <div class="council-member">
             <strong>${esc(publicAreaLabel(step))}</strong>
@@ -122,38 +122,60 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
         </label>`).join("");
     }
 
+    function renderUnavailableQuestionState(article, message, interview) {
+      if ($(".clinical-question-unavailable", article)) return;
+      const meta = message?.metadata || {};
+      const status = meta.llm_status || "ai_question_generation_unavailable";
+      const node = document.createElement("div");
+      node.className = "clinical-question-unavailable";
+      node.innerHTML = `
+        <strong>No voy a mostrarte preguntas precargadas.</strong>
+        <p>Este bloque necesita cinco preguntas creadas específicamente para lo que contaste, pero Google AI/ADK no las generó en esta ejecución.</p>
+        <small>Estado: ${esc(status)} · Tus datos ya recibidos permanecen guardados.</small>`;
+      $(".message-content", article)?.append(node);
+      interview.question_source = interview.question_source || "unavailable_not_faked";
+    }
+
     function renderQuestionBlock(article, message) {
       const interview = message?.metadata?.clinical_interview;
       const block = interview?.question_block;
       if (!block || interview.status !== "awaiting_answers" || $(".clinical-question-block", article)) return;
+
+      const questions = Array.isArray(block.questions) ? block.questions : [];
+      if (questions.length !== 5) {
+        renderUnavailableQuestionState(article, message, interview);
+        return;
+      }
+
       const form = document.createElement("form");
       form.className = "clinical-question-block";
       form.dataset.interviewId = interview.id;
       form.dataset.stage = String(block.stage || interview.stage || 1);
       form.innerHTML = `
         <header>
-          <div><h4>${esc(block.title || "Entrevista clínica")}</h4><p>${esc(block.instruction || "Selecciona las respuestas que correspondan.")}</p></div>
+          <div><h4>${esc(block.title || "Preguntas para entender mejor lo que te pasa")}</h4><p>${esc(block.instruction || "Estas preguntas se generaron usando lo que ya contaste.")}</p></div>
           <span class="clinical-stage">5 preguntas</span>
         </header>
         <div class="clinical-questions">
-          ${(block.questions || []).map((question, index) => `
+          ${questions.map((question, index) => `
             <fieldset class="clinical-question" data-question-id="${esc(question.id)}" data-question-prompt="${esc(question.prompt)}">
               <legend>${index + 1}. ${esc(question.prompt)}</legend>
               <div class="clinical-options">${optionMarkup(question, interview.id)}</div>
-              ${question.allow_detail ? `<input class="clinical-detail" type="text" maxlength="500" placeholder="${esc(question.detail_placeholder || "Agregar detalle (opcional)")}">` : ""}
+              ${question.allow_detail ? `<input class="clinical-detail" type="text" maxlength="500" placeholder="${esc(question.detail_placeholder || "Agrega un detalle si ayuda")}">` : ""}
             </fieldset>`).join("")}
         </div>
         <p class="clinical-form-error" hidden></p>
         <div class="clinical-submit-row"><button class="clinical-submit" type="submit">${esc(block.submit_label || "Continuar")}</button></div>`;
 
-      const source = interview.question_source || message.metadata?.question_source || "safe_fallback";
+      const source = interview.question_source || message.metadata?.question_source || "";
       const judgeScore = Number(interview.judge_review?.score ?? message.metadata?.judge_review?.score ?? 0);
-      const sourceLabel = source === "gemini_dynamic" ? "Gemini · preguntas adaptativas" : "Modo seguro · respaldo";
       form.dataset.questionSource = source;
       const sourceBadge = document.createElement("span");
-      sourceBadge.className = `clinical-source ${source === "gemini_dynamic" ? "is-dynamic" : "is-fallback"}`;
-      sourceBadge.textContent = sourceLabel;
-      if (judgeScore) sourceBadge.title = `Validación de calidad: ${judgeScore}/100`;
+      sourceBadge.className = "clinical-source is-dynamic";
+      sourceBadge.textContent = source === "gemini_dynamic"
+        ? "Preguntas creadas para este caso · Gemini + ADK"
+        : "Preguntas adaptativas verificadas";
+      if (judgeScore) sourceBadge.title = `Validación automática de estructura y seguridad: ${judgeScore}/100`;
       $("header", form)?.append(sourceBadge);
 
       form.addEventListener("submit", event => {
@@ -165,7 +187,12 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
           const selected = $$("input:checked", fieldset).map(input => input.value);
           const detail = $(".clinical-detail", fieldset)?.value.trim() || "";
           if (!selected.length && !detail) missing = true;
-          answers.push({question_id: fieldset.dataset.questionId, question_prompt: fieldset.dataset.questionPrompt, selected, detail});
+          answers.push({
+            question_id: fieldset.dataset.questionId,
+            question_prompt: fieldset.dataset.questionPrompt,
+            selected,
+            detail,
+          });
         });
         if (missing) {
           error.textContent = "Responde cada pregunta o agrega un detalle antes de continuar.";
@@ -175,7 +202,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
         error.hidden = true;
         const submit = $(".clinical-submit", form);
         submit.disabled = true;
-        submit.textContent = "Enviando a la junta…";
+        submit.textContent = "Enviando respuestas…";
         const payload = {
           interview_id: interview.id,
           stage: Number(form.dataset.stage || 1),
@@ -217,12 +244,12 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       article.className = "message assistant chat-pending";
       article.innerHTML = `
         <div class="avatar">H1</div>
-        <div class="message-content"><div class="message-head"><strong>HealthIA</strong><span>ahora</span></div><div class="message-body"><p>Analizando intención y coordinando la junta clínica<span class="chat-pending-dots"></span></p></div></div>`;
+        <div class="message-content"><div class="message-head"><strong>HealthIA</strong><span>ahora</span></div><div class="message-body"><p>Entendiendo lo que dijiste y revisando qué falta preguntar<span class="chat-pending-dots"></span></p></div></div>`;
       list.append(article);
       $("#chatScroll")?.scrollTo({top: $("#chatScroll").scrollHeight, behavior: "smooth"});
       pendingTimer = setTimeout(() => {
         const body = $(".message-body", article);
-        if (body) body.innerHTML = "<p>Gemini está tardando. HealthIA activará la respuesta segura de respaldo automáticamente.</p>";
+        if (body) body.innerHTML = "<p>Google AI está tardando. Si no puede generar preguntas específicas, HealthIA lo dirá claramente en lugar de sustituirlas por un formulario genérico.</p>";
       }, 9000);
     }
 
