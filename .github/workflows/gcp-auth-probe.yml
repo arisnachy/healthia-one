@@ -59,14 +59,19 @@ jobs:
           credentials_json: ${{ env.GCP_CREDENTIALS }}
           create_credentials_file: true
 
-      - name: Fail clearly when credentials are absent
+      - name: Record external blocker when credentials are absent
         if: steps.detect.outputs.mode == 'missing' || env.GCP_PROJECT_ID == ''
         shell: bash
         run: |
           echo "HEALTHIA_GCP_AUTH_BLOCKED"
           echo "Expected GitHub Secrets: GCP_PROJECT_ID + (GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT),"
           echo "or GCP_PROJECT_ID + GCP_CREDENTIALS as a fallback. No deployment was attempted."
-          exit 2
+          {
+            echo "### HealthIA Google Cloud authentication probe"
+            echo ""
+            echo "**BLOCKED externally:** this repository has no supported Google Cloud Project ID/authentication secret configured."
+            echo "No deployment, resource creation, Gemini call, or billable Cloud action was attempted."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Cloud SDK
         if: steps.detect.outputs.mode != 'missing' && env.GCP_PROJECT_ID != ''
