@@ -7,6 +7,7 @@ from healthia_one.context_compiler import compact_context_markdown, compile_quer
 from healthia_one.deterministic_router import respond as deterministic_respond
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
 from healthia_one.safety import assess_text
+from healthia_one.twin_runtime import record_interview_in_state
 
 
 SOCIAL_ONLY = {
@@ -125,6 +126,24 @@ def _semantic_draft(state: PatientState, patient_text: str) -> ChatResponse:
     )
 
 
+def _record_completed_interview(state: PatientState, response: ChatResponse) -> ChatResponse:
+    interview = response.message.metadata.get("clinical_interview")
+    if not isinstance(interview, dict) or interview.get("status") != "completed":
+        return response
+    interview_id = str(interview.get("id") or "").strip()
+    if not interview_id:
+        return response
+    record_interview_in_state(
+        state,
+        interview_id=interview_id,
+        chief_complaint=str(interview.get("chief_complaint") or "Consulta de salud"),
+        answers=interview.get("answers") if isinstance(interview.get("answers"), list) else [],
+    )
+    response.message.metadata["twin_updated"] = True
+    response.message.metadata["twin_event_type"] = "clinical_interview_reported"
+    return response
+
+
 def respond(state: PatientState, patient_text: str) -> ChatResponse:
     """Single conversational front door.
 
@@ -144,7 +163,7 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
 
     clinical_response = respond_to_clinical_intake(state, patient_text)
     if clinical_response is not None:
-        return clinical_response
+        return _record_completed_interview(state, clinical_response)
 
     if _explicit_clinical_request(patient_text):
         clinical_response = respond_to_clinical_intake(
@@ -154,7 +173,7 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
         if clinical_response is not None:
             interview = clinical_response.message.metadata.get("clinical_interview", {})
             interview["chief_complaint"] = patient_text
-            return clinical_response
+            return _record_completed_interview(state, clinical_response)
 
     if _explicit_deterministic_action(patient_text):
         return deterministic_respond(state, patient_text)
