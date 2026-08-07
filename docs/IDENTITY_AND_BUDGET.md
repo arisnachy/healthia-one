@@ -64,6 +64,22 @@ No route accepts an email address or frontend-supplied patient ID as an authoriz
 
 The Android bridge uses a different path: the authenticated patient creates a six-digit pairing code, and the resulting device token is bound to that same UID. Future device syncs resolve the UID from the hashed device token before touching state.
 
+The browser event stream captures the verified UID before returning its streaming response, so the stream cannot fall back to the synthetic/default scope after middleware completion. On sign-out the browser aborts that stream and clears patient-rendered lists from the DOM.
+
+A public judge-facing Cloud Run service does not make the internal Pub/Sub mutation endpoint public. Pub/Sub sends an OIDC token from a dedicated push service account; HealthIA verifies the token audience and the exact service-account email before accepting the message.
+
+### Automated isolation evidence
+
+CI must prove all of the following without live Google credentials:
+
+- two verified synthetic UIDs receive different state and cannot see each other's measurements;
+- all stored records and audit entries inherit the verified UID;
+- upload paths are patient scoped;
+- pairing/device tokens resolve only to their owner UID;
+- SSE subscribers are separated by patient scope;
+- every patient-facing JavaScript module uses the single authenticated HTTP transport;
+- an untrusted call to the internal Pub/Sub endpoint is rejected before payload processing.
+
 ## USD 50 global safety objective
 
 The desired absolute ceiling for development and demo is **USD 50**, but Google Cloud billing data and spend-cap enforcement have latency. Therefore HealthIA uses a layered envelope rather than claiming an impossible exact dollar stop.
