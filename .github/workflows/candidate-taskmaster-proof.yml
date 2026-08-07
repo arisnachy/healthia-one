@@ -16,15 +16,20 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     env:
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Temporary proof credential: the repository secret currently contains the
+      # Cloud-created key. Production Cloud Run will use ADC/workload identity.
+      VERTEX_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_CLOUD_PROJECT: healthia-6088a
+      GOOGLE_CLOUD_LOCATION: global
+      GOOGLE_GENAI_USE_VERTEXAI: "true"
       HEALTHIA_ENV: ci_live
       HEALTHIA_STORE_BACKEND: json
       HEALTHIA_DATA_PATH: /tmp/healthia-taskmaster/state.json
       HEALTHIA_ACCOUNTS_PATH: /tmp/healthia-taskmaster/accounts.json
       HEALTHIA_AUTH_REQUIRED: "true"
       HEALTHIA_ALLOW_REGISTRATION: "true"
-      HEALTHIA_LLM_BACKEND: gemini_api
-      HEALTHIA_MODEL: gemini-3.6-flash
+      HEALTHIA_LLM_BACKEND: vertex_ai
+      HEALTHIA_VERTEX_MODEL: gemini-3.5-flash
       HEALTHIA_COST_MODE: guarded
       HEALTHIA_AI_REQUEST_LIMIT: "1"
       HEALTHIA_COST_GUARD_START_ENABLED: "true"
@@ -44,14 +49,16 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Require encrypted repository Gemini secret
+      - name: Require encrypted Vertex proof key
         shell: bash
         run: |
-          if [ -z "$GEMINI_API_KEY" ]; then
-            echo "::error title=Gemini secret missing::Repository Actions secret GEMINI_API_KEY is unavailable."
+          if [ -z "$VERTEX_API_KEY" ]; then
+            echo "::error title=Vertex proof key missing::Repository Actions secret GEMINI_API_KEY is unavailable."
             exit 2
           fi
-          echo "Encrypted Gemini secret is available; value is intentionally not printed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Encrypted Cloud key is available; value is intentionally not printed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Vertex project: $GOOGLE_CLOUD_PROJECT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Vertex location: $GOOGLE_CLOUD_LOCATION" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create and mask ephemeral signing secrets
         shell: bash
@@ -70,7 +77,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
 
-      - name: Execute one-request Taskmaster proof
+      - name: Execute one-request Vertex Taskmaster proof
         shell: bash
         run: |
           set +e
@@ -79,7 +86,10 @@ jobs:
           set -e
           cat /tmp/healthia-taskmaster-proof.log
 
-          echo "### One-request Taskmaster proof" >> "$GITHUB_STEP_SUMMARY"
+          echo "### One-request Vertex Taskmaster proof" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Project: \`$GOOGLE_CLOUD_PROJECT\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backend: **Vertex AI**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Model: \`$HEALTHIA_VERTEX_MODEL\`" >> "$GITHUB_STEP_SUMMARY"
           if [ -f deployment/live-taskmaster-proof-latest.json ]; then
             python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
@@ -114,7 +124,7 @@ jobs:
               print('Taskmaster proof failed before producing sanitized evidence')
           PY
             )
-            echo "::error title=Taskmaster live proof failed::$detail"
+            echo "::error title=Vertex Taskmaster live proof failed::$detail"
             exit "$code"
           fi
 
