@@ -98,3 +98,36 @@ def test_health_connect_batch_is_idempotent_and_updates_longitudinal_state() -> 
     assert state.vitals[-1].systolic == 132
     assert state.profile.height_cm == 166
     assert device_summary(state)["record_count"] == 3
+
+
+def test_health_connect_rebinds_untrusted_patient_ids_to_state_owner() -> None:
+    state = PatientState()
+    state.profile.id = "uid_owner"
+    now = datetime.now(timezone.utc)
+    batch = HealthConnectSyncBatch(
+        device_id="paired-phone",
+        records=[
+            DeviceObservation(
+                patient_id="uid_attacker_payload",
+                external_id="cross-tenant-steps",
+                metric=DeviceMetric.STEPS,
+                observed_at=now,
+                value=5000,
+                unit="count",
+            ),
+            DeviceObservation(
+                patient_id="uid_attacker_payload",
+                external_id="cross-tenant-bp",
+                metric=DeviceMetric.BLOOD_PRESSURE,
+                observed_at=now + timedelta(seconds=1),
+                value=128,
+                secondary_value=82,
+                unit="mmHg",
+            ),
+        ],
+    )
+    result = ingest_health_connect_batch(state, batch)
+    assert result["patient_id"] == "uid_owner"
+    assert {item.patient_id for item in state.device_observations} == {"uid_owner"}
+    assert state.activity[-1].patient_id == "uid_owner"
+    assert state.vitals[-1].patient_id == "uid_owner"
