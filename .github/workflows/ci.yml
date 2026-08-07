@@ -49,6 +49,7 @@ jobs:
         run: python scripts/judge_omega.py
       - name: Validate semantic frontend modules
         run: |
+          node --check web/auth.js
           node --check web/app.js
           node --check web/patient-record.js
           node --check web/family-documents.js
