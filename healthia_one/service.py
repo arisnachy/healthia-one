@@ -19,6 +19,7 @@ from healthia_one.models import (
     FamilyMember,
     HealthConnectSyncBatch,
     HealthGoal,
+    HealthResult,
     MedicationCheckIn,
     MedicationPlan,
     PatientConsent,
@@ -292,6 +293,26 @@ class HealthIAService:
     async def add_document(self, document: ClinicalDocument) -> ClinicalDocument:
         return await self._append_and_publish("documents", document, "documents", action="upload_document")
 
+    async def add_result_evidence(self, result: HealthResult, document: ClinicalDocument) -> HealthResult:
+        """Persist the structured result and its original evidence link in one state commit."""
+        async with self._mutation_lock:
+            state = await self.store.load()
+            state.documents.append(document)
+            state.documents.sort(key=SORT_KEYS["documents"])
+            state.results.append(result)
+            state.results.sort(key=SORT_KEYS["results"])
+            audit(
+                state,
+                actor="patient",
+                action="upload_result_evidence",
+                resource_type="results",
+                resource_id=result.id,
+                details={"document_id": document.id, "evidence_status": document.status},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "results"})
+        return result
+
     async def get_document(self, document_id: str) -> ClinicalDocument | None:
         state = await self.store.load()
         return next((item for item in state.documents if item.id == document_id), None)
@@ -373,6 +394,7 @@ class HealthIAService:
         return state.consent
 
     async def run_proactive_check(self, *, manual_requested: bool = False) -> list[ChatMessage]:
+        """Run continuity rules only after an explicit event/manual request; never on a timer."""
         created: list[ChatMessage] = []
         async with self._mutation_lock:
             state = await self.store.load()
@@ -403,7 +425,7 @@ class HealthIAService:
                 audit(
                     state,
                     actor="healthia",
-                    action="emit_proactive_intervention",
+                    action="emit_event_driven_intervention",
                     resource_type="chat_message",
                     resource_id=message.id,
                     details={
@@ -418,16 +440,3 @@ class HealthIAService:
         for message in created:
             await self.broker.publish({"type": "message", "message": message.model_dump(mode="json")})
         return created
-
-    async def background_loop(self, stop: asyncio.Event) -> None:
-        interval = max(self.settings.proactive_interval_seconds, 5)
-        while not stop.is_set():
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=interval)
-                break
-            except TimeoutError:
-                pass
-            try:
-                await self.run_proactive_check()
-            except Exception as exc:  # pragma: no cover
-                await self.broker.publish({"type": "runtime_error", "message": str(exc)[:300]})
