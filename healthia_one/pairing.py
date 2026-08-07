@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
+import json
+import os
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -22,6 +26,7 @@ class DevicePrincipal:
     device_id: str
     display_name: str
     issued_at: datetime
+    expires_at: datetime
 
 
 @dataclass
@@ -33,27 +38,96 @@ class PairingSession:
     claimed: bool = False
     device_id: str = ""
     display_name: str = ""
-    token_hash: str = ""
 
 
 class DevicePairingManager:
-    """Short-lived pairing codes with server-issued, patient-bound device identities.
+    """Event-driven pairing plus restart-safe, patient-bound signed credentials.
 
-    Pairing completion is signalled with an Event so the browser can wait once for
-    the claim instead of polling every few seconds. Bearer tokens are stored only
-    as hashes and are bound to patient + server-generated connection + device id.
+    Pairing codes are short-lived and single-use. After a claim, the bearer
+    credential is an HMAC-signed envelope containing patient, connection and
+    device identity. No bearer token is stored in plaintext or in process memory.
+    With a stable HEALTHIA_DEVICE_TOKEN_SECRET, authorization survives Cloud Run
+    restarts while remaining bound to the original patient and device.
     """
 
-    def __init__(self, ttl_minutes: int = 10) -> None:
+    def __init__(
+        self,
+        ttl_minutes: int = 10,
+        *,
+        token_secret: str | bytes | None = None,
+        token_ttl_days: int = 90,
+    ) -> None:
         self.ttl_minutes = ttl_minutes
+        self.token_ttl_days = max(1, int(token_ttl_days))
+        configured = token_secret or os.getenv("HEALTHIA_DEVICE_TOKEN_SECRET", "")
+        if isinstance(configured, str):
+            configured_bytes = configured.encode("utf-8")
+        else:
+            configured_bytes = configured or b""
+        self._secret_is_persistent = len(configured_bytes) >= 32
+        self._token_secret = configured_bytes if self._secret_is_persistent else secrets.token_bytes(32)
         self._sessions: dict[str, PairingSession] = {}
-        self._tokens: dict[str, DevicePrincipal] = {}
         self._claim_events: dict[str, Event] = {}
         self._lock = Lock()
 
+    @property
+    def credential_persistence(self) -> str:
+        return "restart_safe" if self._secret_is_persistent else "process_local_secret"
+
     @staticmethod
-    def _hash(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    def _b64_encode(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _b64_decode(value: str) -> bytes:
+        padding = "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+
+    def _sign(self, payload_segment: str) -> str:
+        signature = hmac.new(self._token_secret, payload_segment.encode("ascii"), hashlib.sha256).digest()
+        return self._b64_encode(signature)
+
+    def _issue_token(self, principal: DevicePrincipal) -> str:
+        payload = {
+            "v": 1,
+            "patient_id": principal.patient_id,
+            "connection_id": principal.connection_id,
+            "device_id": principal.device_id,
+            "display_name": principal.display_name,
+            "iat": int(principal.issued_at.timestamp()),
+            "exp": int(principal.expires_at.timestamp()),
+            "nonce": secrets.token_hex(8),
+        }
+        payload_segment = self._b64_encode(
+            json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
+        return f"h1.{payload_segment}.{self._sign(payload_segment)}"
+
+    def _decode_token(self, token: str) -> DevicePrincipal | None:
+        try:
+            version, payload_segment, signature = token.split(".", 2)
+            if version != "h1":
+                return None
+            expected = self._sign(payload_segment)
+            if not hmac.compare_digest(signature, expected):
+                return None
+            payload = json.loads(self._b64_decode(payload_segment).decode("utf-8"))
+            if payload.get("v") != 1:
+                return None
+            issued_at = datetime.fromtimestamp(int(payload["iat"]), tz=timezone.utc)
+            expires_at = datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc)
+            if expires_at <= utc_now():
+                return None
+            return DevicePrincipal(
+                patient_id=str(payload["patient_id"]),
+                connection_id=str(payload["connection_id"]),
+                device_id=str(payload["device_id"]),
+                display_name=str(payload.get("display_name") or "Android Health Connect")[:160],
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
 
     def _cleanup_unlocked(self) -> None:
         now = utc_now()
@@ -121,20 +195,19 @@ class DevicePairingManager:
                 if session.device_id != clean_device_id:
                     raise PairingError("El código ya fue utilizado por otro dispositivo.")
                 raise PairingError("El código ya fue consumido. Genera uno nuevo para volver a vincular.")
-            token = secrets.token_urlsafe(32)
-            token_hash = self._hash(token)
             session.claimed = True
             session.device_id = clean_device_id
             session.display_name = (display_name or "Android Health Connect").strip()[:160]
-            session.token_hash = token_hash
+            issued_at = utc_now()
             principal = DevicePrincipal(
                 patient_id=session.patient_id,
                 connection_id=session.connection_id,
                 device_id=session.device_id,
                 display_name=session.display_name,
-                issued_at=utc_now(),
+                issued_at=issued_at,
+                expires_at=issued_at + timedelta(days=self.token_ttl_days),
             )
-            self._tokens[token_hash] = principal
+            token = self._issue_token(principal)
             event = self._claim_events.get(code)
             if event is not None:
                 event.set()
@@ -146,6 +219,8 @@ class DevicePairingManager:
                 "connection_id": session.connection_id,
                 "patient_id": session.patient_id,
                 "pairing_expires_at": session.expires_at.isoformat(),
+                "credential_expires_at": principal.expires_at.isoformat(),
+                "credential_persistence": self.credential_persistence,
             }
 
     def wait_for_claim(self, code: str, timeout_seconds: float | None = None) -> dict:
@@ -172,13 +247,12 @@ class DevicePairingManager:
     def authorize(self, token: str, device_id: str, patient_id: str = "patient_demo") -> DevicePrincipal | None:
         if not token or not device_id:
             return None
-        with self._lock:
-            principal = self._tokens.get(self._hash(token))
-            if principal is None:
-                return None
-            if principal.device_id != device_id or principal.patient_id != patient_id:
-                return None
-            return principal
+        principal = self._decode_token(token)
+        if principal is None:
+            return None
+        if principal.device_id != device_id or principal.patient_id != patient_id:
+            return None
+        return principal
 
     def validate(self, token: str, device_id: str, patient_id: str = "patient_demo") -> bool:
         return self.authorize(token, device_id, patient_id) is not None
