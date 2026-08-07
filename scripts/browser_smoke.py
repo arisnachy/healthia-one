@@ -172,8 +172,10 @@ window.fetch = async function(path, options={{}}) {{
     const response=window.__mockChatResponses[window.__mockChatIndex++];
     window.__mockSnapshot.messages.push(patient,response.message);
     if(response.mission) window.__mockSnapshot.missions.push(response.mission);
-    if(response.message?.metadata?.clinical_interview?.status==='completed') {{
-      const mission=window.__mockSnapshot.missions.find(item=>item.id===response.message.mission_id);
+    const interview=response.message?.metadata?.clinical_interview;
+    if(interview?.status==='completed') {{
+      const missionId=response.message?.mission_id || interview?.mission_id;
+      const mission=window.__mockSnapshot.missions.find(item=>item.id===missionId);
       if(mission) {{ mission.status='waiting_professional'; mission.next_action='Revisar la orientación con un profesional y actualizar HealthIA con el resultado'; mission.closure_evidence=['adaptive_interview_answers_collected','ai_clinical_orientation_generated']; }}
     }}
     setTimeout(() => window.__mockEventSource?.onmessage?.({{data: JSON.stringify({{type:'state',section:'chat'}})}}), 0);
