@@ -40,6 +40,7 @@ from healthia_one.models import (
     VitalRecord,
     WeightRecord,
 )
+from healthia_one.result_intelligence import analyze_uploaded_result, normalized_mime_type, result_storage_path
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.pairing import DevicePairingManager, PairingError
 from healthia_one.service import HealthIAService
@@ -78,6 +79,7 @@ AUTH_EXEMPT_API_PATHS = {
     "/api/devices/health-connect/sync", "/api/internal/pubsub/mission",
 }
 
+
 @app.middleware("http")
 async def authenticated_patient_scope(request: Request, call_next):
     path = request.url.path
@@ -108,10 +110,12 @@ async def healthz() -> dict:
 async def auth_config() -> dict:
     return identity_verifier.public_config()
 
+
 @app.get("/api/auth/me")
 async def auth_me(request: Request) -> dict:
     principal = request.state.principal
     return {"uid": principal.uid, "email": principal.email, "display_name": principal.display_name, "provider": principal.provider}
+
 
 @app.get("/api/readiness")
 async def readiness() -> dict:
@@ -134,11 +138,13 @@ async def readiness() -> dict:
         "cost_control": service.gemini.cost_status(),
         "capabilities": [
             "chat",
-            "proactive_followup",
+            "contextual_followup",
             "vitals",
             "weight",
             "activity",
             "results",
+            "multimodal_result_ingestion",
+            "original_result_archive",
             "family_genogram",
             "document_archive",
             "unified_timeline",
@@ -158,7 +164,7 @@ async def readiness() -> dict:
             "health_connect_sync",
             "device_medication_cross_check",
             "cloud_cost_guard",
-            "google_adk_background_runtime",
+            "google_adk_event_runtime",
             "pubsub_durable_events",
             "mission_execution_trace",
             "autonomous_closed_loop",
@@ -166,8 +172,8 @@ async def readiness() -> dict:
             "per_user_state_isolation",
         ],
         "truth_boundary": (
-            "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
-            "or replace emergency and professional care."
+            "Patient-owned continuity system. AI extraction from uploaded clinical media remains explicitly unverified; "
+            "HealthIA does not diagnose, prescribe, change medication, or replace emergency and professional care."
         ),
     }
 
@@ -452,13 +458,49 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+
+    filename = file.filename or "result"
+    mime_type = normalized_mime_type(filename, file.content_type)
     try:
-        result = parse_result_file(file.filename or "result", content)
+        result = parse_result_file(filename, content)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"No se pudo interpretar el archivo: {exc}") from exc
-    result.explanation = explain_result(result)
-    result.explained = result.status == "parsed"
-    return (await service._append_and_publish("results", result, "results", action="upload_result")).model_dump(mode="json")
+
+    # The original artifact is part of the patient-owned longitudinal record and
+    # remains available even when Gemini is disabled or multimodal extraction fails.
+    relative_path = result_storage_path(current_patient_id(), result.id, filename)
+    destination = (ROOT / relative_path).resolve()
+    if ROOT.resolve() not in destination.parents:
+        raise HTTPException(status_code=422, detail="Ruta de resultado inválida")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(destination.write_bytes, content)
+
+    if result.status == "pending_multimodal":
+        result = await analyze_uploaded_result(
+            service.gemini,
+            await service.snapshot(),
+            result,
+            content=content,
+            mime_type=mime_type,
+        )
+    if not result.explanation:
+        result.explanation = explain_result(result)
+    result.explained = result.status == "parsed" and bool(result.explanation)
+    stored = await service._append_and_publish("results", result, "results", action="upload_result")
+    return stored.model_dump(mode="json")
+
+
+@app.get("/api/results/{result_id}/file")
+async def result_file(result_id: str) -> FileResponse:
+    state = await service.snapshot()
+    result = next((item for item in state.results if item.id == result_id), None)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Resultado no encontrado")
+    relative_path = result_storage_path(state.profile.id, result.id, result.filename)
+    path = (ROOT / relative_path).resolve()
+    if ROOT.resolve() not in path.parents or not path.exists():
+        raise HTTPException(status_code=404, detail="Archivo original no disponible")
+    return FileResponse(path, media_type=normalized_mime_type(result.filename, None), filename=result.filename)
 
 
 @app.post("/api/demo/reset")
