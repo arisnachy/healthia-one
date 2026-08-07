@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     data_path: Path = Path(".healthia-one/state.json")
     proactive_interval_seconds: int = 20
     proactive_enabled: bool = True
+    mission_runtime: str = "deterministic"
+    agentic_events_enabled: bool = False
+    event_dispatch_backend: str = "local"
+    pubsub_topic: str = "healthia-agentic-events"
+    cloud_region: str = "us-central1"
     max_upload_bytes: int = 5 * 1024 * 1024
     llm_timeout_seconds: int = 18
 
