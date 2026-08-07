@@ -8,6 +8,13 @@ from typing import Any
 
 
 class VertexInteractionsAdapter:
+    """Adapt HealthIA's stateless Interactions-style boundary to Vertex generateContent.
+
+    The adapter preserves the controls HealthIA depends on instead of silently
+    dropping them: output-token ceiling, thinking level, temperature and JSON
+    structured-output constraints.
+    """
+
     def __init__(self, client: Any) -> None:
         self._client = client
 
@@ -57,6 +64,17 @@ class VertexInteractionsAdapter:
             kwargs["max_output_tokens"] = int(raw["max_output_tokens"])
         if raw.get("temperature") is not None:
             kwargs["temperature"] = float(raw["temperature"])
+        if raw.get("thinking_level"):
+            kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_level=str(raw["thinking_level"]).lower()
+            )
+        if raw.get("response_mime_type"):
+            kwargs["response_mime_type"] = str(raw["response_mime_type"])
+        if raw.get("response_json_schema") is not None:
+            kwargs["response_json_schema"] = raw["response_json_schema"]
+        elif raw.get("response_schema") is not None:
+            kwargs["response_schema"] = raw["response_schema"]
+
         response = self._client.models.generate_content(
             model=model,
             contents=self._contents(input),
