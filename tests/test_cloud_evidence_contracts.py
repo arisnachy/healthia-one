@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from healthia_one.adk_gemini import AdkGeminiResponder
 from healthia_one.config import Settings
 from healthia_one.deterministic_router import _mentions_result
 from healthia_one.documents import build_document, category_from_filename
@@ -77,6 +78,14 @@ async def test_result_and_original_are_committed_together() -> None:
     )
 
 
+def test_real_service_uses_adk_clinical_boundary_even_when_ai_is_mocked() -> None:
+    service = HealthIAService(Settings(store_backend="memory", llm_backend="mock"))
+    assert isinstance(service.gemini, AdkGeminiResponder)
+    source = Path("healthia_agent/agent.py").read_text(encoding="utf-8")
+    assert "patient_snapshot" not in source
+    assert "healthia_one.adk_runtime" in source
+
+
 def test_permanent_background_loop_is_absent() -> None:
     assert not hasattr(HealthIAService, "background_loop")
     app_source = Path("app/main.py").read_text(encoding="utf-8")
@@ -91,8 +100,12 @@ def test_cloud_deploy_requires_durable_evidence_and_strict_proof() -> None:
     assert "HEALTHIA_STORE_BACKEND=firestore" in deploy
     assert "HEALTHIA_GCS_BUCKET=$BucketName" in deploy
     assert "HEALTHIA_PROACTIVE_ENABLED=false" in deploy
+    assert "HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest" in deploy
     assert "verify_cloud_demo.py" in deploy
     assert '"live_gemini_interactions_call"' in verifier
+    assert '"google_adk_runner_tool_trajectory"' in verifier
+    assert '"five_dynamic_clinical_questions"' in verifier
+    assert '"restart_safe_device_identity"' in verifier
     assert '"gcs_original_evidence"' in verifier
     assert '"clinical_twin_provenance"' in verifier
     assert '"original_evidence_roundtrip"' in verifier
