@@ -195,10 +195,10 @@ replace_once(
 )
 replace_once(
     proof,
-    '''        "expected_gemini_requests": 1,
+    '''        "gemini_request_ceiling": 1,
         "checks": [],
 ''',
-    '''        "expected_gemini_requests": 1,
+    '''        "gemini_request_ceiling": 1,
         "ai_transport": "vertex_ai" if vertex_enabled else "developer_api",
         "google_cloud_project": os.getenv("GOOGLE_CLOUD_PROJECT", "") if vertex_enabled else "",
         "checks": [],
