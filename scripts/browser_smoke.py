@@ -228,7 +228,7 @@ def run() -> dict:
         first_block = page.locator(".clinical-question-block").last
         require(first_block.locator(".clinical-question").count() == 5, "first dynamic block does not have five questions")
         require(first_block.bounding_box() and first_block.bounding_box()["height"] > 100, "first block is not visible")
-        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Gemini · preguntas adaptativas", "dynamic source badge missing")
+        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Preguntas creadas para este caso · Gemini + ADK", "dynamic source badge missing")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after fast response")
         page.screenshot(path=str(OUTPUT / "03-dynamic-block.png"), full_page=True)
 
