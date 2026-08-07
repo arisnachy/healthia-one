@@ -109,7 +109,14 @@ class GcsResultBlobStore:
 
     async def get_result(self, *, patient_id: str, result_id: str, filename: str) -> bytes:
         _, blob = self._blob(patient_id, result_id, filename)
-        return await asyncio.to_thread(blob.download_as_bytes)
+        try:
+            return await asyncio.to_thread(blob.download_as_bytes)
+        except Exception as exc:
+            # Keep Cloud provider details out of the patient-facing endpoint while
+            # normalizing a missing private object to the same contract as local.
+            if type(exc).__name__ == "NotFound" or getattr(exc, "code", None) == 404:
+                raise FileNotFoundError(filename) from exc
+            raise
 
 
 def build_result_blob_store(settings: Settings, root: Path) -> ResultBlobStore:
