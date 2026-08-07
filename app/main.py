@@ -9,6 +9,8 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from healthia_one.auth import current_patient_id, patient_scope
+from healthia_one.auth_web import install_patient_auth
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
@@ -59,8 +61,9 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="HealthIA ONE", version="0.7.0", lifespan=lifespan)
+app = FastAPI(title="HealthIA ONE", version="0.8.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
+account_manager = install_patient_auth(app, service=service, settings=settings, web_root=WEB_ROOT)
 
 
 @app.get("/")
@@ -86,10 +89,19 @@ async def readiness() -> dict:
         "evidence_backend": evidence_backend(),
         "agent_execution": "demand_driven",
         "proactive_enabled": False,
+        "auth_required": settings.auth_required,
+        "patient_session_persistence": account_manager.credential_persistence,
+        "patient_state_scope": "authenticated_patient" if settings.auth_required else "demo_patient",
         "cost_control": service.gemini.cost_status(),
         "capabilities": [
             "chat",
+            "gemini_adaptive_clinical_interview",
+            "interview_memory",
+            "ai_followup_or_orientation_decision",
             "demand_driven_followup",
+            "patient_login_logout",
+            "patient_scoped_state",
+            "patient_scoped_events",
             "vitals",
             "weight",
             "activity",
@@ -118,7 +130,7 @@ async def readiness() -> dict:
             "cloud_cost_guard",
         ],
         "truth_boundary": (
-            "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
+            "Patient continuity system. It does not confirm diagnoses, prescribe, change medication, "
             "or replace emergency and professional care."
         ),
     }
@@ -214,15 +226,21 @@ async def create_device_pairing(request: Request) -> dict:
 @app.get("/api/devices/pairing/{code}")
 async def device_pairing_status(code: str) -> dict:
     try:
-        return pairing_manager.status(code)
+        payload = pairing_manager.status(code)
     except PairingError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if payload.get("patient_id") != current_patient_id():
+        raise HTTPException(status_code=404, detail="Conexión no encontrada.")
+    return payload
 
 
 @app.get("/api/devices/pairing/{code}/wait")
 async def wait_device_pairing(code: str) -> dict:
     """Hold one request until the pairing is claimed or expires; no browser polling."""
     try:
+        initial = pairing_manager.status(code)
+        if initial.get("patient_id") != current_patient_id():
+            raise HTTPException(status_code=404, detail="Conexión no encontrada.")
         return await asyncio.to_thread(pairing_manager.wait_for_claim, code, 600)
     except PairingError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -248,16 +266,18 @@ async def health_connect_sync(
     batch: HealthConnectSyncBatch,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    patient_id = (await service.snapshot()).profile.id
-    principal = pairing_manager.authorize(bearer_token(authorization), batch.device_id, patient_id)
+    principal = pairing_manager.identify(bearer_token(authorization), batch.device_id)
     if principal is None:
-        raise HTTPException(status_code=401, detail="Dispositivo no vinculado, paciente incorrecto o token inválido.")
+        raise HTTPException(status_code=401, detail="Dispositivo no vinculado o token inválido.")
     for record in batch.records:
+        record.patient_id = principal.patient_id
         record.metadata["paired_connection_id"] = principal.connection_id
         record.metadata["paired_device_id"] = principal.device_id
         record.metadata["paired_patient_id"] = principal.patient_id
-    result = await service.ingest_health_connect(batch)
+    with patient_scope(principal.patient_id):
+        result = await service.ingest_health_connect(batch)
     result["connection_id"] = principal.connection_id
+    result["patient_id"] = principal.patient_id
     result["device_identity_verified"] = True
     return result
 
@@ -440,6 +460,7 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     state = await service.snapshot()
     try:
         result = parse_result_file(filename, content)
+        result.patient_id = state.profile.id
         document = build_document(
             filename=filename,
             content_type=content_type,
@@ -495,6 +516,7 @@ async def demo_device_sync() -> dict:
         background_read=True,
         records=[
             DeviceObservation(
+                patient_id=current_patient_id(),
                 external_id=f"demo-steps-{now.date().isoformat()}",
                 metric=DeviceMetric.STEPS,
                 observed_at=now,
@@ -505,6 +527,7 @@ async def demo_device_sync() -> dict:
                 device_model="Synthetic Wear",
             ),
             DeviceObservation(
+                patient_id=current_patient_id(),
                 external_id=f"demo-heart-{int(now.timestamp())}",
                 metric=DeviceMetric.HEART_RATE,
                 observed_at=now,
@@ -513,6 +536,7 @@ async def demo_device_sync() -> dict:
                 source_name="Android Health Connect",
             ),
             DeviceObservation(
+                patient_id=current_patient_id(),
                 external_id=f"demo-weight-{now.date().isoformat()}",
                 metric=DeviceMetric.WEIGHT,
                 observed_at=now,
@@ -533,9 +557,11 @@ async def demo_tick() -> dict:
 
 @app.get("/api/events/stream")
 async def events() -> StreamingResponse:
+    patient_id = current_patient_id()
+
     async def generate():
         yield "event: ready\ndata: {}\n\n"
-        async for payload in service.broker.subscribe():
+        async for payload in service.broker.subscribe(patient_id=patient_id):
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
