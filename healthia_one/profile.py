@@ -36,7 +36,10 @@ FORM_WORDS = {
 }
 
 
-def age_years(birth_date: date, today: date | None = None) -> int:
+def age_years(birth_date: date | None, today: date | None = None) -> int | None:
+    """Return age only when the patient actually supplied a birth date."""
+    if birth_date is None:
+        return None
     today = today or date.today()
     return today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
 
@@ -52,7 +55,10 @@ def nutritional_status(*, bmi: float | None, profile: PatientProfile) -> str:
         return "Sin dato"
     if profile.reproductive_health.pregnancy_status == "pregnant":
         return "Requiere evaluación específica del embarazo"
-    if age_years(profile.birth_date) < 18:
+    age = age_years(profile.birth_date)
+    if age is None:
+        return "Requiere edad para clasificar"
+    if age < 18:
         return "Requiere percentiles por edad y sexo"
     if bmi < 18.5:
         return "Bajo peso"
