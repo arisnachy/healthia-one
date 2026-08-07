@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from healthia_one.adk_gemini import AdkGeminiResponder
-from healthia_one.auth import PatientPrincipal, principal_scope
+from healthia_one.auth import PatientPrincipal, current_patient_id, principal_scope
 from healthia_one.config import Settings
 from healthia_one.continuity import evaluate_continuity
 from healthia_one.devices import ingest_health_connect_batch
@@ -37,23 +37,27 @@ from healthia_one.store import FirestoreStore, JsonStore, MemoryStore, StateStor
 
 class EventBroker:
     def __init__(self) -> None:
-        self._subscribers: set[asyncio.Queue[dict]] = set()
+        self._subscribers: dict[asyncio.Queue[dict], str] = {}
 
-    async def publish(self, payload: dict) -> None:
-        for queue in list(self._subscribers):
+    async def publish(self, payload: dict, patient_id: str | None = None) -> None:
+        target_patient = patient_id or current_patient_id()
+        for queue, subscriber_patient in list(self._subscribers.items()):
+            if subscriber_patient != target_patient:
+                continue
             try:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
-                self._subscribers.discard(queue)
+                self._subscribers.pop(queue, None)
 
-    async def subscribe(self) -> AsyncIterator[dict]:
+    async def subscribe(self, patient_id: str | None = None) -> AsyncIterator[dict]:
+        target_patient = patient_id or current_patient_id()
         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=100)
-        self._subscribers.add(queue)
+        self._subscribers[queue] = target_patient
         try:
             while True:
                 yield await queue.get()
         finally:
-            self._subscribers.discard(queue)
+            self._subscribers.pop(queue, None)
 
 
 def seed_state() -> PatientState:
@@ -249,15 +253,33 @@ class HealthIAService:
     async def reset_demo(self) -> PatientState:
         async with self._mutation_lock:
             state = seed_state()
+            patient_id = current_patient_id()
+            if patient_id != "patient_demo":
+                principal = None
+                # Authenticated users must never be reset to the synthetic demo
+                # identity; preserve their namespace and basic profile identity.
+                existing = await self.store.load()
+                state.profile = existing.profile
+                for collection in (
+                    "weights", "vitals", "activity", "family_members", "medication_plans",
+                    "medication_checkins", "appointments", "goals",
+                ):
+                    setattr(state, collection, [])
+                state.messages = [
+                    ChatMessage(
+                        patient_id=patient_id,
+                        role="assistant",
+                        author="HealthIA",
+                        content="Nueva consulta lista. Tu cuenta y tu identidad permanecen separadas.",
+                    )
+                ]
             await self.store.save(state)
-        await self.broker.publish({"type": "state", "section": "reset"})
+        await self.broker.publish({"type": "state", "section": "reset"}, patient_id=current_patient_id())
         return state
 
     async def update_profile(self, profile: PatientProfile) -> PatientProfile:
         async with self._mutation_lock:
             state = await self.store.load()
-            # Store.save binds the canonical authenticated patient id. Do not let
-            # an editable form move a profile into another patient's namespace.
             profile.id = state.profile.id
             state.profile = profile
             audit(
