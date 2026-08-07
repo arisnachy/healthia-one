@@ -1,0 +1,82 @@
+name: HealthIA GCP auth probe
+
+on:
+  push:
+    branches:
+      - kira/event-driven-results-twin-p1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID || secrets.GOOGLE_CLOUD_PROJECT }}
+      WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER || secrets.WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT || secrets.WIF_SERVICE_ACCOUNT }}
+      GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect configured authentication path
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            echo "mode=wif" >> "$GITHUB_OUTPUT"
+            echo "Google Cloud auth path: Workload Identity Federation"
+          elif [[ -n "${GCP_CREDENTIALS}" ]]; then
+            echo "mode=json" >> "$GITHUB_OUTPUT"
+            echo "Google Cloud auth path: service-account JSON fallback"
+          else
+            echo "mode=missing" >> "$GITHUB_OUTPUT"
+            echo "No Google Cloud authentication secrets are configured under supported names."
+          fi
+          if [[ -z "${GCP_PROJECT_ID}" ]]; then
+            echo "Project ID secret is also missing (GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT)."
+          fi
+
+      - name: Authenticate with Workload Identity Federation
+        if: steps.detect.outputs.mode == 'wif'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Authenticate with service-account JSON fallback
+        if: steps.detect.outputs.mode == 'json'
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ env.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Fail clearly when credentials are absent
+        if: steps.detect.outputs.mode == 'missing' || env.GCP_PROJECT_ID == ''
+        shell: bash
+        run: |
+          echo "HEALTHIA_GCP_AUTH_BLOCKED"
+          echo "Expected GitHub Secrets: GCP_PROJECT_ID + (GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT),"
+          echo "or GCP_PROJECT_ID + GCP_CREDENTIALS as a fallback. No deployment was attempted."
+          exit 2
+
+      - name: Set up Cloud SDK
+        if: steps.detect.outputs.mode != 'missing' && env.GCP_PROJECT_ID != ''
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Prove authenticated project access without mutation
+        if: steps.detect.outputs.mode != 'missing' && env.GCP_PROJECT_ID != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format='value(account)')
+          test -n "$ACCOUNT"
+          gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectId)' | grep -Fx "$GCP_PROJECT_ID"
+          echo "HEALTHIA_GCP_AUTH_OK project=$GCP_PROJECT_ID account=$ACCOUNT"
