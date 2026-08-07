@@ -59,6 +59,8 @@ jobs:
           node --check web/runtime-integrations.js
           node --check web/provider-integrations.js
           node --check web/clinical-council.js
+          node --check web/account.js
+          node --check web/auth.js
           node --check web/cost-control.js
       - name: Reject version-number UI layers
         shell: bash
