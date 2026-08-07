@@ -171,12 +171,10 @@ window.fetch = async function(path, options={{}}) {{
     const patient={{id:'browser_patient_'+Date.now()+'_'+window.__mockChatIndex,patient_id:'patient_demo',role:'patient',author:window.__mockSnapshot.profile.display_name,content:payload.message,created_at:new Date().toISOString(),risk_level:'info',mission_id:null,agent_plan:[],metadata:{{}}}};
     const response=window.__mockChatResponses[window.__mockChatIndex++];
     window.__mockSnapshot.messages.push(patient,response.message);
-    if(response.mission) window.__mockSnapshot.missions.push(response.mission);
-    const interview=response.message?.metadata?.clinical_interview;
-    if(interview?.status==='completed') {{
-      const missionId=response.message?.mission_id || interview?.mission_id;
-      const mission=window.__mockSnapshot.missions.find(item=>item.id===missionId);
-      if(mission) {{ mission.status='waiting_professional'; mission.next_action='Revisar la orientación con un profesional y actualizar HealthIA con el resultado'; mission.closure_evidence=['adaptive_interview_answers_collected','ai_clinical_orientation_generated']; }}
+    if(response.mission) {{
+      const missionIndex=window.__mockSnapshot.missions.findIndex(item=>item.id===response.mission.id);
+      if(missionIndex>=0) window.__mockSnapshot.missions[missionIndex]=response.mission;
+      else window.__mockSnapshot.missions.push(response.mission);
     }}
     setTimeout(() => window.__mockEventSource?.onmessage?.({{data: JSON.stringify({{type:'state',section:'chat'}})}}), 0);
     return new MockResponse(response);
@@ -197,6 +195,13 @@ def run() -> dict:
     require(simulated_ai_steps == 3, f"expected two question generations plus one resolution, found {simulated_ai_steps}")
     require(all(item["message"]["metadata"].get("question_source") == "gemini_dynamic" for item in responses[:2]), "dynamic question source missing")
     require(responses[2]["message"]["metadata"].get("llm_status") == "clinical_ai_orientation_completed", "patient orientation state missing")
+    final_mission = responses[2].get("mission") or {}
+    require(final_mission.get("status") == "waiting_professional", "backend did not return updated existing mission")
+    require(
+        final_mission.get("next_action") == "Revisar la orientación con un profesional y actualizar HealthIA con el resultado",
+        "backend mission response carries stale next action",
+    )
+    require("ai_clinical_orientation_generated" in (final_mission.get("closure_evidence") or []), "backend mission response lost AI orientation evidence")
 
     html = (WEB / "index.html").read_text(encoding="utf-8")
     html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", html)
@@ -288,9 +293,10 @@ def run() -> dict:
         "dynamic_question_source": "pass",
         "two_five_question_blocks": "pass",
         "pending_race_removed": "pass",
+        "canonical_mission_returned": "pass",
+        "mission_upsert_without_sse_race": "pass",
         "patient_facing_orientation": "pass",
         "readable_transcript_labels": "pass",
-        "mission_state_refresh": "pass",
     }
     (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
