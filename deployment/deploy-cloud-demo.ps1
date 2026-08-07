@@ -7,6 +7,7 @@ param(
     [string]$TopicName = "healthia-agentic-events",
     [string]$SubscriptionName = "healthia-agentic-events-push",
     [string]$SchedulerName = "healthia-agentic-tick",
+    [string]$ResultBucketName = "",
     [ValidateRange(6, 5000)][int]$RequestLimit = 500,
     [ValidateRange(64, 2048)][int]$MaxOutputTokens = 700,
     [ValidateRange(1, 49)][double]$BudgetTargetUsd = 45,
@@ -24,6 +25,9 @@ $RuntimeServiceAccountName = "healthia-runtime"
 $PushServiceAccountName = "healthia-pubsub-push"
 $RuntimeServiceAccount = "$RuntimeServiceAccountName@$ProjectId.iam.gserviceaccount.com"
 $PushServiceAccount = "$PushServiceAccountName@$ProjectId.iam.gserviceaccount.com"
+if ([string]::IsNullOrWhiteSpace($ResultBucketName)) { $ResultBucketName = "$ProjectId-healthia-results" }
+$ResultBucketName = $ResultBucketName.ToLowerInvariant()
+if ($ResultBucketName -notmatch '^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$') { throw "ResultBucketName no cumple las reglas de nombre de Cloud Storage." }
 
 function Invoke-Gcloud {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
@@ -77,13 +81,14 @@ if ($EnablePatientAuth -and ([string]::IsNullOrWhiteSpace($FirebaseApiKey) -or [
 Write-Host ""
 Write-Host "HEALTHIA ONE · CLOUD AGENTIC DEMO" -ForegroundColor Cyan
 Write-Host "Proyecto: $ProjectId" -ForegroundColor White
-Write-Host "Region Cloud Run/PubSub: $Region" -ForegroundColor White
-Write-Host "Runtime: Google ADK + Gemini + Pub/Sub + Firestore" -ForegroundColor White
+Write-Host "Region Cloud Run/PubSub/Storage: $Region" -ForegroundColor White
+Write-Host "Runtime: Google ADK + Gemini + Pub/Sub + Firestore + Cloud Storage" -ForegroundColor White
 Write-Host "Agentes: A DEMANDA. Los eventos sin trabajo util no llaman a Gemini." -ForegroundColor Green
 Write-Host "Cloud Run: min=0, max=1, CPU por solicitud; Scheduler PAUSADO por defecto." -ForegroundColor Green
+Write-Host "Resultados originales: bucket privado $ResultBucketName; acceso solo por backend autenticado." -ForegroundColor Green
 Write-Host "Presupuesto de trabajo: aviso/objetivo USD $BudgetTargetUsd; limite absoluto deseado USD $AbsoluteBudgetUsd." -ForegroundColor Yellow
 Write-Host "IMPORTANTE: el corte monetario real debe configurarse en Cloud Billing Spend Caps/Budgets. El contador de $RequestLimit solicitudes es solo un fusible tecnico de emergencia por instancia." -ForegroundColor Yellow
-Write-Host "Recomendacion: spend cap Gemini <= USD 25, Cloud Run <= USD 10 y presupuesto global del proyecto USD $BudgetTargetUsd, dejando margen para Firestore/otros cargos y latencia." -ForegroundColor Yellow
+Write-Host "Recomendacion: spend cap Gemini <= USD 25, Cloud Run <= USD 10 y presupuesto global del proyecto USD $BudgetTargetUsd, dejando margen para Firestore/Storage/otros cargos y latencia." -ForegroundColor Yellow
 if ($EnablePatientAuth) { Write-Host "Identidad: Google Identity Platform/Firebase Auth (Google + email/password)." -ForegroundColor Green }
 else { Write-Host "Identidad: desactivada para prueba infra estricta. Usa -EnablePatientAuth en la demo para jueces." -ForegroundColor DarkYellow }
 if ($PublicDemo -and -not $EnablePatientAuth) { Write-Host "ADVERTENCIA: servicio publico sin identidad de paciente. Recomendado solo para una ventana de prueba muy corta." -ForegroundColor Red }
@@ -97,7 +102,7 @@ Invoke-Gcloud "config" "set" "project" $ProjectId
 $services = @(
     "run.googleapis.com", "cloudbuild.googleapis.com", "artifactregistry.googleapis.com",
     "firestore.googleapis.com", "secretmanager.googleapis.com", "pubsub.googleapis.com",
-    "cloudscheduler.googleapis.com", "identitytoolkit.googleapis.com"
+    "cloudscheduler.googleapis.com", "identitytoolkit.googleapis.com", "storage.googleapis.com"
 )
 Invoke-Gcloud "services" "enable" @services "--project" $ProjectId
 
@@ -116,6 +121,13 @@ if (-not (Test-GcloudResource @("pubsub", "topics", "describe", $TopicName, "--p
     Invoke-Gcloud "pubsub" "topics" "create" $TopicName "--project" $ProjectId "--quiet"
 }
 
+$bucketUri = "gs://$ResultBucketName"
+if (-not (Test-GcloudResource @("storage", "buckets", "describe", $bucketUri, "--project", $ProjectId))) {
+    Invoke-Gcloud "storage" "buckets" "create" $bucketUri "--project=$ProjectId" "--location=$Region" "--uniform-bucket-level-access" "--quiet"
+}
+Invoke-Gcloud "storage" "buckets" "update" $bucketUri "--public-access-prevention=enforced" "--quiet"
+Invoke-Gcloud "storage" "buckets" "add-iam-policy-binding" $bucketUri "--member=serviceAccount:$RuntimeServiceAccount" "--role=roles/storage.objectUser" "--quiet"
+
 $authMode = if ($EnablePatientAuth) { "identity_platform" } else { "local" }
 $envItems = @(
     "GOOGLE_CLOUD_PROJECT=$ProjectId",
@@ -123,6 +135,8 @@ $envItems = @(
     "HEALTHIA_MODEL=gemini-3.6-flash",
     "HEALTHIA_LLM_BACKEND=gemini_api",
     "HEALTHIA_STORE_BACKEND=firestore",
+    "HEALTHIA_BLOB_BACKEND=gcs",
+    "HEALTHIA_RESULT_BUCKET=$ResultBucketName",
     "HEALTHIA_COST_MODE=cloud_demo",
     "HEALTHIA_AI_REQUEST_LIMIT=$RequestLimit",
     "HEALTHIA_COST_GUARD_START_ENABLED=true",
@@ -189,6 +203,7 @@ Write-Host "DESPLIEGUE AGENTIC COMPLETADO" -ForegroundColor Green
 Write-Host "Cloud Run URL: $url" -ForegroundColor Cyan
 Write-Host "Revision: $revision" -ForegroundColor Cyan
 Write-Host "Pub/Sub topic: $TopicName" -ForegroundColor Cyan
+Write-Host "Cloud Storage privado: $bucketUri" -ForegroundColor Cyan
 Write-Host "Fusible tecnico: $RequestLimit solicitudes por instancia; agentes a demanda." -ForegroundColor Cyan
 Write-Host "Objetivo de Billing: USD $BudgetTargetUsd / limite deseado USD $AbsoluteBudgetUsd." -ForegroundColor Cyan
 if (-not $SkipScheduler) { Write-Host "Scheduler: $SchedulerName (PAUSADO)." -ForegroundColor Cyan }
@@ -197,4 +212,4 @@ Write-Host ""
 Write-Host "Prueba infra estricta (puedes redesplegar con -RequestLimit 6 para reservar solo seis llamadas):" -ForegroundColor White
 Write-Host ".\deployment\capture-cloud-proof.ps1 -ProjectId $ProjectId -Region $Region -ServiceName $ServiceName -SchedulerName $SchedulerName" -ForegroundColor Yellow
 Write-Host "Limpieza al terminar:" -ForegroundColor White
-Write-Host ".\deployment\remove-cloud-demo.ps1 -ProjectId $ProjectId -Region $Region -ServiceName $ServiceName -TopicName $TopicName -SubscriptionName $SubscriptionName -SchedulerName $SchedulerName" -ForegroundColor Yellow
+Write-Host ".\deployment\remove-cloud-demo.ps1 -ProjectId $ProjectId -Region $Region -ServiceName $ServiceName -TopicName $TopicName -SubscriptionName $SubscriptionName -SchedulerName $SchedulerName -ResultBucketName $ResultBucketName" -ForegroundColor Yellow
