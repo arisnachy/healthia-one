@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from healthia_one.config import Settings
 from healthia_one.documents import build_document
 from healthia_one.identity import AuthPrincipal, IdentityVerifier
@@ -71,13 +73,14 @@ async def test_event_broker_does_not_cross_patient_scopes() -> None:
     service = HealthIAService(Settings(store_backend="memory"))
     with patient_scope("alpha"):
         alpha_stream = service.broker.subscribe()
-        alpha_task = alpha_stream.__anext__()
+        alpha_task = asyncio.create_task(alpha_stream.__anext__())
+    await asyncio.sleep(0)
     with patient_scope("beta"):
         await service.broker.publish({"type": "state", "section": "beta"})
-    # Publishing to beta must not satisfy alpha. Publish alpha next and ensure it is the item observed.
+    assert not alpha_task.done()
     with patient_scope("alpha"):
         await service.broker.publish({"type": "state", "section": "alpha"})
-    payload = await alpha_task
+    payload = await asyncio.wait_for(alpha_task, timeout=1)
     assert payload["section"] == "alpha"
     await alpha_stream.aclose()
 
