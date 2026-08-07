@@ -33,6 +33,7 @@ const googleButton = document.querySelector("#googleSignIn");
 const modeButton = document.querySelector("#authModeToggle");
 const submitButton = document.querySelector("#authSubmit");
 let createMode = false;
+let previousUid = "";
 
 function setMessage(message, tone = "info") {
   if (!authMessage) return;
@@ -146,9 +147,14 @@ async function bootIdentity() {
         authState.token = "";
         showGate();
         setMessage("Inicia sesión para acceder únicamente a tus datos de HealthIA.");
+        if (previousUid) {
+          document.dispatchEvent(new CustomEvent("healthia:signed-out", {detail: {uid: previousUid}}));
+          previousUid = "";
+        }
         return;
       }
       authState.token = await authModule.getIdToken(user);
+      previousUid = user.uid;
       showApp();
       setMessage("");
       finishReady();
