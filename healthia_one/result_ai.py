@@ -20,24 +20,71 @@ Reglas obligatorias:
 - No declares que un diagnóstico está confirmado por una imagen aislada.
 - Para radiología, ecografía, ECG y otros estudios, incluye limitaciones de calidad y recomienda revisión profesional cuando corresponda.
 - Para laboratorios, conserva valores, unidades, rangos y banderas exactamente cuando sean legibles.
-- Devuelve solo JSON válido; no uses Markdown fuera del JSON.
-
-Formato:
-{
-  "document_type": "laboratory|ct|mri|xray|ultrasound|ecg|pathology|clinical_report|other",
-  "modality": "texto breve",
-  "panel": "título breve para el resultado",
-  "anatomical_regions": ["región 1"],
-  "observations": [
-    {"name": "dato", "value": "valor", "unit": "", "reference": "", "flag": null}
-  ],
-  "findings": ["hallazgo visible o informado"],
-  "impression": "impresión del informe o síntesis prudente; vacío si no corresponde",
-  "limitations": ["limitación relevante"],
-  "patient_explanation": "explicación clara y prudente para el paciente",
-  "requires_professional_review": true
-}
+- Devuelve únicamente el objeto JSON solicitado por el esquema de salida; no uses Markdown ni texto exterior.
 """.strip()
+
+
+RESULT_ANALYSIS_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "document_type",
+        "modality",
+        "panel",
+        "anatomical_regions",
+        "observations",
+        "findings",
+        "impression",
+        "limitations",
+        "patient_explanation",
+        "requires_professional_review",
+    ],
+    "properties": {
+        "document_type": {
+            "type": "string",
+            "enum": [
+                "laboratory",
+                "ct",
+                "mri",
+                "xray",
+                "ultrasound",
+                "ecg",
+                "pathology",
+                "clinical_report",
+                "other",
+            ],
+        },
+        "modality": {"type": "string"},
+        "panel": {"type": "string"},
+        "anatomical_regions": {"type": "array", "items": {"type": "string"}},
+        "observations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "value", "unit", "reference", "flag"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "value": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "number"},
+                            {"type": "null"},
+                        ]
+                    },
+                    "unit": {"type": "string"},
+                    "reference": {"type": "string"},
+                    "flag": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                },
+            },
+        },
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "impression": {"type": "string"},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "patient_explanation": {"type": "string"},
+        "requires_professional_review": {"type": "boolean"},
+    },
+}
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -108,6 +155,20 @@ def _generate_analysis(responder, state: PatientState, filename: str, mime_type:
         },
         "truth_boundary": "Use only what is visible or legible in this upload. Do not infer missing measurements.",
     }
+    generation_config: dict[str, Any] = {
+        "max_output_tokens": min(responder.cost_guard.max_output_tokens, 1400),
+        "thinking_level": "minimal",
+    }
+    # Vertex supports controlled JSON generation. Enforce it at the transport
+    # boundary rather than repairing malformed model text after the fact.
+    if responder.settings.vertex_ai_enabled:
+        generation_config.update(
+            {
+                "response_mime_type": "application/json",
+                "response_json_schema": RESULT_ANALYSIS_JSON_SCHEMA,
+            }
+        )
+
     interaction = responder._get_client().interactions.create(
         model=responder.settings.model,
         input=[
@@ -115,10 +176,7 @@ def _generate_analysis(responder, state: PatientState, filename: str, mime_type:
             _media_input(filename, mime_type, content),
         ],
         system_instruction=RESULT_ANALYSIS_SYSTEM_INSTRUCTION,
-        generation_config={
-            "max_output_tokens": min(responder.cost_guard.max_output_tokens, 1400),
-            "thinking_level": "minimal",
-        },
+        generation_config=generation_config,
         store=False,
     )
     text = responder._interaction_text(interaction)
