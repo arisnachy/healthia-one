@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - kira/omega-100-agentic-runtime
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
   migrate:
+    if: github.event_name == 'push' || github.head_ref == 'kira/omega-100-agentic-runtime'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +56,6 @@ jobs:
               'Production beyond the hackathon still requires authenticated multi-patient isolation, hardened Firestore authorization, private encrypted object storage for document bytes, malware scanning, retention/deletion policy, clinical validation and independent privacy/security/legal review.',
               'The hackathon build now verifies authenticated per-user isolation at the application/store boundary. Production beyond the hackathon still requires hardened authorization policy review, private encrypted object storage for document bytes, malware scanning, retention/deletion policy, clinical validation and independent privacy/security/legal review.')
 
-          # Add verified identity isolation to the architecture and verification matrix.
           arch=Path("docs/ARCHITECTURE.md"); text=arch.read_text(encoding="utf-8")
           marker='## The autonomous mission contract\n'
           identity='''## Identity and tenant isolation\n\nThe judge-facing UI uses Google Identity Platform/Firebase Auth. Google sign-in and email/password accounts produce an ID token that the FastAPI backend verifies with Firebase Admin. The immutable verified `uid` becomes the only patient scope for Firestore, local state adapters, uploads, audit events and SSE subscriptions. Device pairing codes created by an authenticated user bind the resulting hashed device token to the same UID.\n\nA public Cloud Run judge UI does not make the internal Pub/Sub mutation endpoint public: Pub/Sub sends an OIDC token from a dedicated push service account and HealthIA verifies both its audience and service-account email before accepting the envelope.\n\n'''
