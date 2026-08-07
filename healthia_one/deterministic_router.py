@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from healthia_one.continuity import build_timeline, consultation_brief, medication_summary
 from healthia_one.family import describe_genogram, family_summary
 from healthia_one.models import (
@@ -15,8 +17,25 @@ from healthia_one.result_search import conversational_result_context
 from healthia_one.safety import assess_text
 
 
+_RESULT_PHRASES = (
+    "resultado", "laboratorio", "analítica", "analitica", "análisis", "analisis",
+    "tomografía", "tomografia", "resonancia", "sonografía", "sonografia",
+    "ecografía", "ecografia", "ultrasonido", "electrocardiograma",
+    "radiografía", "radiografia", "biopsia",
+)
+_RESULT_TOKENS = {"tac", "tc", "ct", "mri", "rm", "ecg", "ekg", "rx", "xray"}
+
+
 def _plan(*steps: tuple[str, str, str]) -> list[AgentStep]:
     return [AgentStep(agent=agent, action=action, reason=reason, status="completed") for agent, action, reason in steps]
+
+
+def _mentions_result(text: str) -> bool:
+    lower = text.lower()
+    if any(phrase in lower for phrase in _RESULT_PHRASES):
+        return True
+    tokens = set(re.findall(r"[a-záéíóúñ0-9]+", lower))
+    return bool(tokens & _RESULT_TOKENS)
 
 
 def respond(state: PatientState, patient_text: str) -> ChatResponse:
@@ -143,37 +162,9 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             agent_plan=plan,
         )
         action_target = "family"
-    elif any(word in lower for word in ("documento", "archivo", "expediente", "papel", "informe", "receta")):
+    elif _mentions_result(patient_text):
         plan = _plan(
-            ("ARCHIVUM", "Indexar documentación clínica", "Encontrar y organizar"),
-            ("HISTORIA", "Relacionar con la línea de tiempo", "Evitar documentos aislados"),
-            ("LUMEN", "Preparar explicación si aplica", "Lenguaje comprensible"),
-            ("KIRA", "Definir siguiente acción", "Continuidad"),
-        )
-        if state.documents:
-            content = f"Tu expediente tiene **{len(state.documents)} documentos organizados**. Puedo abrir el archivo o ayudarte a cargar uno nuevo."
-            evidence = [item.id for item in state.documents[-5:]]
-        else:
-            content = "Todavía no hay documentos organizados. Puedes cargar laboratorios, imágenes, recetas, informes o notas."
-            evidence = []
-        mission = HealthMission(
-            title="Organizar documentación del paciente",
-            mission_type="document_management",
-            next_action="Cargar o seleccionar el documento que necesitas",
-            evidence_ids=evidence,
-            agent_plan=plan,
-        )
-        action_target = "documents"
-    elif any(
-        word in lower
-        for word in (
-            "resultado", "laboratorio", "analítica", "analisis", "análisis", "tac", "tomografía", "tomografia",
-            "tc", "ct", "resonancia", "mri", "rm", "sonografía", "sonografia", "ecografía", "ecografia",
-            "ultrasonido", "ecg", "ekg", "electrocardiograma", "radiografía", "radiografia", "rx", "biopsia",
-        )
-    ):
-        plan = _plan(
-            ("LUMEN", "Recuperar y explicar la evidencia solicitada", "Conversación grounded en el resultado persistido"),
+            ("LUMEN", "Recuperar y explicar la evidencia solicitada", "Conversación anclada al resultado persistido"),
             ("HISTORIA", "Relacionar con la línea de tiempo y el gemelo", "Evitar interpretación aislada"),
             ("ARCHIVUM", "Conservar vínculo con el archivo original", "Procedencia verificable"),
             ("KIRA", "Preparar preguntas y seguimiento", "Continuidad"),
@@ -202,6 +193,27 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             agent_plan=plan,
         )
         action_target = "results"
+    elif any(word in lower for word in ("documento", "archivo", "expediente", "papel", "informe", "receta")):
+        plan = _plan(
+            ("ARCHIVUM", "Indexar documentación clínica", "Encontrar y organizar"),
+            ("HISTORIA", "Relacionar con la línea de tiempo", "Evitar documentos aislados"),
+            ("LUMEN", "Preparar explicación si aplica", "Lenguaje comprensible"),
+            ("KIRA", "Definir siguiente acción", "Continuidad"),
+        )
+        if state.documents:
+            content = f"Tu expediente tiene **{len(state.documents)} documentos organizados**. Puedo abrir el archivo o ayudarte a cargar uno nuevo."
+            evidence = [item.id for item in state.documents[-5:]]
+        else:
+            content = "Todavía no hay documentos organizados. Puedes cargar laboratorios, imágenes, recetas, informes o notas."
+            evidence = []
+        mission = HealthMission(
+            title="Organizar documentación del paciente",
+            mission_type="document_management",
+            next_action="Cargar o seleccionar el documento que necesitas",
+            evidence_ids=evidence,
+            agent_plan=plan,
+        )
+        action_target = "documents"
     elif any(word in lower for word in ("peso", "engord", "adelgaz")):
         plan = _plan(
             ("HISTORIA", "Revisar tendencia de peso", "Contexto longitudinal"),
