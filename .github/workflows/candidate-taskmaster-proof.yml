@@ -10,10 +10,14 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "healthia_one/**"
-      - "healthia_agent/**"
+      - "healthia_one/config.py"
+      - "healthia_one/gemini.py"
+      - "healthia_one/google_ai_transport.py"
+      - "healthia_one/result_ai.py"
+      - "healthia_one/adk_gemini.py"
+      - "healthia_one/adk_runtime.py"
+      - "healthia_one/service.py"
       - "scripts/live_taskmaster_proof.py"
-      - "deployment/**"
       - "pyproject.toml"
 
 permissions:
