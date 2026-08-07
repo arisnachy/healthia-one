@@ -220,6 +220,30 @@ def main() -> int:
             require(original.status_code == 200 and original.content == pdf, "original evidence did not round-trip byte-for-byte")
             proof["checks"].append("live_gemini_multimodal_original_twin_roundtrip")
 
+            taskmaster = client.post(
+                "/api/chat",
+                json={"message": "Explícame el resultado synthetic-lab.pdf que acabo de subir y confirma que quedó guardado."},
+            )
+            require(taskmaster.status_code == 200, f"Taskmaster result retrieval failed: {taskmaster.text[:500]}")
+            taskmaster_payload = taskmaster.json()
+            mission = taskmaster_payload.get("mission") or {}
+            require(mission.get("mission_type") == "result_explanation", "Taskmaster mission type mismatch")
+            require(mission.get("status") == "completed", f"Taskmaster mission did not close: {mission.get('status')}")
+            require(result.get("id") in (mission.get("evidence_ids") or []), "closed mission missing result evidence id")
+            require(result.get("document_id") in (mission.get("evidence_ids") or []), "closed mission missing original document id")
+            closures = mission.get("closure_evidence") or []
+            require("persisted_result_retrieved" in closures, "closed mission missing persisted result retrieval evidence")
+            require("patient_explanation_returned" in closures, "closed mission missing patient explanation evidence")
+            require("original_evidence_link_resolved" in closures, "closed mission missing original evidence link")
+            require("synthetic-lab.pdf" in taskmaster_payload["message"].get("content", ""), "closed mission did not retrieve the requested study")
+            proof["checks"].append("closed_loop_taskmaster_result_mission")
+            proof["taskmaster_mission"] = {
+                "status": mission.get("status"),
+                "mission_type": mission.get("mission_type"),
+                "evidence_count": len(mission.get("evidence_ids") or []),
+                "closure_evidence": closures,
+            }
+
             client.post("/api/auth/logout")
             require(client.get("/api/bootstrap").status_code == 401, "logout did not revoke browser access")
             created_b = client.post(
@@ -245,6 +269,7 @@ def main() -> int:
             state_a = state_a_response.json()
             require(state_a["profile"]["id"] == patient_a, "patient A state identity mismatch after login")
             require(any(abs(float(item["weight_kg"]) - 81.2) < 0.001 for item in state_a.get("weights") or []), "patient A own longitudinal state was not recovered")
+            require(any(item.get("mission_type") == "result_explanation" and item.get("status") == "completed" for item in state_a.get("missions") or []), "patient A closed Taskmaster mission was not persisted")
             proof["checks"].append("logout_relogin_restores_only_own_state")
 
             readiness = client.get("/api/readiness").json()
