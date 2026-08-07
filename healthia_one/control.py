@@ -34,18 +34,27 @@ def finding_allowed(
     *,
     manual_requested: bool = False,
 ) -> tuple[bool, str]:
+    """Return whether an intervention may surface and the most specific reason.
+
+    HealthIA is quiet by default. Explicit patient choices such as snooze/mute are
+    still evaluated before the general proactive-off policy so the audit trail can
+    explain the patient's own preference instead of collapsing everything into a
+    generic `proactive_disabled` reason. A patient-requested manual review remains
+    allowed because it is not unsolicited proactive messaging.
+    """
     consent = state.consent
     if finding.risk_level == RiskLevel.URGENT and consent.allow_urgent_safety_bypass:
         return True, "urgent_safety_bypass"
     if manual_requested:
         return True, "manual_review_requested"
-    if not consent.proactive_enabled:
-        return False, "proactive_disabled"
+
     current = now or datetime.now(timezone.utc)
     if consent.snoozed_until and current < consent.snoozed_until:
         return False, "snoozed"
     if any(finding.key.startswith(prefix) for prefix in consent.muted_rule_prefixes):
         return False, "muted_rule"
+    if not consent.proactive_enabled:
+        return False, "proactive_disabled"
     if in_quiet_hours(consent, patient_now(state, current)):
         return False, "quiet_hours"
     return True, "allowed"
