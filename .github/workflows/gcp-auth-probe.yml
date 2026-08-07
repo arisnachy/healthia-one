@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - kira/event-driven-results-twin-p1
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
