@@ -45,7 +45,19 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Full system verification
-        run: python scripts/full_system_check.py
+        shell: bash
+        run: |
+          mkdir -p dist/test-evidence
+          set -o pipefail
+          python scripts/full_system_check.py 2>&1 | tee dist/test-evidence/full-system.log
+      - name: Upload full-system evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-full-system-evidence
+          path: dist/test-evidence/full-system.log
+          if-no-files-found: error
+          retention-days: 30
       - name: Browser end-to-end verification
         run: python scripts/browser_smoke.py
       - name: Upload browser verification evidence
