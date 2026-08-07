@@ -140,6 +140,7 @@ class MockResponse {{
 }}
 window.fetch = async function(path, options={{}}) {{
   const url=String(path);
+  if(url.includes('/api/auth/config')) return new MockResponse({{enabled:false,mode:'local',providers:[]}});
   if(url.includes('/api/readiness')) return new MockResponse({{ready:true,llm_backend:'gemini_api',model:'gemini-3.6-flash',ai_ready:true,adk_ready:true}});
   if(url.includes('/api/bootstrap')) return new MockResponse(window.__mockSnapshot);
   if(url.includes('/api/cost-control')) return new MockResponse({{mode:'guarded',enabled:true,requests_used:2,requests_remaining:2,request_limit:4,max_output_tokens:900,llm_backend:'gemini_api',model:'gemini-3.6-flash',api_key_configured:true,ui_control_available:true}});
@@ -200,6 +201,7 @@ def run() -> dict:
             """() => { for (const name of ['runtime','providers','clinical-council','cost-control']) { const script=document.createElement('script'); script.setAttribute('data-healthia-'+name,'true'); document.head.append(script); } }"""
         )
         for script in (
+            "auth.js",
             "app.js",
             "patient-record.js",
             "family-documents.js",
