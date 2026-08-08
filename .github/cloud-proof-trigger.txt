@@ -1,9 +1,9 @@
 HealthIA ONE exact-candidate Cloud proof trigger
 
-enabled=true
-Purpose: run one controlled proof against the current head of kira/event-driven-results-twin-p1.
+enabled=false
+Purpose: explicit opt-in only for controlled exact-candidate Cloud proofs.
 Gate: permission readiness -> exact SHA freeze -> private Cloud Run deploy -> Vertex Gemini 3.5 -> Firestore/GCS strict verifier -> real browser proof -> bound artifacts.
 Requested by: KIRA / FORJA / JUDGE evidence gate
-Mode: one controlled proof run; no continuous deployment
-Attempt: unified-gate-3
-Change under proof: compact Gemini 3.5 structured clinical schema, full configured 1400-token output budget, one aggregate ADK tool call, minimal thinking, and final-response-only ADK event extraction.
+Mode: disabled after unified-gate-3; normal repair commits must not deploy Cloud.
+Last attempt: unified-gate-3
+Last result: Cloud Run revision healthia-one-demo-00008-k8t deployed; clinical path advanced; strict proof then failed at multimodal PDF interpretation with TimeoutError before browser.
