@@ -62,7 +62,16 @@ def configure_page(page: Page, report: dict) -> None:
 
 
 def screenshot(page: Page, name: str) -> None:
-    page.screenshot(path=str(OUTPUT / f"{name}.png"), full_page=False, animations="disabled", timeout=8_000)
+    """Capture helpful evidence without ever becoming a functional gate."""
+    try:
+        page.screenshot(
+            path=str(OUTPUT / f"{name}.png"),
+            full_page=False,
+            animations="disabled",
+            timeout=3_000,
+        )
+    except Exception as exc:
+        print(f"LAB_OMEGA_SCREENSHOT_WARNING:{name}:{type(exc).__name__}:{exc}", flush=True)
 
 
 def login_language_probe(browser: Browser, base_url: str, locale: str, expected_lang: str, hero_fragment: str, report: dict) -> None:
