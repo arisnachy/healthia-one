@@ -1,0 +1,108 @@
+name: Docker startup autopsy
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-docker-startup-autopsy
+  cancel-in-progress: true
+
+jobs:
+  autopsy:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Build Dockerfile
+        run: docker build -t healthia-autopsy .
+
+      - name: Inspect filesystem and Python import
+        shell: bash
+        run: |
+          set +e
+          mkdir -p deployment/docker-autopsy
+          {
+            echo '=== IMAGE CONFIG ==='
+            docker image inspect healthia-autopsy --format='{{json .Config}}'
+            echo
+            echo '=== FILESYSTEM ==='
+            docker run --rm --entrypoint sh healthia-autopsy -lc 'pwd; ls -la /app; ls -la /app/app; ls -la /app/web | head -n 20'
+            echo
+            echo '=== PYTHON IMPORT ==='
+            docker run --rm --entrypoint python healthia-autopsy -c "import sys,os; print('cwd=',os.getcwd()); print('sys.path=',sys.path); import app; print('app=',getattr(app,'__file__',None),getattr(app,'__path__',None)); import app.main; print('main=',app.main.__file__); print('routes=',[(getattr(r,'path',None),list(getattr(r,'methods',[]) or [])) for r in app.main.app.routes if getattr(r,'path',None) in ('/','/healthz','/api/readiness')])"
+            echo "import_rc=$?"
+          } 2>&1 | tee deployment/docker-autopsy/import.txt
+          exit 0
+
+      - name: Run Uvicorn explicitly in foreground diagnostic mode
+        shell: bash
+        run: |
+          set +e
+          timeout --signal=TERM --kill-after=3s 10s \
+            docker run --rm --name healthia-foreground \
+              --entrypoint sh healthia-autopsy \
+              -lc 'set -x; python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --log-level debug' \
+            >deployment/docker-autopsy/foreground.log 2>&1
+          rc=$?
+          echo "foreground_wrapper_rc=$rc" | tee -a deployment/docker-autopsy/foreground.log
+          cat deployment/docker-autopsy/foreground.log
+          exit 0
+
+      - name: Run real image CMD and capture terminal state
+        shell: bash
+        run: |
+          set +e
+          cid="$(docker run -d --name healthia-real-cmd -p 18080:8080 healthia-autopsy)"
+          echo "container_id=$cid" > deployment/docker-autopsy/state.txt
+          for i in {1..15}; do
+            running="$(docker inspect healthia-real-cmd --format='{{.State.Running}}' 2>/dev/null || echo missing)"
+            code="$(curl -sS -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:18080/healthz 2>/dev/null || true)"
+            echo "attempt=$i running=$running http=$code" | tee -a deployment/docker-autopsy/state.txt
+            if [ "$code" = 200 ]; then
+              echo 'HEALTH_OK' | tee -a deployment/docker-autopsy/state.txt
+              break
+            fi
+            if [ "$running" != true ]; then
+              break
+            fi
+            sleep 1
+          done
+          sleep 1
+          echo '=== STATE JSON ===' | tee -a deployment/docker-autopsy/state.txt
+          docker inspect healthia-real-cmd --format='{{json .State}}' 2>&1 | tee -a deployment/docker-autopsy/state.txt
+          echo '=== PROCESS CONFIG ===' | tee -a deployment/docker-autopsy/state.txt
+          docker inspect healthia-real-cmd --format='path={{.Path}} args={{json .Args}}' 2>&1 | tee -a deployment/docker-autopsy/state.txt
+          echo '=== LOGS ===' | tee deployment/docker-autopsy/cmd.log
+          docker logs --timestamps healthia-real-cmd 2>&1 | tee -a deployment/docker-autopsy/cmd.log
+          docker rm -f healthia-real-cmd >/dev/null 2>&1 || true
+          exit 0
+
+      - name: Direct shell command expansion diagnostic
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '=== SHELL EXPANSION ==='
+            docker run --rm --entrypoint sh healthia-autopsy -lc 'echo PORT="$PORT"; command -v uvicorn; command -v python; printf "cmd=<uvicorn app.main:app --host 0.0.0.0 --port %s>\n" "$PORT"'
+            echo '=== UVICORN VERSION ==='
+            docker run --rm --entrypoint sh healthia-autopsy -lc 'uvicorn --version; python -m uvicorn --version'
+          } 2>&1 | tee deployment/docker-autopsy/shell.txt
+          exit 0
+
+      - name: Upload startup autopsy
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-docker-startup-autopsy
+          path: deployment/docker-autopsy
+          if-no-files-found: warn
+          retention-days: 7
