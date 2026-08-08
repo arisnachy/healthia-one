@@ -9,7 +9,7 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
     const numeric = value => value === "" ? null : Number(value);
     let snapshot = null;
     let refreshPromise = null;
-    let pairingPoll = null;
+    let pairingWaitController = null;
 
     async function api(path, options = {}) {
       const response = await fetch(path, options);
@@ -219,8 +219,8 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
     }
 
     function closeDeviceDialog() {
-      if (pairingPoll) clearInterval(pairingPoll);
-      pairingPoll = null;
+      pairingWaitController?.abort();
+      pairingWaitController = null;
       $("#deviceConnectDialog")?.close();
     }
 
@@ -235,7 +235,9 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
       dialog?.showModal();
       const status = $("#pairingStatus");
       if (status) status.textContent = "Generando conexión segura…";
-      if (pairingPoll) clearInterval(pairingPoll);
+      pairingWaitController?.abort();
+      pairingWaitController = new AbortController();
+      const controller = pairingWaitController;
       try {
         const pairing = await api("/api/devices/pairing", {method:"POST"});
         $("#pairingBackendUrl").value = pairing.backend_url;
@@ -247,21 +249,19 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
             networkHint = " En el teléfono sustituye 127.0.0.1 por la IP local de tu PC; el campo puede editarse.";
           }
         } catch {}
-        if (status) status.textContent = `Código válido hasta ${new Date(pairing.expires_at).toLocaleTimeString("es-DO", {hour:"2-digit", minute:"2-digit"})}. Esperando al puente Android.${networkHint}`;
-        pairingPoll = setInterval(async () => {
-          try {
-            const current = await api(`/api/devices/pairing/${pairing.code}`);
-            if (current.claimed) {
-              clearInterval(pairingPoll); pairingPoll = null;
-              if (status) status.textContent = `${current.display_name || "Dispositivo Android"} vinculado. Pulsa Sincronizar ahora en el teléfono.`;
-              await refresh();
-            }
-          } catch {
-            clearInterval(pairingPoll); pairingPoll = null;
-            if (status) status.textContent = "El código expiró. Cierra y vuelve a abrir para generar otro.";
-          }
-        }, 2000);
+        if (status) status.textContent = `Código válido hasta ${new Date(pairing.expires_at).toLocaleTimeString("es-DO", {hour:"2-digit", minute:"2-digit"})}. Esperando al puente Android sin sondeo repetitivo.${networkHint}`;
+        const current = await api(`/api/devices/pairing/${pairing.code}/wait`, {signal: controller.signal});
+        if (controller.signal.aborted) return;
+        pairingWaitController = null;
+        if (current.claimed) {
+          if (status) status.textContent = `${current.display_name || "Dispositivo Android"} vinculado con identidad ${current.connection_id || "verificada"}. Pulsa Sincronizar ahora en el teléfono.`;
+          await refresh();
+        } else if (status) {
+          status.textContent = "El código expiró. Cierra y vuelve a abrir para generar otro.";
+        }
       } catch (error) {
+        if (error.name === "AbortError") return;
+        pairingWaitController = null;
         if (status) status.textContent = error.message;
       }
     }
@@ -274,7 +274,7 @@ if (!window.__HEALTHIA_PROFILE_DEVICES__) {
       const latest = summary.latest_by_metric || {};
       root.innerHTML = `
         <div class="device-hero"><div><strong>Android Health Connect</strong><p>Lee datos autorizados en segundo plano y conserva procedencia, hora y dispositivo.</p></div><div><button id="connectDevice">Conectar dispositivo</button><button id="demoDeviceSync">Probar sin dispositivo</button><button id="refreshDevices">Actualizar</button></div></div>
-        <div class="device-boundary"><strong>No es una transmisión clínica garantizada en tiempo real.</strong><p>La disponibilidad depende de la fuente que escriba cada dato en Health Connect.</p></div>
+        <div class="device-boundary"><strong>No es una transmisión clínica garantizada en tiempo real.</strong><p>La disponibilidad depende de la fuente que escriba cada dato en Health Connect. La identidad de sincronización queda ligada al token emitido durante el emparejamiento.</p></div>
         <div class="device-stats"><article><span>Conexiones</span><strong>${connections.length}</strong></article><article><span>Registros</span><strong>${summary.record_count || 0}</strong></article><article><span>Métricas compatibles</span><strong>${summary.supported_metrics?.length || 0}</strong></article></div>
         <div class="device-grid">${(summary.supported_metrics || []).map(metric => { const item = latest[metric]; return `<article class="device-metric"><header><h3>${esc(metric.replaceAll("_", " "))}</h3><span>${item ? "sincronizado" : "sin dato"}</span></header><strong>${item ? `${esc(item.value)} ${esc(item.unit)}` : "—"}</strong><small>${item ? `${esc(item.source_name)} · ${new Date(item.observed_at).toLocaleString("es-DO")}` : "Esperando una fuente autorizada"}</small></article>`; }).join("")}</div>
         <div class="connection-list">${connections.length ? connections.map(connection => `<article><strong>${esc(connection.display_name)}</strong><span>${esc(connection.status)} · background ${connection.background_read ? "on" : "off"}</span><small>${connection.last_sync_at ? new Date(connection.last_sync_at).toLocaleString("es-DO") : "Sin sincronización"}</small></article>`).join("") : '<article><strong>Sin dispositivo conectado</strong><span>Instala la app puente Android y concede permisos de Health Connect.</span></article>'}</div>`;

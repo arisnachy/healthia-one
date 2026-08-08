@@ -1,0 +1,59 @@
+name: Public submission video probe
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-public-video:
+    name: Verify public judge video URL and exact SHA
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    env:
+      PUBLIC_VIDEO_URL: https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm
+      EXPECTED_VIDEO_SHA256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
+    steps:
+      - name: Download public URL without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error "$PUBLIC_VIDEO_URL" -o /tmp/HealthIA-ONE-final-judge-demo.webm
+          test -s /tmp/HealthIA-ONE-final-judge-demo.webm
+
+      - name: Verify exact previously proven video bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(sha256sum /tmp/HealthIA-ONE-final-judge-demo.webm | awk '{print $1}')"
+          echo "public_video_sha256=$actual"
+          test "$actual" = "$EXPECTED_VIDEO_SHA256"
+          size="$(stat -c '%s' /tmp/HealthIA-ONE-final-judge-demo.webm)"
+          test "$size" -gt 20000000
+          mkdir -p dist/public-video-probe
+          python - <<'PY'
+          import json, os, pathlib
+          payload={
+            'status':'PASS',
+            'public_url':os.environ['PUBLIC_VIDEO_URL'],
+            'video_sha256':os.environ['EXPECTED_VIDEO_SHA256'],
+            'authentication_required':False,
+            'source_artifact_id':9024139098,
+            'source_run_id':31265639488,
+            'release_tag':'healthia-one-hackathon-judge-demo-2026',
+          }
+          pathlib.Path('dist/public-video-probe/probe.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          print(json.dumps(payload, indent=2))
+          PY
+
+      - name: Upload public URL probe evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-ONE-public-video-probe
+          path: dist/public-video-probe/probe.json
+          if-no-files-found: error
+          retention-days: 30

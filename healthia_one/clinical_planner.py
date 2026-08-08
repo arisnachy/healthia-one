@@ -81,13 +81,24 @@ SAFETY_TERMS = (
     "fiebre alta",
 )
 
+# These are unambiguously treatment/diagnostic directives, not ordinary
+# medication-history questions. Imperative toma/tome is handled separately so
+# interrogatives such as "¿Toma algún medicamento?" remain valid.
 FORBIDDEN_CLINICAL_DIRECTIVES = (
-    "toma ",
-    "tome ",
     "suspende ",
     "suspenda ",
+    "empieza a tomar ",
+    "comienza a tomar ",
+    "deja de tomar ",
+    "debe tomar ",
+    "debes tomar ",
+    "te recomiendo tomar ",
     "aumenta la dosis",
+    "aumente la dosis",
     "reduce la dosis",
+    "reduzca la dosis",
+    "disminuye la dosis",
+    "disminuya la dosis",
     "diagnostico confirmado",
     "definitivamente tienes",
 )
@@ -96,6 +107,27 @@ FORBIDDEN_CLINICAL_DIRECTIVES = (
 def _normalize(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value).lower())
     return "".join(char for char in text if not unicodedata.combining(char)).strip()
+
+
+def _contains_forbidden_clinical_directive(value: str) -> bool:
+    """Reject treatment commands without rejecting legitimate history questions."""
+    normalized = _normalize(value)
+    if any(directive in normalized for directive in FORBIDDEN_CLINICAL_DIRECTIVES):
+        return True
+
+    # "¿Toma algún medicamento?" is a legitimate interview question. By
+    # contrast, standalone imperative clauses like "Toma ciprofloxacino" or
+    # "No tome este medicamento" are treatment directives and remain blocked.
+    for fragment in re.split(r"[.!;\n]+", normalized):
+        clause = fragment.strip()
+        if not clause:
+            continue
+        if "?" in clause or clause.startswith("¿"):
+            continue
+        command = clause.lstrip("¡!:- ")
+        if re.match(r"^(?:por favor\s+)?(?:no\s+)?(?:toma|tome)\s+", command):
+            return True
+    return False
 
 
 def _answer_text(previous_answers: Iterable[dict[str, Any]] | None) -> str:
@@ -277,13 +309,10 @@ def normalize_dynamic_question_block(raw: dict[str, Any], stage: int) -> dict[st
             }
         )
 
-    combined = _normalize(
-        " ".join(
-            [question["prompt"] for question in questions]
-            + [option for question in questions for option in question["options"]]
-        )
-    )
-    if any(directive in combined for directive in FORBIDDEN_CLINICAL_DIRECTIVES):
+    patient_visible_fragments = [question["prompt"] for question in questions] + [
+        option for question in questions for option in question["options"]
+    ]
+    if any(_contains_forbidden_clinical_directive(fragment) for fragment in patient_visible_fragments):
         raise ValueError("El bloque dinámico contiene una indicación clínica no permitida")
 
     return {
@@ -295,6 +324,23 @@ def normalize_dynamic_question_block(raw: dict[str, Any], stage: int) -> dict[st
     }
 
 
+def _verified_adk_safety(model_payload: dict[str, Any]) -> bool:
+    execution = model_payload.get("adk_execution")
+    if not isinstance(execution, dict):
+        return False
+    roles = execution.get("executed_roles") or []
+    outputs = execution.get("tool_outputs") or []
+    if "safety" not in roles:
+        return False
+    return any(
+        isinstance(item, dict)
+        and item.get("role") == "safety"
+        and item.get("status") == "completed"
+        and isinstance(item.get("result"), dict)
+        for item in outputs
+    )
+
+
 def judge_dynamic_plan(
     block: dict[str, Any],
     *,
@@ -303,7 +349,7 @@ def judge_dynamic_plan(
     agent_plan: list[AgentStep],
     model_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Evidence-based, token-free gate applied after the single Gemini call."""
+    """Evidence-based, token-free gate applied after the Gemini/ADK plan."""
 
     score = 100
     blockers: list[str] = []
@@ -322,11 +368,14 @@ def judge_dynamic_plan(
             + [str(option) for item in questions for option in item.get("options", [])]
         )
     )
-    if not any(term in combined for term in SAFETY_TERMS):
+    adk_safety_verified = _verified_adk_safety(model_payload)
+    if adk_safety_verified:
+        strengths.append("Seguridad clínica verificada por herramienta ADK ejecutada")
+    elif not any(term in combined for term in SAFETY_TERMS):
         blockers.append("No demuestra una comprobación explícita de seguridad")
         score -= 25
     else:
-        strengths.append("Incluye comprobación de señales de alarma")
+        strengths.append("Incluye comprobación textual de señales de alarma")
 
     previous_ids = {
         str(item.get("question_id", "")).strip()
@@ -367,10 +416,11 @@ def judge_dynamic_plan(
         "verdict": "APPROVED_DYNAMIC_PLAN" if approved else "REJECTED_USE_SAFE_FALLBACK",
         "strengths": strengths[:4],
         "blockers": blockers[:4],
+        "adk_safety_verified": adk_safety_verified,
         "hackathon_alignment": {
             "innovation_operational_utility": "adaptive questions that pursue the next best information",
-            "architectural_discipline": "one model call plus demand-selected deterministic tools and a no-token judge gate",
-            "demo_readiness": "question source, selected areas, tool outcomes and judge verdict are auditable",
+            "architectural_discipline": "Gemini plus demand-driven ADK tool execution and a no-token judge gate",
+            "demo_readiness": "question source, executed tools and judge verdict are auditable",
         },
         "chief_complaint_present": bool(str(chief_complaint).strip()),
     }

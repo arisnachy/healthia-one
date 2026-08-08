@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-07",
+  "updated_at": "2026-08-08",
   "primary_track": "The Taskmaster",
-  "target_score": 90,
+  "target_score": 100,
   "official_rubric": {
     "innovation_operational_utility": 40,
     "architectural_discipline_tech_stack": 30,
@@ -11,58 +11,97 @@
   "hard_gates": [
     {
       "id": "gemini_35_or_newer",
-      "label": "Gemini 3.5 or newer is used through Gemini API or Vertex AI",
+      "label": "Gemini 3.5 or newer is used through Vertex AI",
       "status": "proven",
       "blocker_if_not_proven": true,
       "evidence": [
-        {"kind": "repo_path", "value": "healthia_one/gemini.py"},
-        {"kind": "repo_path", "value": "pyproject.toml"}
+        {"kind": "repo_path", "value": "healthia_one/config.py"},
+        {"kind": "repo_path", "value": "healthia_one/google_ai_transport.py"},
+        {"kind": "repo_path", "value": "healthia_one/result_ai.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"}
       ]
     },
     {
       "id": "google_agent_framework",
-      "label": "At least one Google agent framework is present",
+      "label": "Google ADK is the demand-driven clinical planning runtime",
       "status": "proven",
       "blocker_if_not_proven": true,
       "evidence": [
-        {"kind": "repo_path", "value": "healthia_agent/agent.py"},
-        {"kind": "repo_path", "value": "pyproject.toml"}
+        {"kind": "repo_path", "value": "healthia_one/adk_runtime.py"},
+        {"kind": "repo_path", "value": "healthia_one/adk_gemini.py"},
+        {"kind": "repo_path", "value": "healthia_one/service.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"}
+      ]
+    },
+    {
+      "id": "closed_loop_taskmaster",
+      "label": "A Taskmaster mission performs multi-step work, reaches a durable completed outcome, and preserves correlated evidence",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "scripts/live_taskmaster_proof.py"},
+        {"kind": "repo_path", "value": "healthia_one/result_ai.py"},
+        {"kind": "repo_path", "value": "healthia_one/twin.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
       ]
     },
     {
       "id": "google_cloud_infrastructure",
-      "label": "At least one Google Cloud infrastructure service is built and deployment is proven",
-      "status": "partial",
+      "label": "Cloud Run + Vertex AI + Firestore + private GCS are deployed and independently proven",
+      "status": "proven",
       "blocker_if_not_proven": true,
       "evidence": [
-        {"kind": "repo_path", "value": "Dockerfile"},
-        {"kind": "repo_path", "value": "healthia_one/store.py"},
-        {"kind": "repo_path", "value": "deployment/deploy-cloud-demo.ps1"}
+        {"kind": "repo_path", "value": "deployment/deploy-cloud-demo.ps1"},
+        {"kind": "repo_path", "value": "deployment/verify_cloud_demo.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"}
+      ]
+    },
+    {
+      "id": "cloud_runtime_proof",
+      "label": "The exact candidate passes strict Cloud API proof and an unmocked Chromium journey",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "scripts/cloud_browser_judge_proof.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"}
+      ]
+    },
+    {
+      "id": "cross_revision_continuity",
+      "label": "Patient state, mission, twin provenance, original evidence and isolation survive a genuinely new Cloud Run revision",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "deployment/verify_cloud_revision_continuity.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"}
       ]
     },
     {
       "id": "track_alignment",
-      "label": "The project clearly fits one official track",
-      "status": "proven",
-      "blocker_if_not_proven": true,
-      "evidence": [
-        {"kind": "repo_path", "value": "docs/HACKATHON_WIN_PLAN.md"}
-      ]
-    },
-    {
-      "id": "reproducible_spinup",
-      "label": "README contains reproducible local and cloud-oriented spin-up instructions",
+      "label": "The project clearly fits The Taskmaster workflow track",
       "status": "proven",
       "blocker_if_not_proven": true,
       "evidence": [
         {"kind": "repo_path", "value": "README.md"},
-        {"kind": "repo_path", "value": "START-HEALTHIA.cmd"}
+        {"kind": "repo_path", "value": "docs/ARCHITECTURE.md"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"}
+      ]
+    },
+    {
+      "id": "reproducible_spinup",
+      "label": "README contains reproducible local and Cloud-oriented spin-up instructions",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "README.md"},
+        {"kind": "repo_path", "value": "deployment/deploy-cloud-demo.ps1"}
       ]
     },
     {
       "id": "architecture_diagram",
-      "label": "A clear architecture diagram is ready for judges",
-      "status": "partial",
+      "label": "A clear architecture and multimodal Taskmaster evidence-flow diagram is ready for judges",
+      "status": "proven",
       "blocker_if_not_proven": true,
       "evidence": [
         {"kind": "repo_path", "value": "docs/ARCHITECTURE.md"}
@@ -70,17 +109,24 @@
     },
     {
       "id": "four_minute_demo",
-      "label": "A tight unedited approximately four-minute demo proves the product and cloud runtime",
-      "status": "missing",
+      "label": "A continuous approximately four-minute demo visibly proves the problem, value, product flow and Cloud runtime",
+      "status": "proven",
       "blocker_if_not_proven": true,
-      "evidence": []
+      "evidence": [
+        {"kind": "repo_path", "value": "scripts/record_submission_demo.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
+      ]
     },
     {
-      "id": "cloud_runtime_proof",
-      "label": "Cloud Run, logs, persistent state and a real Gemini call are visibly proven",
-      "status": "missing",
+      "id": "final_submission_video_url",
+      "label": "The proven demo is published at a stable anonymous judge-facing URL and is ready for the final Devpost package",
+      "status": "proven",
       "blocker_if_not_proven": true,
-      "evidence": []
+      "evidence": [
+        {"kind": "repo_path", "value": "hackathon/evidence/public_judge_video_proof.json"},
+        {"kind": "repo_path", "value": ".github/workflows/public-video-probe.yml"},
+        {"kind": "repo_path", "value": ".github/workflows/release-submission-video.yml"}
+      ]
     }
   ],
   "criteria": [
@@ -88,78 +134,63 @@
       "id": "innovation_operational_utility",
       "label": "Innovation & Operational Utility",
       "max_points": 40,
-      "awarded_points": 30,
-      "reason": "HealthIA now turns a patient complaint into two adaptive five-question blocks, selects and executes only the relevant specialist tools, applies a zero-token adversarial quality gate, preserves deterministic safety and advances the interview mission to professional review with closure evidence. The remaining gap is an autonomous real-world action that reaches a verified outcome beyond the interview and review boundary.",
+      "awarded_points": 40,
+      "reason": "HealthIA demonstrates the complete Taskmaster proposition on the real deployed runtime: adaptive Gemini 3.5 + Google ADK interviewing, evidence-first multimodal ingestion, durable result/twin state, deterministic retrieval, and a completed result_explanation mission with correlated result/document evidence. The unmocked browser and one-take demo proofs show the workflow end to end rather than only through API tests, while cross-revision verification shows the outcome remains useful after process replacement.",
       "evidence": [
-        {"kind": "repo_path", "value": "healthia_one/gemini.py"},
-        {"kind": "repo_path", "value": "healthia_one/clinical_planner.py"},
-        {"kind": "repo_path", "value": "healthia_one/clinical_tools.py"},
-        {"kind": "repo_path", "value": "healthia_one/clinical_intake.py"},
-        {"kind": "repo_path", "value": "healthia_one/proactive.py"},
-        {"kind": "repo_path", "value": "android-health-bridge"}
+        {"kind": "repo_path", "value": "healthia_one/adk_runtime.py"},
+        {"kind": "repo_path", "value": "healthia_one/result_ai.py"},
+        {"kind": "repo_path", "value": "healthia_one/result_search.py"},
+        {"kind": "repo_path", "value": "healthia_one/twin.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
       ]
     },
     {
       "id": "architectural_discipline_tech_stack",
       "label": "Architectural Discipline & Tech Stack",
       "max_points": 30,
-      "awarded_points": 22,
-      "reason": "The system has typed longitudinal state, deterministic safety, consent and audit controls, guarded single-call Gemini planning, demand-selected deterministic tools, request ceilings, Firestore and Cloud Run boundaries, event-driven UI refresh and reproducible full-system tests. Google ADK is still not the primary visible runtime, durable cloud execution and authenticated multi-patient isolation remain unproven, and the cloud trace is not assembled.",
+      "awarded_points": 30,
+      "reason": "The candidate has evidence for every core architecture boundary: patient-scoped Firestore state, private GCS original evidence, Vertex AI through ADC, real ADK tool execution, separate build/runtime identities, fail-closed multimodal behavior, explicit billable Cloud opt-in gates, and cross-revision persistence with unchanged evidence. ADK uses the core package while Firestore/GCS clients are declared explicitly instead of installing an unused broad GCP extras bundle. Public submission media is distributed through a GitHub Release and independently SHA-verified, so the private clinical-evidence bucket remains private.",
       "evidence": [
-        {"kind": "repo_path", "value": "healthia_agent/agent.py"},
-        {"kind": "repo_path", "value": "healthia_one/models.py"},
-        {"kind": "repo_path", "value": "healthia_one/cost_guard.py"},
-        {"kind": "repo_path", "value": "healthia_one/service.py"},
+        {"kind": "repo_path", "value": "pyproject.toml"},
+        {"kind": "repo_path", "value": "tests/test_dependency_boundaries.py"},
+        {"kind": "repo_path", "value": "healthia_one/auth.py"},
+        {"kind": "repo_path", "value": "healthia_one/adk_runtime.py"},
         {"kind": "repo_path", "value": "healthia_one/store.py"},
-        {"kind": "repo_path", "value": "docs/ARCHITECTURE.md"}
+        {"kind": "repo_path", "value": "healthia_one/evidence_store.py"},
+        {"kind": "repo_path", "value": "deployment/verify_cloud_demo.py"},
+        {"kind": "repo_path", "value": "deployment/verify_cloud_revision_continuity.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/public_judge_video_proof.json"}
       ]
     },
     {
       "id": "demo_production_readiness",
       "label": "Demo & Production Readiness",
       "max_points": 30,
-      "awarded_points": 14,
-      "reason": "A clean hosted runner now installs Chromium, passes the Python suite, verifies fourteen complete API and state workflows, renders the real frontend, proves one identity, collapsed navigation, visible adaptive questioning, readable final synthesis and mission refresh, uploads screenshots, and reruns tests from the extracted release ZIP. This is strong local and synthetic evidence, but there is still no final video, public cloud proof, live correlated Gemini execution, physical-device capture or submission package.",
+      "awarded_points": 30,
+      "reason": "The repository contains a reproducible release gate, strict exact-candidate Cloud proof, full unmocked Chromium verification, cross-revision continuity, a passing continuous judge-demo artifact, and a stable anonymous GitHub Release URL for the exact same video bytes. Independent GitHub Actions probes downloaded the public URL without credentials and matched the original video SHA-256, while the demo visibly covers the problem, value proposition, live Gemini/ADK interaction, multimodal evidence, mission completion, relogin continuity and the Cloud Run .run.app runtime.",
       "evidence": [
         {"kind": "repo_path", "value": ".github/workflows/ci.yml"},
+        {"kind": "repo_path", "value": ".github/workflows/public-video-probe.yml"},
+        {"kind": "repo_path", "value": ".github/workflows/release-submission-video.yml"},
         {"kind": "repo_path", "value": "scripts/full_system_check.py"},
-        {"kind": "repo_path", "value": "scripts/browser_smoke.py"},
-        {"kind": "repo_path", "value": "scripts/build_release_zip.py"},
-        {"kind": "repo_path", "value": "scripts/verify_release_zip.py"},
-        {"kind": "repo_path", "value": "docs/VERIFICATION_MATRIX.md"}
+        {"kind": "repo_path", "value": "scripts/cloud_browser_judge_proof.py"},
+        {"kind": "repo_path", "value": "scripts/record_submission_demo.py"},
+        {"kind": "repo_path", "value": "docs/DEMO_SCRIPT.md"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/public_judge_video_proof.json"}
       ]
     }
   ],
-  "critical_blockers": [
-    {
-      "id": "adk_not_primary_runtime",
-      "statement": "The Google ADK coordinator must select and execute the same tools used by the visible chat and proactive workflow.",
-      "evidence_needed": "One correlated trace showing trigger, ADK decision, tool calls, public results and closure."
-    },
-    {
-      "id": "no_durable_cloud_trigger",
-      "statement": "The current process-local loop is not durable asynchronous Google Cloud execution.",
-      "evidence_needed": "Cloud Scheduler, Pub/Sub or Cloud Tasks invoking a Cloud Run worker, with logs and retry behavior."
-    },
-    {
-      "id": "no_autonomous_outcome_closure",
-      "statement": "The interview reaches professional review, but the submission still needs one autonomous action that reaches a verified real or synthetic outcome and closes its mission.",
-      "evidence_needed": "A correlated end-to-end mission with evidence IDs, tool action, external or patient feedback, persisted result and completed closure state."
-    },
-    {
-      "id": "no_cloud_judge_proof",
-      "statement": "The submission lacks visible proof of Cloud Run, persistent state and a real Gemini execution.",
-      "evidence_needed": "Hosted URL or deployment evidence, Cloud Run revision, correlated logs, Firestore round trip and model call."
-    },
-    {
-      "id": "no_final_demo_package",
-      "statement": "The final architecture diagram, unedited demo, write-up and submission evidence are not assembled.",
-      "evidence_needed": "Final judge package matching the official submission checklist."
-    }
-  ],
+  "critical_blockers": [],
   "next_actions": [
-    "Make Google ADK the visible mission runtime and emit structured public tool results.",
-    "Add durable Cloud Scheduler or Pub/Sub execution on Cloud Run with Firestore and Secret Manager.",
-    "Record one closed-loop synthetic mission and expose its judge-visible execution timeline."
+    "Run final CI/JUDGE on the exact submission head with all billable/recording/publication triggers disabled.",
+    "Merge PR #29 only after that exact-head verification is green.",
+    "Use the preserved public judge-video URL and repository evidence package in the final Devpost submission."
   ]
 }

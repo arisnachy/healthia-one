@@ -7,11 +7,24 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_google_sdk_matches_interactions_api() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     gemini = (ROOT / "healthia_one/gemini.py").read_text(encoding="utf-8")
+    transport_path = ROOT / "healthia_one/google_ai_transport.py"
     assert '"google-genai>=2.13,<3"' in pyproject
-    assert '"google-adk[gcp]>=2.5,<3"' in pyproject
+    assert '"google-adk>=2.5,<3"' in pyproject
+    assert "google-adk[gcp]" not in pyproject
+    assert '"google-cloud-firestore>=2.21,<3"' in pyproject
+    assert '"google-cloud-storage>=3.3,<4"' in pyproject
     assert gemini.count(".interactions.create(") >= 2
     assert "def _interaction_text" in gemini
-    assert 'genai.Client(api_key=api_key)' in gemini
+    if transport_path.exists():
+        transport = transport_path.read_text(encoding="utf-8")
+        assert "build_google_ai_client" in gemini
+        assert "genai.Client(api_key=api_key)" in transport
+        assert "genai.Client(vertexai=True, project=project, location=location)" in transport
+        assert "VertexInteractionsAdapter" in transport
+        assert "response_json_schema" in transport
+        assert "thinking_config" in transport
+    else:
+        assert 'genai.Client(api_key=api_key)' in gemini
     assert "cost_guard.authorize" in gemini
     assert '"max_output_tokens"' in gemini
     assert '"thinking_level": "minimal"' in gemini
@@ -36,10 +49,11 @@ def test_secure_launcher_defaults_to_zero_spend_and_requires_explicit_ai() -> No
     assert "Get-NetIPAddress" in launcher
     assert "Telefono en la misma Wi-Fi" in launcher
     assert "--host 0.0.0.0" in launcher
-    assert "client.interactions.create" in verifier
     assert "HEALTHIA_GOOGLE_AI_READY" in verifier
     assert "HEALTHIA_GOOGLE_AI_ERROR" in verifier
-    assert "store=False" in verifier
+    assert "genai.Client(vertexai=True" in verifier
+    assert "client.interactions.create" in verifier
+    assert '"gemini-3.5-flash"' in verifier
 
 
 def test_android_bridge_uses_supported_compose_toolchain() -> None:
@@ -65,6 +79,7 @@ def test_ci_validates_semantic_runtime_modules() -> None:
 
 
 def test_runtime_affordances_are_real_not_decorative() -> None:
+    index = (ROOT / "web/index.html").read_text(encoding="utf-8")
     runtime = (ROOT / "web/runtime-integrations.js").read_text(encoding="utf-8")
     providers = (ROOT / "web/provider-integrations.js").read_text(encoding="utf-8")
     cost_control = (ROOT / "web/cost-control.js").read_text(encoding="utf-8")
@@ -73,26 +88,44 @@ def test_runtime_affordances_are_real_not_decorative() -> None:
     assert "SpeechRecognition" in runtime
     assert 'json("/api/ai/test", {method: "POST"})' in runtime
     assert 'button.setAttribute("aria-pressed"' in runtime
-    assert "/assets/runtime-integrations.js" in icons
-    assert "/assets/provider-integrations.js" in icons
-    assert "/assets/cost-control.js" in icons
+    for asset in ("runtime-integrations.js", "provider-integrations.js", "cost-control.js"):
+        assert index.count(f'/assets/{asset}') == 1
+        assert f'/assets/{asset}' not in icons
+    assert "loadScript(" not in icons
+    assert "document.createElement('script')" not in icons
     assert 'fetch("/api/devices")' in providers
     assert "provider_catalog" in providers
     assert "/api/cost-control" in cost_control
     assert "IA activa" in cost_control
+    assert "Vertex AI activo" in cost_control
     assert "Local · 0 llamadas" in cost_control
     assert ".provider-grid" in interactions
     assert 'content: "Abrir menú"' in interactions
     assert "background: transparent" in interactions
 
 
-def test_cloud_demo_is_scale_to_zero_and_easy_to_destroy() -> None:
+def test_cloud_demo_is_vertex_native_scale_to_zero_and_easy_to_destroy() -> None:
     deploy = (ROOT / "deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
     remove = (ROOT / "deployment/remove-cloud-demo.ps1").read_text(encoding="utf-8")
     assert '"--min", "0"' in deploy
     assert '"--max", "1"' in deploy
     assert "HEALTHIA_COST_MODE=cloud_demo" in deploy
     assert "HEALTHIA_PROACTIVE_ENABLED=false" in deploy
+    assert "HEALTHIA_MODEL=gemini-3.5-flash" in deploy
+    assert "GOOGLE_GENAI_USE_VERTEXAI=true" in deploy
+    assert "GOOGLE_CLOUD_LOCATION=$VertexLocation" in deploy
+    assert '"aiplatform.googleapis.com"' in deploy
+    assert '"roles/aiplatform.user"' in deploy
+    assert '"roles/run.builder"' in deploy
+    assert "healthia-one-build" in deploy
+    assert '"--build-service-account"' in deploy
+    assert "healthia-one-demo" in deploy
+    assert "GEMINI_API_KEY=" not in deploy
+    assert "healthia-gemini-api-key" not in deploy
+    assert "HEALTHIA_DEVICE_TOKEN_SECRET=" in deploy
+    assert "HEALTHIA_SESSION_SECRET=" in deploy
     assert "--no-allow-unauthenticated" in deploy
     assert "gcloud run services delete" in remove
+    assert "DeleteBuildServiceAccount" in remove
+    assert "healthia-gemini-api-key" not in remove
     assert "gcloud projects delete" in remove

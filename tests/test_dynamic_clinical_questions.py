@@ -84,13 +84,13 @@ def guarded_settings(**overrides) -> Settings:
         "cost_mode": "guarded",
         "ai_request_limit": 4,
         "cost_guard_start_enabled": True,
-        "ai_max_output_tokens": 900,
+        "ai_max_output_tokens": 1400,
     }
     values.update(overrides)
     return Settings(**values)
 
 
-def test_gemini_replaces_static_intake_with_case_specific_questions(monkeypatch) -> None:
+def test_gemini_fills_empty_ai_scaffold_with_case_specific_questions(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     client = FakeClient(DYNAMIC_URINARY_PLAN)
     responder = GeminiResponder(guarded_settings(), client_factory=lambda: client)
@@ -99,11 +99,11 @@ def test_gemini_replaces_static_intake_with_case_specific_questions(monkeypatch)
     draft = respond(state, complaint)
 
     original_prompts = [item["prompt"] for item in draft.message.metadata["clinical_interview"]["question_block"]["questions"]]
+    assert original_prompts == []
     result = asyncio.run(responder.enhance(state, complaint, draft))
     interview = result.message.metadata["clinical_interview"]
     prompts = [item["prompt"] for item in interview["question_block"]["questions"]]
 
-    assert prompts != original_prompts
     assert prompts == [item["prompt"] for item in DYNAMIC_URINARY_PLAN["questions"]]
     assert interview["question_source"] == "gemini_dynamic"
     assert result.message.metadata["llm_status"] == "dynamic_clinical_questions"
@@ -118,7 +118,7 @@ def test_gemini_replaces_static_intake_with_case_specific_questions(monkeypatch)
     assert result.message.metadata["cost_guard"]["requests_used"] == 1
 
 
-def test_agents_remain_on_demand_without_spending_when_ai_is_off(monkeypatch) -> None:
+def test_ai_off_never_invents_or_reveals_prefabricated_questions(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     client = FakeClient(DYNAMIC_URINARY_PLAN)
     responder = GeminiResponder(
@@ -129,16 +129,18 @@ def test_agents_remain_on_demand_without_spending_when_ai_is_off(monkeypatch) ->
     complaint = "Desde ayer me arde al orinar y tengo frecuencia urinaria"
     draft = respond(state, complaint)
     result = asyncio.run(responder.enhance(state, complaint, draft))
+    interview = result.message.metadata["clinical_interview"]
 
     assert client.interactions.calls == []
-    assert result.message.metadata["question_source"] == "safe_fallback"
+    assert interview["question_block"]["questions"] == []
+    assert interview["question_block"]["generation_required"] is True
     assert result.message.metadata["llm_status"] == "cost_guard_blocked"
     assert result.message.metadata["agent_execution"] == "on_demand"
     assert 2 <= len(result.message.agent_plan) <= 4
     assert result.message.metadata["judge_review"]["verdict"] == "SAFE_FALLBACK_NOT_HACKATHON_EVIDENCE"
 
 
-def test_judge_rejects_a_bad_dynamic_block_and_keeps_safe_fallback(monkeypatch) -> None:
+def test_judge_rejects_bad_dynamic_block_without_substituting_static_form(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     bad = dict(DYNAMIC_URINARY_PLAN)
     bad["questions"] = [dict(DYNAMIC_URINARY_PLAN["questions"][0]) for _ in range(5)]
@@ -148,12 +150,13 @@ def test_judge_rejects_a_bad_dynamic_block_and_keeps_safe_fallback(monkeypatch) 
     complaint = "Desde ayer me arde al orinar y tengo frecuencia urinaria"
     draft = respond(state, complaint)
     original = draft.message.metadata["clinical_interview"]["question_block"]
+    assert original["questions"] == []
     result = asyncio.run(responder.enhance(state, complaint, draft))
 
     assert len(client.interactions.calls) == 1
-    assert result.message.metadata["question_source"] == "safe_fallback"
     assert result.message.metadata["llm_status"] == "clinical_safe_fallback"
-    assert result.message.metadata["clinical_interview"]["question_block"] == original
+    assert result.message.metadata["clinical_interview"]["question_block"]["questions"] == []
+    assert result.message.metadata["clinical_interview"]["question_block"]["generation_required"] is True
     assert result.message.metadata["judge_review"]["verdict"] == "SAFE_FALLBACK_NOT_HACKATHON_EVIDENCE"
     assert result.message.metadata["cost_guard"]["requests_used"] == 1
 

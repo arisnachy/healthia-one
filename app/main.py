@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from healthia_one.auth import current_patient_id, patient_scope
+from healthia_one.auth_web import install_patient_auth
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
+from healthia_one.evidence_store import evidence_backend, load_evidence, local_evidence_path, persist_evidence
 from healthia_one.family import family_summary
 from healthia_one.profile import normalize_medication_text, profile_summary
 from healthia_one.models import (
@@ -35,9 +38,11 @@ from healthia_one.models import (
     VitalRecord,
     WeightRecord,
 )
+from healthia_one.result_ai import analyze_uploaded_result, apply_multimodal_analysis, multimodal_supported
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.pairing import DevicePairingManager, PairingError
 from healthia_one.service import HealthIAService
+from healthia_one.twin import clinical_twin_summary
 
 service = HealthIAService(settings)
 pairing_manager = DevicePairingManager()
@@ -49,23 +54,16 @@ UPLOAD_ROOT = ROOT / "uploads" / "patient_demo"
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await service.initialize()
-    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-    stop_event = asyncio.Event()
-    background_task = None
-    if settings.proactive_enabled:
-        background_task = asyncio.create_task(service.background_loop(stop_event))
-    try:
-        yield
-    finally:
-        stop_event.set()
-        if background_task is not None:
-            background_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await background_task
+    if evidence_backend() == "local":
+        UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    # No permanent polling loop. Agents run because the patient talks, evidence
+    # arrives, a device syncs, or an explicit review is requested.
+    yield
 
 
-app = FastAPI(title="HealthIA ONE", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="HealthIA ONE", version="0.8.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
+account_manager = install_patient_auth(app, service=service, settings=settings, web_root=WEB_ROOT)
 
 
 @app.get("/")
@@ -88,16 +86,29 @@ async def readiness() -> dict:
         "ai_ready": settings.adk_ready,
         "ai_status": service.gemini.last_status,
         "store_backend": settings.store_backend,
-        "proactive_interval_seconds": settings.proactive_interval_seconds,
-        "proactive_enabled": settings.proactive_enabled,
+        "evidence_backend": evidence_backend(),
+        "agent_execution": "demand_driven",
+        "proactive_enabled": False,
+        "auth_required": settings.auth_required,
+        "patient_session_persistence": account_manager.credential_persistence,
+        "patient_state_scope": "authenticated_patient" if settings.auth_required else "demo_patient",
         "cost_control": service.gemini.cost_status(),
         "capabilities": [
             "chat",
-            "proactive_followup",
+            "gemini_adaptive_clinical_interview",
+            "interview_memory",
+            "ai_followup_or_orientation_decision",
+            "demand_driven_followup",
+            "patient_login_logout",
+            "patient_scoped_state",
+            "patient_scoped_events",
             "vitals",
             "weight",
             "activity",
             "results",
+            "multimodal_result_interpretation",
+            "clinical_twin",
+            "durable_original_evidence",
             "family_genogram",
             "document_archive",
             "unified_timeline",
@@ -119,7 +130,7 @@ async def readiness() -> dict:
             "cloud_cost_guard",
         ],
         "truth_boundary": (
-            "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
+            "Patient continuity system. It does not confirm diagnoses, prescribe, change medication, "
             "or replace emergency and professional care."
         ),
     }
@@ -154,11 +165,17 @@ async def bootstrap() -> dict:
     payload["profile_summary"] = profile_summary(state)
     payload["device_summary"] = device_summary(state)
     payload["device_medication_cross_checks"] = medication_device_cross_checks(state)
+    payload["clinical_twin"] = clinical_twin_summary(state)
     payload["audit_summary"] = {
         "count": len(state.audit_events),
         "latest": [item.model_dump(mode="json") for item in state.audit_events[-20:]],
     }
     return payload
+
+
+@app.get("/api/twin")
+async def twin() -> dict:
+    return clinical_twin_summary(await service.snapshot())
 
 
 @app.post("/api/ai/test")
@@ -200,7 +217,8 @@ async def devices() -> dict:
 
 @app.post("/api/devices/pairing")
 async def create_device_pairing(request: Request) -> dict:
-    payload = pairing_manager.create()
+    patient_id = (await service.snapshot()).profile.id
+    payload = pairing_manager.create(patient_id=patient_id)
     payload["backend_url"] = str(request.base_url).rstrip("/")
     return payload
 
@@ -208,7 +226,22 @@ async def create_device_pairing(request: Request) -> dict:
 @app.get("/api/devices/pairing/{code}")
 async def device_pairing_status(code: str) -> dict:
     try:
-        return pairing_manager.status(code)
+        payload = pairing_manager.status(code)
+    except PairingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if payload.get("patient_id") != current_patient_id():
+        raise HTTPException(status_code=404, detail="Conexión no encontrada.")
+    return payload
+
+
+@app.get("/api/devices/pairing/{code}/wait")
+async def wait_device_pairing(code: str) -> dict:
+    """Hold one request until the pairing is claimed or expires; no browser polling."""
+    try:
+        initial = pairing_manager.status(code)
+        if initial.get("patient_id") != current_patient_id():
+            raise HTTPException(status_code=404, detail="Conexión no encontrada.")
+        return await asyncio.to_thread(pairing_manager.wait_for_claim, code, 600)
     except PairingError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -233,9 +266,20 @@ async def health_connect_sync(
     batch: HealthConnectSyncBatch,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    if not pairing_manager.validate(bearer_token(authorization), batch.device_id):
+    principal = pairing_manager.identify(bearer_token(authorization), batch.device_id)
+    if principal is None:
         raise HTTPException(status_code=401, detail="Dispositivo no vinculado o token inválido.")
-    return await service.ingest_health_connect(batch)
+    for record in batch.records:
+        record.patient_id = principal.patient_id
+        record.metadata["paired_connection_id"] = principal.connection_id
+        record.metadata["paired_device_id"] = principal.device_id
+        record.metadata["paired_patient_id"] = principal.patient_id
+    with patient_scope(principal.patient_id):
+        result = await service.ingest_health_connect(batch)
+    result["connection_id"] = principal.connection_id
+    result["patient_id"] = principal.patient_id
+    result["device_identity_verified"] = True
+    return result
 
 
 @app.post("/api/chat")
@@ -284,6 +328,7 @@ async def upload_document(
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+    state = await service.snapshot()
     try:
         document = build_document(
             filename=file.filename or "documento",
@@ -291,24 +336,31 @@ async def upload_document(
             size_bytes=len(content),
             category=category,
             title=title,
+            patient_id=state.profile.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    destination = ROOT / document.storage_path
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(destination.write_bytes, content)
+    document = await persist_evidence(document, content, ROOT)
     return (await service.add_document(document)).model_dump(mode="json")
 
 
 @app.get("/api/documents/{document_id}/download")
-async def download_document(document_id: str) -> FileResponse:
+async def download_document(document_id: str):
     document = await service.get_document(document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
-    path = (ROOT / document.storage_path).resolve()
-    if ROOT.resolve() not in path.parents or not path.exists():
-        raise HTTPException(status_code=404, detail="Archivo no disponible")
-    return FileResponse(path, media_type=document.mime_type, filename=document.filename)
+    path = local_evidence_path(document, ROOT)
+    if path is not None:
+        return FileResponse(path, media_type=document.mime_type, filename=document.filename)
+    try:
+        content = await load_evidence(document, ROOT)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail="Archivo no disponible") from exc
+    return Response(
+        content=content,
+        media_type=document.mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{document.filename}"'},
+    )
 
 
 @app.get("/api/timeline")
@@ -400,16 +452,50 @@ async def patient_export() -> JSONResponse:
 
 @app.post("/api/results/upload")
 async def upload_result(file: UploadFile = File(...)) -> dict:
+    filename = file.filename or "result"
+    content_type = file.content_type or "application/octet-stream"
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+    state = await service.snapshot()
     try:
-        result = parse_result_file(file.filename or "result", content)
+        result = parse_result_file(filename, content)
+        result.patient_id = state.profile.id
+        document = build_document(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(content),
+            title=f"Evidencia · {Path(filename).stem}",
+            patient_id=state.profile.id,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"No se pudo interpretar el archivo: {exc}") from exc
-    result.explanation = explain_result(result)
-    result.explained = result.status == "parsed"
-    return (await service._append_and_publish("results", result, "results", action="upload_result")).model_dump(mode="json")
+
+    document = await persist_evidence(document, content, ROOT)
+
+    if result.status == "pending_multimodal" and multimodal_supported(filename, content_type):
+        analysis = await analyze_uploaded_result(
+            service.gemini,
+            state,
+            filename,
+            content_type,
+            content,
+        )
+        result = apply_multimodal_analysis(result, analysis)
+    else:
+        result.explanation = explain_result(result)
+        result.explained = result.status == "parsed"
+
+    document.related_result_id = result.id
+    document.status = "parsed" if result.status == "parsed" else "pending_review"
+    document.summary = result.explanation[:2000]
+    stored = await service.add_result_evidence(result, document)
+    payload = stored.model_dump(mode="json")
+    payload["document_id"] = document.id
+    payload["original_available"] = True
+    payload["evidence_backend"] = evidence_backend()
+    payload["twin_updated"] = True
+    return payload
 
 
 @app.post("/api/demo/reset")
@@ -430,6 +516,7 @@ async def demo_device_sync() -> dict:
         background_read=True,
         records=[
             DeviceObservation(
+                patient_id=current_patient_id(),
                 external_id=f"demo-steps-{now.date().isoformat()}",
                 metric=DeviceMetric.STEPS,
                 observed_at=now,
@@ -440,6 +527,7 @@ async def demo_device_sync() -> dict:
                 device_model="Synthetic Wear",
             ),
             DeviceObservation(
+                patient_id=current_patient_id(),
                 external_id=f"demo-heart-{int(now.timestamp())}",
                 metric=DeviceMetric.HEART_RATE,
                 observed_at=now,
@@ -448,6 +536,7 @@ async def demo_device_sync() -> dict:
                 source_name="Android Health Connect",
             ),
             DeviceObservation(
+                patient_id=current_patient_id(),
                 external_id=f"demo-weight-{now.date().isoformat()}",
                 metric=DeviceMetric.WEIGHT,
                 observed_at=now,
@@ -468,9 +557,11 @@ async def demo_tick() -> dict:
 
 @app.get("/api/events/stream")
 async def events() -> StreamingResponse:
+    patient_id = current_patient_id()
+
     async def generate():
         yield "event: ready\ndata: {}\n\n"
-        async for payload in service.broker.subscribe():
+        async for payload in service.broker.subscribe(patient_id=patient_id):
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})

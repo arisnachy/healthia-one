@@ -5,10 +5,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
+from healthia_one.adk_gemini import AdkGeminiResponder
+from healthia_one.auth import PatientPrincipal, current_patient_id, principal_scope
 from healthia_one.config import Settings
 from healthia_one.continuity import evaluate_continuity
 from healthia_one.devices import ingest_health_connect_batch
-from healthia_one.gemini import GeminiResponder
 from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
 from healthia_one.models import (
     ActivityRecord,
@@ -19,6 +20,7 @@ from healthia_one.models import (
     FamilyMember,
     HealthConnectSyncBatch,
     HealthGoal,
+    HealthResult,
     MedicationCheckIn,
     MedicationPlan,
     PatientConsent,
@@ -35,23 +37,27 @@ from healthia_one.store import FirestoreStore, JsonStore, MemoryStore, StateStor
 
 class EventBroker:
     def __init__(self) -> None:
-        self._subscribers: set[asyncio.Queue[dict]] = set()
+        self._subscribers: dict[asyncio.Queue[dict], str] = {}
 
-    async def publish(self, payload: dict) -> None:
-        for queue in list(self._subscribers):
+    async def publish(self, payload: dict, patient_id: str | None = None) -> None:
+        target_patient = patient_id or current_patient_id()
+        for queue, subscriber_patient in list(self._subscribers.items()):
+            if subscriber_patient != target_patient:
+                continue
             try:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
-                self._subscribers.discard(queue)
+                self._subscribers.pop(queue, None)
 
-    async def subscribe(self) -> AsyncIterator[dict]:
+    async def subscribe(self, patient_id: str | None = None) -> AsyncIterator[dict]:
+        target_patient = patient_id or current_patient_id()
         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=100)
-        self._subscribers.add(queue)
+        self._subscribers[queue] = target_patient
         try:
             while True:
                 yield await queue.get()
         finally:
-            self._subscribers.discard(queue)
+            self._subscribers.pop(queue, None)
 
 
 def seed_state() -> PatientState:
@@ -161,6 +167,40 @@ def seed_state() -> PatientState:
     return state
 
 
+def clean_patient_state(principal: PatientPrincipal) -> PatientState:
+    profile = PatientProfile(
+        id=principal.patient_id,
+        display_name=principal.display_name,
+        email=principal.email,
+        birth_date=datetime(1990, 1, 1, tzinfo=timezone.utc).date(),
+        sex_at_birth="unknown",
+        height_cm=None,
+        medications=[],
+        confirmed_conditions=[],
+    )
+    state = PatientState(profile=profile)
+    state.messages = [
+        ChatMessage(
+            patient_id=principal.patient_id,
+            role="assistant",
+            author="HealthIA",
+            content=(
+                f"Hola, {principal.display_name.split()[0]}. Esta cuenta comienza sin datos clínicos precargados. "
+                "Puedes completar tu perfil o simplemente contarme qué quieres revisar."
+            ),
+        )
+    ]
+    audit(
+        state,
+        actor="system",
+        action="initialize_patient_account",
+        resource_type="patient_state",
+        resource_id=principal.patient_id,
+        details={"synthetic": False, "account_id": principal.account_id},
+    )
+    return state
+
+
 SORT_KEYS: dict[str, Callable] = {
     "vitals": lambda item: item.measured_at,
     "weights": lambda item: item.measured_at,
@@ -179,7 +219,7 @@ class HealthIAService:
         self.settings = settings
         self.store = self._build_store()
         self.broker = EventBroker()
-        self.gemini = GeminiResponder(settings)
+        self.gemini = AdkGeminiResponder(settings)
         self._mutation_lock = asyncio.Lock()
 
     def _build_store(self) -> StateStore:
@@ -195,19 +235,50 @@ class HealthIAService:
         if not state.messages and not state.vitals and not state.weights:
             await self.store.save(seed_state())
 
+    async def ensure_patient(self, principal: PatientPrincipal) -> PatientState:
+        """Create a clean patient state exactly once inside that principal's scope."""
+        with principal_scope(principal):
+            async with self._mutation_lock:
+                state = await self.store.load()
+                if not state.messages and not state.vitals and not state.weights and not state.documents:
+                    state = clean_patient_state(principal)
+                    await self.store.save(state)
+                elif state.profile.id != principal.patient_id:
+                    raise ValueError("Authenticated identity does not match stored patient state")
+                return state
+
     async def snapshot(self) -> PatientState:
         return await self.store.load()
 
     async def reset_demo(self) -> PatientState:
         async with self._mutation_lock:
             state = seed_state()
+            patient_id = current_patient_id()
+            if patient_id != "patient_demo":
+                # Authenticated users must never switch to the synthetic demo identity.
+                existing = await self.store.load()
+                state.profile = existing.profile
+                for collection in (
+                    "weights", "vitals", "activity", "family_members", "medication_plans",
+                    "medication_checkins", "appointments", "goals",
+                ):
+                    setattr(state, collection, [])
+                state.messages = [
+                    ChatMessage(
+                        patient_id=patient_id,
+                        role="assistant",
+                        author="HealthIA",
+                        content="Nueva consulta lista. Tu cuenta y tu identidad permanecen separadas.",
+                    )
+                ]
             await self.store.save(state)
-        await self.broker.publish({"type": "state", "section": "reset"})
+        await self.broker.publish({"type": "state", "section": "reset"}, patient_id=current_patient_id())
         return state
 
     async def update_profile(self, profile: PatientProfile) -> PatientProfile:
         async with self._mutation_lock:
             state = await self.store.load()
+            profile.id = state.profile.id
             state.profile = profile
             audit(
                 state,
@@ -243,13 +314,26 @@ class HealthIAService:
     async def add_patient_message(self, content: str):
         async with self._mutation_lock:
             state = await self.store.load()
-            patient_message = ChatMessage(role="patient", author=state.profile.display_name, content=content)
+            patient_message = ChatMessage(
+                patient_id=state.profile.id,
+                role="patient",
+                author=state.profile.display_name,
+                content=content,
+            )
             state.messages.append(patient_message)
             audit(state, actor="patient", action="send_chat_message", resource_type="chat_message", resource_id=patient_message.id)
             controlled_response = maybe_control_response(state, content)
             response = controlled_response or respond(state, content)
             if controlled_response is None:
                 response = await self.gemini.enhance(state, content, response)
+            response.message.patient_id = state.profile.id
+            if response.mission is None and response.message.mission_id:
+                response.mission = next(
+                    (item for item in state.missions if item.id == response.message.mission_id),
+                    None,
+                )
+            if response.mission is not None:
+                response.mission.patient_id = state.profile.id
             state.messages.append(response.message)
             audit(
                 state,
@@ -267,6 +351,8 @@ class HealthIAService:
     async def _append_and_publish(self, collection: str, item, section: str, *, actor: str = "patient", action: str = "create"):
         async with self._mutation_lock:
             state = await self.store.load()
+            if hasattr(item, "patient_id"):
+                item.patient_id = state.profile.id
             values = getattr(state, collection)
             values.append(item)
             sort_key = SORT_KEYS.get(collection)
@@ -292,6 +378,28 @@ class HealthIAService:
     async def add_document(self, document: ClinicalDocument) -> ClinicalDocument:
         return await self._append_and_publish("documents", document, "documents", action="upload_document")
 
+    async def add_result_evidence(self, result: HealthResult, document: ClinicalDocument) -> HealthResult:
+        """Persist the structured result and its original evidence link in one state commit."""
+        async with self._mutation_lock:
+            state = await self.store.load()
+            result.patient_id = state.profile.id
+            document.patient_id = state.profile.id
+            state.documents.append(document)
+            state.documents.sort(key=SORT_KEYS["documents"])
+            state.results.append(result)
+            state.results.sort(key=SORT_KEYS["results"])
+            audit(
+                state,
+                actor="patient",
+                action="upload_result_evidence",
+                resource_type="results",
+                resource_id=result.id,
+                details={"document_id": document.id, "evidence_status": document.status},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "results"})
+        return result
+
     async def get_document(self, document_id: str) -> ClinicalDocument | None:
         state = await self.store.load()
         return next((item for item in state.documents if item.id == document_id), None)
@@ -299,6 +407,7 @@ class HealthIAService:
     async def add_medication_plan(self, plan: MedicationPlan) -> MedicationPlan:
         async with self._mutation_lock:
             state = await self.store.load()
+            plan.patient_id = state.profile.id
             state.medication_plans.append(plan)
             label = " ".join(part for part in [plan.name, plan.strength, plan.schedule] if part).strip()
             if label and label not in state.profile.medications:
@@ -342,14 +451,7 @@ class HealthIAService:
         async with self._mutation_lock:
             state = await self.store.load()
             until = snooze_consent(state, hours)
-            audit(
-                state,
-                actor="patient",
-                action="snooze_proactive_interventions",
-                resource_type="consent",
-                resource_id=state.profile.id,
-                details={"hours": hours, "until": until.isoformat()},
-            )
+            audit(state, actor="patient", action="snooze_proactive", resource_type="consent", resource_id=state.profile.id, details={"hours": hours})
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": "consent"})
         return until
@@ -359,75 +461,54 @@ class HealthIAService:
             state = await self.store.load()
             if prefix not in state.consent.muted_rule_prefixes:
                 state.consent.muted_rule_prefixes.append(prefix)
-            state.consent.updated_at = datetime.now(timezone.utc)
-            audit(
-                state,
-                actor="patient",
-                action="mute_rule_prefix",
-                resource_type="consent",
-                resource_id=state.profile.id,
-                details={"prefix": prefix},
-            )
+            audit(state, actor="patient", action="mute_proactive_rule", resource_type="consent", resource_id=prefix)
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": "consent"})
         return state.consent
 
     async def run_proactive_check(self, *, manual_requested: bool = False) -> list[ChatMessage]:
-        created: list[ChatMessage] = []
+        if not manual_requested and not self.settings.proactive_enabled:
+            return []
         async with self._mutation_lock:
             state = await self.store.load()
             findings = evaluate_state(state)
-            findings.extend(evaluate_continuity(state))
+            created: list[ChatMessage] = []
             for finding in findings:
+                # A deterministic finding is emitted once for its evidence key.
+                # New evidence must produce a new key before HealthIA speaks again.
                 if finding.key in state.emitted_rule_keys:
                     continue
-                allowed, reason = finding_allowed(state, finding, manual_requested=manual_requested)
+                allowed, permission_reason = finding_allowed(
+                    state,
+                    finding,
+                    manual_requested=manual_requested,
+                )
                 if not allowed:
                     continue
-                state.emitted_rule_keys.append(finding.key)
-                content = (
-                    f"### {finding.title}\n\n"
-                    f"**Qué detecté:** {finding.summary}\n\n"
-                    f"**Por qué importa:** {finding.why_it_matters}\n\n"
-                    f"**Qué te propongo ahora:** {finding.next_action}"
-                )
                 message = ChatMessage(
+                    patient_id=state.profile.id,
                     role="assistant",
                     author="HealthIA",
-                    content=content,
+                    content=f"**{finding.title}**\n\n{finding.summary}\n\n{finding.why_it_matters}\n\n**Siguiente paso:** {finding.next_action}",
                     risk_level=finding.risk_level,
                     agent_plan=finding.agent_plan,
-                    metadata={"proactive": True, "rule_key": finding.key, "evidence_ids": finding.evidence_ids, "consent_reason": reason},
+                    metadata={"proactive": True, "rule_key": finding.key, "action_target": "today"},
                 )
                 state.messages.append(message)
+                created.append(message)
+                state.emitted_rule_keys.append(finding.key)
                 audit(
                     state,
                     actor="healthia",
-                    action="emit_proactive_intervention",
+                    action="emit_requested_continuity_finding",
                     resource_type="chat_message",
                     resource_id=message.id,
-                    details={
-                        "rule_key": finding.key,
-                        "risk_level": str(finding.risk_level),
-                        "consent_reason": reason,
-                        "manual_requested": manual_requested,
-                    },
+                    details={"rule_key": finding.key, "permission_reason": permission_reason},
                 )
-                created.append(message)
-            await self.store.save(state)
+            if created:
+                await self.store.save(state)
         for message in created:
             await self.broker.publish({"type": "message", "message": message.model_dump(mode="json")})
+        if created:
+            await self.broker.publish({"type": "state", "section": "today"})
         return created
-
-    async def background_loop(self, stop: asyncio.Event) -> None:
-        interval = max(self.settings.proactive_interval_seconds, 5)
-        while not stop.is_set():
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=interval)
-                break
-            except TimeoutError:
-                pass
-            try:
-                await self.run_proactive_check()
-            except Exception as exc:  # pragma: no cover
-                await self.broker.publish({"type": "runtime_error", "message": str(exc)[:300]})

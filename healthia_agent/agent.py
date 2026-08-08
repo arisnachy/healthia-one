@@ -14,27 +14,8 @@ def model() -> Gemini:
     return Gemini(model=MODEL, retry_options=types.HttpRetryOptions(attempts=2))
 
 
-def patient_snapshot() -> dict:
-    """Return the synthetic demo patient's authorized longitudinal summary."""
-    return {
-        "patient": "Ana Martínez (synthetic)",
-        "confirmed_conditions": ["Hipertensión arterial"],
-        "medications": [{"name": "Losartán", "strength": "50 mg", "schedule": "cada 24 horas"}],
-        "latest_weight_kg": 80.4,
-        "latest_blood_pressure": "148/92",
-        "next_appointment": "Consulta de medicina familiar in 40 hours (synthetic)",
-        "family_history": {"maternal": ["madre y abuela con diabetes"], "paternal": ["padre con hipertensión"]},
-        "consent": {
-            "proactive_enabled": True,
-            "quiet_hours": "22:00-07:00",
-            "patient_controls_signals": True,
-            "export_available": True,
-        },
-        "truth_boundary": "Synthetic demo data. The patient controls consent and sharing.",
-    }
-
-
 def allowed_patient_actions() -> dict:
+    """Static safety capabilities only; never returns patient-specific data."""
     return {
         "allowed": [
             "explain patient-provided information",
@@ -52,6 +33,10 @@ def allowed_patient_actions() -> dict:
             "interpret an emergency as safe",
             "sign clinical orders",
         ],
+        "runtime_note": (
+            "Patient-specific context is never embedded in this package. The FastAPI runtime passes the "
+            "current authorized PatientState to healthia_one.adk_runtime on each demand-driven request."
+        ),
     }
 
 
@@ -62,8 +47,7 @@ def make_agent(name: str, description: str, instruction: str, tools=None) -> Llm
 historian = make_agent(
     "historia",
     "Builds patient-authorized longitudinal context without inventing facts.",
-    "Separate confirmed facts, patient reports, inference and missing data. Never exceed authorized scope.",
-    [patient_snapshot],
+    "Use only context supplied by the current runtime request. Separate confirmed facts, reports, inference and missing data.",
 )
 sentinel = make_agent(
     "sentinel",
@@ -76,51 +60,50 @@ vita = make_agent("vita", "Builds realistic low-risk lifestyle micro-plans.", "A
 navigator = make_agent("navigator", "Maintains missions and follow-up.", "Define next step, review point and closure condition.")
 hereditas = make_agent(
     "hereditas",
-    "Organizes the pathological genogram.",
-    "Use authorized family history only. Never convert aggregation into diagnosis or prediction.",
-    [patient_snapshot, allowed_patient_actions],
+    "Organizes authorized family-history context.",
+    "Use only family context supplied by the current request. Never convert aggregation into diagnosis or prediction.",
 )
 archivum = make_agent(
     "archivum",
     "Indexes patient documents without fabricating unread content.",
     "Preserve type, date, source and review state. Never invent PDF or image contents.",
-    [patient_snapshot],
 )
 medsafe = make_agent(
     "medsafe",
     "Organizes treatment and patient-reported adherence safely.",
     "Never recommend doubling, stopping, substituting or changing a dose. Escalate uncertainty.",
-    [patient_snapshot, allowed_patient_actions],
+    [allowed_patient_actions],
 )
 advocate = make_agent(
     "advocate",
     "Prepares a patient-controlled consultation brief.",
-    "Summarize authorized context and questions. Patient review is required before sharing.",
-    [patient_snapshot],
+    "Summarize only authorized current-request context and questions. Patient review is required before sharing.",
 )
 bastion = make_agent(
     "bastion",
-    "Enforces patient consent, privacy, quiet hours, auditability and reversible controls.",
+    "Enforces patient consent, privacy, auditability and reversible controls.",
     (
-        "The patient owns the context. Explain each permission and its effect. Respect disabled signals, quiet "
-        "hours, snooze and muted rules. Urgent deterministic safety bypass is allowed only when explicitly "
-        "enabled. Never expose secrets, private chain-of-thought, other patients, or binary document paths."
+        "The patient owns the context. Respect disabled signals, quiet hours, snooze and muted rules. "
+        "Never expose secrets, private chain-of-thought, other patients, or binary storage paths."
     ),
-    [patient_snapshot, allowed_patient_actions],
+    [allowed_patient_actions],
 )
 
 root_agent = LlmAgent(
     name="kira_health",
     model=model(),
-    description="Patient health continuity coordinator that delegates to the minimum specialist team.",
+    description=(
+        "HealthIA ADK package. The production clinical planning path is healthia_one.adk_runtime, which "
+        "injects the current authorized PatientState and executes deterministic clinical tools on demand."
+    ),
     instruction=(
-        "The patient owns the context. Select the minimum specialist: HISTORIA, SENTINEL, LUMEN, VITA, "
-        "NAVIGATOR, HEREDITAS, ARCHIVUM, MEDSAFE, ADVOCATE or BASTION. Be proactive only with authorized "
-        "data and explain why. Never diagnose, prescribe, change medication or predict hereditary disease. "
-        "Expose public actions, evidence, uncertainty and next steps—not private reasoning."
+        "The patient owns the context. Select only the minimum specialist needed. Never assume a demo patient "
+        "or static medical facts. Patient-specific evidence must come from the current runtime request. Never "
+        "diagnose, prescribe, change medication or predict hereditary disease. Expose public actions, evidence, "
+        "uncertainty and next steps, not private reasoning."
     ),
     sub_agents=[historian, sentinel, lumen, vita, navigator, hereditas, archivum, medsafe, advocate, bastion],
-    tools=[patient_snapshot, allowed_patient_actions],
+    tools=[allowed_patient_actions],
 )
 
 app = App(name="healthia_agent", root_agent=root_agent)

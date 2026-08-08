@@ -1,0 +1,7 @@
+HealthIA ONE one-take submission demo gate
+
+enabled=false
+Purpose: explicitly opt in to one live, unmocked, approximately four-minute Chromium recording against the already deployed private Cloud Run service.
+Cost policy: normal commits must leave this disabled. Enabling it may spend a small number of Gemini requests but does not deploy a new Cloud revision.
+Evidence policy: use synthetic patients/files only; never record secrets or identity tokens.
+Last controlled recording: GitHub Actions run 31265639488 on candidate 3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e; recording and duration gates passed.
