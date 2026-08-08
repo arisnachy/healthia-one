@@ -106,9 +106,12 @@ def test_runtime_affordances_are_real_locale_aware_and_not_decorative() -> None:
     assert 'fetch("/api/devices",{headers:{"Accept-Language"' in providers
     assert "provider_catalog" in providers
     assert "/api/cost-control" in cost_control
-    assert 'text("AI active","IA activa")' in cost_control
-    assert "Vertex AI active" in cost_control
-    assert 'text("Local · 0 calls","Local · 0 llamadas")' in cost_control
+    assert "AI active" in cost_control and "IA activa" in cost_control
+    assert "Vertex AI active" in cost_control and "Vertex AI activo" in cost_control
+    assert "Local · 0 calls" in cost_control and "Local · 0 llamadas" in cost_control
+    assert "costGuardButton" in cost_control
+    assert "costGuardToggle" in cost_control
+    assert "/api/ai/test" in cost_control
     assert ".provider-grid" in interactions
     assert 'id="expandLeft"' in index
     assert 'data-i18n-aria="nav.expand"' in index
