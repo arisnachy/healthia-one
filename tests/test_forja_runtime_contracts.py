@@ -67,14 +67,19 @@ def test_android_bridge_uses_supported_compose_toolchain() -> None:
     assert "composeOptions" not in app_gradle
 
 
-def test_ci_validates_semantic_runtime_modules() -> None:
+def test_ci_validates_semantic_runtime_modules_and_both_labs() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch" in workflow
     assert "deployment/verify_google_ai.py" in workflow
     assert "node --check web/runtime-integrations.js" in workflow
     assert "node --check web/provider-integrations.js" in workflow
     assert "node --check web/cost-control.js" in workflow
-    assert "LAB OMEGA full-window functional laboratory" in workflow
+    assert "LAB OMEGA core full-window functional laboratory" in workflow
+    assert "python scripts/lab_omega.py" in workflow
+    assert "HealthIA-LAB-OMEGA" in workflow
+    assert "LAB OMEGA secondary windows and state-changing functions" in workflow
+    assert "python scripts/lab_omega_secondary.py" in workflow
+    assert "HealthIA-LAB-OMEGA-secondary" in workflow
     assert "deployment/deploy-cloud-demo.ps1" in workflow
     assert "deployment/remove-cloud-demo.ps1" in workflow
 
