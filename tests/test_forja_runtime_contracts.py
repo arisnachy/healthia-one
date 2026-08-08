@@ -74,31 +74,36 @@ def test_ci_validates_semantic_runtime_modules() -> None:
     assert "node --check web/runtime-integrations.js" in workflow
     assert "node --check web/provider-integrations.js" in workflow
     assert "node --check web/cost-control.js" in workflow
+    assert "LAB OMEGA full-window functional laboratory" in workflow
     assert "deployment/deploy-cloud-demo.ps1" in workflow
     assert "deployment/remove-cloud-demo.ps1" in workflow
 
 
-def test_runtime_affordances_are_real_not_decorative() -> None:
+def test_runtime_affordances_are_real_locale_aware_and_not_decorative() -> None:
     index = (ROOT / "web/index.html").read_text(encoding="utf-8")
     runtime = (ROOT / "web/runtime-integrations.js").read_text(encoding="utf-8")
     providers = (ROOT / "web/provider-integrations.js").read_text(encoding="utf-8")
     cost_control = (ROOT / "web/cost-control.js").read_text(encoding="utf-8")
     icons = (ROOT / "web/icons.js").read_text(encoding="utf-8")
     interactions = (ROOT / "web/interactions.css").read_text(encoding="utf-8")
+    for source in (runtime, providers, cost_control):
+        assert "window.HealthIAI18n" in source
+        assert "Accept-Language" in source
     assert "SpeechRecognition" in runtime
-    assert 'json("/api/ai/test", {method: "POST"})' in runtime
+    assert 'json("/api/ai/test",{method:"POST"})' in runtime
     assert 'button.setAttribute("aria-pressed"' in runtime
+    assert "recognition.lang=localeTag()" in runtime
     for asset in ("runtime-integrations.js", "provider-integrations.js", "cost-control.js"):
         assert index.count(f'/assets/{asset}') == 1
         assert f'/assets/{asset}' not in icons
     assert "loadScript(" not in icons
     assert "document.createElement('script')" not in icons
-    assert 'fetch("/api/devices")' in providers
+    assert 'fetch("/api/devices",{headers:{"Accept-Language"' in providers
     assert "provider_catalog" in providers
     assert "/api/cost-control" in cost_control
-    assert "IA activa" in cost_control
-    assert "Vertex AI activo" in cost_control
-    assert "Local · 0 llamadas" in cost_control
+    assert 'text("AI active","IA activa")' in cost_control
+    assert "Vertex AI active" in cost_control
+    assert 'text("Local · 0 calls","Local · 0 llamadas")' in cost_control
     assert ".provider-grid" in interactions
     assert 'id="expandLeft"' in index
     assert 'data-i18n-aria="nav.expand"' in index
