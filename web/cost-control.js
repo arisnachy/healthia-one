@@ -63,6 +63,14 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
       return ({local: 'Local seguro', guarded: 'Prueba controlada', cloud_demo: 'Demo Cloud'})[value] || value || 'Desconocido';
     }
 
+    function googleAiConfigured() {
+      return Boolean(status?.google_ai_configured);
+    }
+
+    function isVertex() {
+      return status?.ai_transport === 'vertex_ai';
+    }
+
     function renderRuntimeLabel() {
       const label = $('#runtimeLabel');
       if (!label || !status) return;
@@ -72,10 +80,22 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
         label.title = 'La interfaz y los flujos deterministas funcionan sin consumir Google AI.';
         return;
       }
-      if (!status.api_key_configured) {
-        label.textContent = 'Gemini · falta clave';
+      if (!googleAiConfigured()) {
+        label.textContent = isVertex() ? 'Vertex AI · no disponible' : 'Gemini · no configurado';
         label.dataset.aiState = 'error';
-        label.title = 'Reinicia con -GuardedAi y proporciona la clave mediante entrada protegida.';
+        label.title = isVertex()
+          ? 'La identidad de Google Cloud no tiene un runtime de Vertex AI disponible.'
+          : 'Inicia el modo local protegido y proporciona la clave mediante entrada segura.';
+        return;
+      }
+      if (status.mode === 'cloud_demo' && isVertex()) {
+        label.textContent = status.enabled
+          ? `${status.model} · Vertex AI activo`
+          : `${status.model} · límite Cloud alcanzado`;
+        label.dataset.aiState = status.enabled ? 'ready' : 'configured';
+        label.title = status.enabled
+          ? `Vertex AI usa ADC/identidad de servicio. Quedan ${status.requests_remaining} solicitudes en el límite de esta revisión.`
+          : 'Vertex AI está configurado, pero el límite duro de solicitudes de esta revisión ya no permite llamadas.';
         return;
       }
       label.textContent = status.enabled
@@ -84,7 +104,7 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
       label.dataset.aiState = status.enabled ? 'ready' : 'configured';
       label.title = status.enabled
         ? `Quedan ${status.requests_remaining} solicitudes antes del bloqueo automático.`
-        : 'La clave está cargada, pero el control de costos impide llamadas hasta que lo actives.';
+        : 'Google AI está configurado, pero el control de costos impide llamadas hasta que lo actives.';
     }
 
     function render() {
@@ -92,13 +112,16 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
       if (!status) return;
       const pill = $('#costGuardButton');
       const remaining = Number(status.requests_remaining || 0);
+      const configured = googleAiConfigured();
       pill.dataset.enabled = String(Boolean(status.enabled));
       pill.dataset.mode = status.mode || 'local';
       pill.textContent = status.mode === 'local'
         ? 'Local · 0 llamadas'
-        : status.enabled
-          ? `IA activa · ${remaining} restantes`
-          : `IA apagada · ${remaining} restantes`;
+        : status.mode === 'cloud_demo' && isVertex()
+          ? status.enabled ? `Vertex · ${remaining} restantes` : `Vertex · límite ${remaining}`
+          : status.enabled
+            ? `IA activa · ${remaining} restantes`
+            : `IA apagada · ${remaining} restantes`;
       pill.title = 'Abrir control de consumo de Google AI';
       renderRuntimeLabel();
 
@@ -110,14 +133,16 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
 
       const toggle = $('#costGuardToggle');
       toggle.checked = Boolean(status.enabled);
-      toggle.disabled = !status.mutable || !status.api_key_configured || !status.ui_control_available || remaining <= 0;
+      toggle.disabled = !status.mutable || !configured || !status.ui_control_available || remaining <= 0;
       $('#costSwitchHelp').textContent = status.mode === 'local'
-        ? 'Reinicia con -GuardedAi para cargar una clave sin activar consumo.'
-        : !status.api_key_configured
-          ? 'No hay una clave configurada en este proceso.'
-          : status.mutable
-            ? 'Puedes apagarlo en cualquier momento. Al llegar al límite se apaga solo.'
-            : 'En Cloud el modo se fija al desplegar y no puede cambiarse desde el navegador.';
+        ? 'Reinicia con -GuardedAi para habilitar una prueba local controlada.'
+        : !configured
+          ? isVertex() ? 'Vertex AI no está disponible para esta ejecución.' : 'Google AI no está configurado en este proceso.'
+          : status.mode === 'cloud_demo' && isVertex()
+            ? 'En Cloud se usa Vertex AI con ADC; el límite se fija al desplegar y no se cambia desde el navegador.'
+            : status.mutable
+              ? 'Puedes apagarlo en cualquier momento. Al llegar al límite se apaga solo.'
+              : 'El modo se fija al iniciar y no puede cambiarse desde el navegador.';
       $('#costProbe').disabled = !status.enabled || remaining <= 0;
     }
 
@@ -181,7 +206,6 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
       ensureStylesheet();
       ensureUi();
       await loadStatus();
-      setInterval(loadStatus, 15000);
     }
 
     if (document.readyState === 'loading') {
@@ -190,5 +214,10 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
       boot();
     }
     document.addEventListener('healthia:ui-updated', () => setTimeout(loadStatus, 80));
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) loadStatus();
+    });
+    window.addEventListener('focus', loadStatus);
+    window.HealthIACostControl = {refresh: loadStatus};
   })();
 }
