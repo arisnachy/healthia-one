@@ -230,7 +230,7 @@ Cloud proofs are intentionally separate from ordinary CI.
 - longitudinal timeline and clinical twin;
 - multimodal result ingestion with original evidence retention;
 - labs, CT/MRI/X-ray/ultrasound/ECG/pathology/report classification;
-- treatment/medication check-ins without autonomous prescribing;
+- treatment and medication check-ins without autonomous prescribing;
 - appointments and consultation briefs;
 - pathological family genogram with provenance;
 - weight, activity and vitals;
