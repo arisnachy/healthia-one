@@ -1,0 +1,55 @@
+name: Cloud Uvicorn log readback
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  readback:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    env:
+      PROJECT_ID: healthia-6088a
+      SERVICE_NAME: healthia-server-control
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+      - name: Read deleted control revision logs
+        shell: bash
+        run: |
+          set +e
+          mkdir -p deployment/uvicorn-readback
+          for rev in healthia-server-control-00001-zlk healthia-server-control-00002-2qx healthia-server-control-00003-b2l; do
+            echo "=== $rev stdout/stderr ===" | tee "deployment/uvicorn-readback/${rev}.txt"
+            gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE_NAME} AND resource.labels.revision_name=${rev} AND (logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Fstdout\" OR logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Fstderr\")" \
+              --project="$PROJECT_ID" --freshness=2h --limit=100 --order=asc \
+              --format='table(timestamp,severity,textPayload)' 2>&1 | tee -a "deployment/uvicorn-readback/${rev}.txt"
+            echo "=== $rev request logs ===" | tee -a "deployment/uvicorn-readback/${rev}.txt"
+            gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE_NAME} AND resource.labels.revision_name=${rev} AND logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Frequests\"" \
+              --project="$PROJECT_ID" --freshness=2h --limit=100 --order=asc \
+              --format='table(timestamp,httpRequest.requestMethod,httpRequest.requestUrl,httpRequest.status,httpRequest.userAgent)' 2>&1 | tee -a "deployment/uvicorn-readback/${rev}.txt"
+          done
+          exit 0
+      - name: Upload readback
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-cloud-uvicorn-log-readback
+          path: deployment/uvicorn-readback
+          if-no-files-found: warn
+          retention-days: 7
