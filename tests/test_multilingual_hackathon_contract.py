@@ -30,18 +30,21 @@ def test_urgent_safety_remains_spanish_for_spanish_patient_input() -> None:
     assert "atención inmediata" in decision.message.lower() or "emergencia" in decision.message.lower()
 
 
-def test_english_intents_route_to_existing_verified_functions() -> None:
+def test_english_intents_route_to_existing_verified_functions_after_conversation_memory() -> None:
     source = (ROOT / "healthia_one" / "orchestrator.py").read_text(encoding="utf-8")
     assert "ENGLISH_INTENT_ALIASES" in source
     assert '"medication"' in source and '"appointment"' in source
     assert '"result"' in source and '"blood pressure"' in source
-    assert 'return deterministic_respond(state, _router_text(patient_text))' in source
+    assert "frame = build_frame(state, patient_text)" in source
+    assert "routed_text = frame.routing_text" in source
+    assert "deterministic_respond(state, _router_text(routed_text))" in source
     assert "ENGLISH_SYMPTOM_ALIASES" in source
     assert '"pain when urinating"' in source
 
 
 def test_final_recorder_is_english_live_app_not_static_cards() -> None:
     recorder = (ROOT / "scripts" / "record_submission_demo.py").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert 'locale="en-US"' in recorder
     assert '"demo_language": "en-US"' in recorder
     assert '"live_app_only": True' in recorder
@@ -53,12 +56,15 @@ def test_final_recorder_is_english_live_app_not_static_cards() -> None:
     assert "page.goto(f\"{BASE_URL}/login\"" in recorder
     assert "set_input_files(str(pdf_path))" in recorder
     assert "wait_for_result_mission(page, result_id)" in recorder
+    assert 'HEALTHIA_DEMO_TARGET_SECONDS: "235"' in workflow
+    assert "230 <= duration <= 245" in workflow
 
 
 def test_lab_omega_records_real_browser_evidence_and_state_roundtrips() -> None:
     lab = (ROOT / "scripts" / "lab_omega.py").read_text(encoding="utf-8")
     assert "record_video_dir=str(VIDEO_DIR)" in lab
     assert "register_and_authenticate" in lab
+    assert "authenticated_shell_interactive" in lab
     assert "exercise_registered_views" in lab
     assert "measurement_state_roundtrip" in lab
     assert "structured_result_upload" in lab
