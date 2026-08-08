@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "judge_omega.py"
 SCORECARD = ROOT / "hackathon" / "judge_omega_scorecard.json"
-CURRENT_EVIDENCE_SCORE = 87
+CURRENT_EVIDENCE_SCORE = 92
 
 
 def test_judge_omega_preserves_official_weights_and_current_baseline() -> None:
@@ -22,7 +22,8 @@ def test_judge_omega_preserves_official_weights_and_current_baseline() -> None:
     assert sum(item["max_points"] for item in payload["criteria"]) == 100
     assert sum(item["awarded_points"] for item in payload["criteria"]) == CURRENT_EVIDENCE_SCORE
     assert any(item["status"] != "proven" for item in payload["hard_gates"])
-    assert all(item["id"] != "adk_live_trace_not_captured" for item in payload["critical_blockers"])
+    assert any(item["id"] == "closed_loop_taskmaster" and item["status"] == "proven" for item in payload["hard_gates"])
+    assert all(item["id"] not in {"adk_live_trace_not_captured", "no_autonomous_outcome_closure"} for item in payload["critical_blockers"])
 
 
 def test_judge_omega_evaluator_validates_repository_evidence() -> None:
@@ -41,6 +42,7 @@ def test_judge_omega_evaluator_validates_repository_evidence() -> None:
     assert result["hard_gate_blockers"]
     assert any(item["id"] == "cloud_runtime_proof" for item in result["hard_gate_blockers"])
     assert any(item["id"] == "four_minute_demo" for item in result["hard_gate_blockers"])
+    assert all(item["id"] != "closed_loop_taskmaster" for item in result["hard_gate_blockers"])
     assert len(result["next_actions"]) == 3
 
 
