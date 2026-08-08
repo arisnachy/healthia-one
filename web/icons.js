@@ -43,7 +43,8 @@ if (!window.__HEALTHIA_ICONS__) {
         button.setAttribute('aria-label',label);
       });
       const orb=$('.health-orb'); if(orb) orb.innerHTML=icon('sparkle');
-      const attach=$('.attach-button'); if(attach) attach.innerHTML=icon('plus');
+      const attach=$('.attach-button');
+      if(attach && !$('.v6-icon', attach)) attach.insertAdjacentHTML('afterbegin', icon('plus'));
       const voice=$('#voiceButton'); if(voice) voice.innerHTML=icon('mic');
       const send=$('#sendButton'); if(send) send.innerHTML=icon('send');
       const panel=$('#collapseRight'); if(panel) panel.innerHTML=icon('panel');
