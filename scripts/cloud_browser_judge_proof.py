@@ -144,11 +144,21 @@ def run() -> dict:
         report["patient_id"] = patient_id
         report["checks"].append("secure_browser_registration_and_session")
         require(page.locator("#accountPill strong").inner_text().strip() == display_name, "account pill did not render authenticated identity")
+        readiness_before = api_json(page, "/api/readiness")
+        runtime_label = page.locator("#runtimeLabel").inner_text().strip()
+        require(readiness_before.get("ai_ready") is True, "Cloud browser started without live Google AI readiness")
+        require(readiness_before.get("model") == "gemini-3.5-flash", f"unexpected browser model: {readiness_before.get('model')}")
+        require("falta" not in runtime_label.lower() and "no disponible" not in runtime_label.lower(), f"runtime label contradicts live AI readiness: {runtime_label}")
+        require("vertex" in runtime_label.lower() or "google ai" in runtime_label.lower(), f"runtime label does not expose active Google AI transport: {runtime_label}")
+        report["runtime_label"] = runtime_label
+        report["checks"].append("browser_runtime_label_matches_live_vertex_readiness")
         screenshot(page, "02-authenticated-home.png")
 
         page.locator("#accountPill").click()
         page.wait_for_selector("#accountDialog[open]", timeout=10_000)
-        require(page.get_by_text(email, exact=True).count() == 1, "account settings did not show authenticated email")
+        account_identity = page.locator("#accountIdentity").inner_text()
+        require(email in account_identity, "account settings did not show authenticated email")
+        require(display_name in account_identity, "account settings did not show authenticated display name")
         report["checks"].append("account_settings_dialog")
         screenshot(page, "03-account-settings.png")
         page.locator("#closeAccountButton").click()
