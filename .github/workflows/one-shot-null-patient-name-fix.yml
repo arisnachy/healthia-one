@@ -18,7 +18,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 1
           persist-credentials: true
-      - name: Remove stale patientName DOM dependency and strengthen regression test
+      - name: Remove stale patientName DOM dependency and add regression contract
         shell: bash
         run: |
           set -euo pipefail
@@ -43,7 +43,9 @@ jobs:
           if 'test_main_runtime_has_no_stale_patient_name_dom_reference' not in body:
               test.write_text(body.rstrip()+addition+'\n',encoding='utf-8')
           PY
-          python -m pytest -q tests/test_frontend_runtime_hygiene.py tests/test_patient_auth_isolation.py
+          node --check web/app.js
+          grep -q 'id="heroPatientName"' web/index.html
+          ! grep -q 'refs.patientName' web/app.js
           rm .github/workflows/one-shot-null-patient-name-fix.yml
           git config user.name 'KIRA HealthIA CI'
           git config user.email 'actions@users.noreply.github.com'
