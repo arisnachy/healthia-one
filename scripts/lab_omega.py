@@ -294,15 +294,13 @@ def run() -> dict:
                 require(session_cookie is not None, "Chromium did not retain the session cookie emitted by registration")
                 require(session_cookie.get("secure") is False, "local HTTP registration emitted a Secure-only browser cookie")
                 page.wait_for_url(f"{base_url}/")
-                page.wait_for_load_state("networkidle")
-                page.wait_for_timeout(250)
+                page.wait_for_selector("#chatInput")
+                page.wait_for_function("document.documentElement.lang === 'en'")
                 report["outputs"]["post_register_url"] = page.url
-                session = page.evaluate("async () => await (await fetch('/api/auth/session', {credentials:'same-origin'})).json()")
+                session = page.evaluate("async () => await (await fetch('/api/auth/session', {credentials:'same-origin', cache:'no-store'})).json()")
                 report["outputs"]["post_register_session_authenticated"] = bool(session.get("authenticated"))
                 report["outputs"]["post_register_session_patient_id"] = str((session.get("account") or {}).get("patient_id") or "")
                 require(session.get("authenticated") is True, f"browser cookie was present but session verification failed at {page.url}")
-                page.wait_for_selector("#chatInput")
-                page.wait_for_function("document.documentElement.lang === 'en'")
                 report["functions"]["register_and_authenticate"] = "pass"
                 screenshot(page, "home-authenticated-en")
 
