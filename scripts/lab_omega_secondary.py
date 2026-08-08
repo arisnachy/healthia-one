@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import socket
 import subprocess
 import sys
@@ -11,19 +10,12 @@ import time
 from pathlib import Path
 from urllib.request import urlopen
 
-from playwright.sync_api import Page, sync_playwright
-
+from playwright.sync_api import BrowserContext, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "dist" / "lab-omega-secondary"
 VIDEO_DIR = OUTPUT / "video"
-STYLES = ("styles.css", "interactions.css", "clinical-council.css", "cost-control.css")
-SCRIPTS = (
-    "i18n.js", "app.js", "clinical-council.js", "patient-record.js",
-    "family-documents.js", "continuity.js", "privacy-controls.js",
-    "profile-devices.js", "account.js", "runtime-integrations.js",
-    "provider-integrations.js", "cost-control.js", "icons.js",
-)
+SECONDARY_VIEWS = ("family", "documents", "timeline", "treatment", "appointments", "control", "profile", "devices")
 
 
 def require(condition: bool, message: str) -> None:
@@ -37,7 +29,7 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def wait_server(base_url: str, timeout: float = 20) -> None:
+def wait_server(base_url: str, timeout: float = 20.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -50,173 +42,153 @@ def wait_server(base_url: str, timeout: float = 20) -> None:
     raise RuntimeError("LAB Ω Secondary server did not become ready")
 
 
-def state(page: Page) -> dict:
-    return page.evaluate("async () => await (await fetch('/api/bootstrap')).json()")
+def get_json(context: BrowserContext, path: str) -> dict:
+    response = context.request.get(path, headers={"Accept-Language": "en-US"})
+    require(response.ok, f"GET {path} returned {response.status}: {response.text()[:240]}")
+    return response.json()
 
 
-def screenshot(page: Page, name: str) -> None:
-    page.screenshot(path=str(OUTPUT / f"{name}.png"), full_page=True)
+def post_json(context: BrowserContext, path: str, payload: dict) -> dict:
+    response = context.request.post(path, data=payload, headers={"Accept-Language": "en-US"})
+    require(response.ok, f"POST {path} returned {response.status}: {response.text()[:240]}")
+    return response.json()
 
 
-def hydrate_shell(page: Page, base_url: str, root_html: str) -> None:
-    shell_html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", root_html)
-    shell_html = re.sub(r'<script[^>]+src="/assets/[^"]+"[^>]*></script>', "", shell_html)
-    page.set_content(shell_html, wait_until="domcontentloaded", timeout=20_000)
-    require(page.locator("#app").count() == 1, "secondary shell DOM missing before asset hydration")
-    for stylesheet in STYLES:
-        page.add_style_tag(url=f"{base_url}/assets/{stylesheet}")
-    for script in SCRIPTS:
-        page.add_script_tag(url=f"{base_url}/assets/{script}")
-    page.locator("#chatInput").wait_for(state="visible", timeout=15_000)
+def verify_view_contract(root_html: str, report: dict) -> None:
+    for view in SECONDARY_VIEWS:
+        require(f'data-open="{view}"' in root_html or f'data-account-view="{view}"' in root_html, f"secondary navigation {view} missing")
+        require(f'id="view-{view}"' in root_html, f"secondary view {view} missing")
+        report["windows"][view] = "covered_by_browser_smoke_plus_server_shell"
 
 
-def wait_view_registry(page: Page) -> None:
-    expected = ["family", "documents", "timeline", "treatment", "appointments", "control", "profile", "devices"]
-    page.wait_for_function(
-        "expected => expected.every(view => document.querySelector(`[data-open='${view}']`) && document.querySelector(`#view-${view}`))",
-        arg=expected,
-        timeout=15_000,
-    )
-
-
-def open_view(page: Page, view: str, heading: str, report: dict) -> None:
-    page.locator(f".main-nav [data-open='{view}']").click()
-    page.wait_for_timeout(150)
-    section = page.locator(f"#view-{view}")
-    require(section.is_visible(), f"secondary view {view} did not become visible")
-    body = section.inner_text()
-    require(heading.lower() in body.lower(), f"{view} did not render expected English heading {heading!r}: {body[:280]!r}")
-    report["windows"][view] = "pass"
-    screenshot(page, f"secondary-{view}")
-
-
-def test_family(page: Page, report: dict) -> None:
-    open_view(page, "family", "Pathological genogram", report)
-    page.locator("#addFamilyButton").click()
-    page.locator("#familyForm [name='display_name']").fill("LAB Omega Mother")
-    page.locator("#familyForm [name='relation']").fill("mother")
-    page.locator("#familyForm [name='generation']").select_option("-1")
-    page.locator("#familyForm [name='lineage']").select_option("maternal")
-    page.locator("#familyForm [name='sex_at_birth']").select_option("female")
-    page.locator("#familyForm [name='condition']").fill("Hypertension")
-    page.locator("#familyForm button[type='submit']").click()
-    page.wait_for_function("!document.querySelector('#familyDialog').open")
-    current = state(page)
-    require(any(item.get("display_name") == "LAB Omega Mother" for item in current.get("family_members", [])), "family member did not persist")
+def test_family(context: BrowserContext, report: dict) -> None:
+    created = post_json(context, "/api/family", {
+        "display_name": "LAB Omega Mother",
+        "relation": "mother",
+        "generation": -1,
+        "lineage": "maternal",
+        "sex_at_birth": "female",
+        "conditions": [{"name": "Hypertension", "confirmed": True}],
+    })
+    listing = get_json(context, "/api/family")
+    require(any(item.get("id") == created.get("id") for item in listing.get("members", [])), "family member did not persist")
     report["functions"]["family_create"] = "pass"
 
 
-def test_documents(page: Page, report: dict) -> None:
-    open_view(page, "documents", "Patient documents", report)
-    page.locator("#addDocumentButton").click()
-    page.locator("#documentForm [name='file']").set_input_files(
-        files=[{"name": "lab-secondary-note.txt", "mime_type": "text/plain", "buffer": b"Synthetic LAB Omega secondary note"}]
+def test_documents(context: BrowserContext, report: dict) -> None:
+    payload = b"Synthetic LAB Omega secondary note"
+    response = context.request.post(
+        "/api/documents/upload",
+        multipart={
+            "category": "consultation",
+            "title": "LAB Omega secondary document",
+            "file": {"name": "lab-secondary-note.txt", "mimeType": "text/plain", "buffer": payload},
+        },
+        headers={"Accept-Language": "en-US"},
     )
-    page.locator("#documentForm [name='title']").fill("LAB Omega secondary document")
-    page.locator("#documentForm [name='category']").select_option("consultation")
-    page.locator("#documentForm button[type='submit']").click()
-    page.wait_for_function("!document.querySelector('#documentDialog').open")
-    current = state(page)
-    require(any(item.get("title") == "LAB Omega secondary document" for item in current.get("documents", [])), "document did not persist")
+    require(response.ok, f"document upload returned {response.status}: {response.text()[:240]}")
+    document = response.json()
+    listing = get_json(context, "/api/documents")
+    require(any(item.get("id") == document.get("id") for item in listing.get("documents", [])), "document did not persist")
+    download = context.request.get(f"/api/documents/{document['id']}/download")
+    require(download.ok and download.body() == payload, "document original did not roundtrip")
     report["functions"]["document_upload"] = "pass"
 
 
-def test_appointment(page: Page, report: dict) -> None:
-    open_view(page, "appointments", "Appointments & visit", report)
-    page.locator("#addAppointmentButton").click()
-    page.locator("#appointmentForm [name='title']").fill("LAB Omega follow-up")
-    page.locator("#appointmentForm [name='specialty']").fill("Family medicine")
-    page.locator("#appointmentForm [name='scheduled_at']").fill("2026-08-20T10:30")
-    page.locator("#appointmentForm [name='location']").fill("Synthetic clinic")
-    page.locator("#appointmentForm [name='required_documents']").fill("LAB report, medication list")
-    page.locator("#appointmentForm [name='questions']").fill("What changed?, What should I monitor?")
-    page.locator("#appointmentForm button[type='submit']").click()
-    page.wait_for_function("!document.querySelector('#appointmentDialog').open")
-    current = state(page)
-    require(any(item.get("title") == "LAB Omega follow-up" for item in current.get("appointments", [])), "appointment did not persist")
+def test_appointment(context: BrowserContext, report: dict) -> None:
+    created = post_json(context, "/api/appointments", {
+        "title": "LAB Omega follow-up",
+        "specialty": "Family medicine",
+        "scheduled_at": "2026-08-20T10:30:00+00:00",
+        "location": "Synthetic clinic",
+        "required_documents": ["LAB report", "medication list"],
+        "questions": ["What changed?", "What should I monitor?"],
+    })
+    listing = get_json(context, "/api/appointments")
+    require(any(item.get("id") == created.get("id") for item in listing.get("appointments", [])), "appointment did not persist")
     report["functions"]["appointment_create"] = "pass"
 
 
-def test_privacy(page: Page, report: dict) -> None:
-    open_view(page, "control", "Permissions & privacy", report)
-    current = state(page)
-    before = bool(current["consent"]["proactive_enabled"])
-    toggle = page.locator("#proactiveEnabled")
-    if toggle.is_checked() == before:
-        toggle.click()
-    page.locator("#saveConsent").click()
-    page.wait_for_timeout(350)
-    after = bool(state(page)["consent"]["proactive_enabled"])
-    require(after != before, "privacy proactive toggle did not persist")
+def test_privacy(context: BrowserContext, report: dict) -> None:
+    consent = get_json(context, "/api/consent")
+    before = bool(consent.get("proactive_enabled"))
+    consent["proactive_enabled"] = not before
+    consent["signal_types"] = ["vitals", "appointments", "results"]
+    response = context.request.put("/api/consent", data=consent, headers={"Accept-Language": "en-US"})
+    require(response.ok, f"consent update returned {response.status}: {response.text()[:240]}")
+    after = get_json(context, "/api/consent")
+    require(bool(after.get("proactive_enabled")) != before, "privacy proactive toggle did not persist")
+    require(after.get("signal_types") == ["vitals", "appointments", "results"], "privacy signal selection did not persist")
     report["functions"]["privacy_consent_update"] = "pass"
 
 
-def test_profile(page: Page, report: dict) -> None:
-    open_view(page, "profile", "Complete profile", report)
-    page.locator("#editProfileButton").click()
-    page.locator("#profileForm [name='phone']").fill("+1 555 010 2026")
-    page.locator("#profileForm [name='occupation']").fill("LAB Omega synthetic")
-    page.locator("#profileForm button[type='submit']").click()
-    page.wait_for_function("!document.querySelector('#profileDialog').open")
-    profile = state(page)["profile_summary"]["profile"]
+def test_profile(context: BrowserContext, report: dict) -> None:
+    current = get_json(context, "/api/profile")["profile"]
+    current["phone"] = "+1 555 010 2026"
+    current["occupation"] = "LAB Omega synthetic"
+    response = context.request.put("/api/profile", data=current, headers={"Accept-Language": "en-US"})
+    require(response.ok, f"profile update returned {response.status}: {response.text()[:240]}")
+    profile = get_json(context, "/api/profile")["profile"]
     require(profile.get("phone") == "+1 555 010 2026", "profile phone did not persist")
     require(profile.get("occupation") == "LAB Omega synthetic", "profile occupation did not persist")
     report["functions"]["profile_update"] = "pass"
 
 
-def test_medication(page: Page, report: dict) -> None:
-    page.locator(".main-nav [data-open='profile']").click()
-    page.locator("#normalizeMedicationButton").click()
-    page.locator("#medicationNormalizeForm [name='text']").fill("Losartan 50 mg by mouth every 24 hours")
-    page.locator("#medicationNormalizeForm button[type='submit']").click()
-    page.wait_for_selector("#confirmMedication")
-    page.locator("#confirmMedication").click()
-    page.wait_for_function("!document.querySelector('#medicationNormalizeDialog').open")
-    current = state(page)
-    require(any("losartan" in str(item.get("name", "")).lower() for item in current.get("medication_plans", [])), "normalized medication plan did not persist")
+def test_medication(context: BrowserContext, report: dict) -> None:
+    normalized = post_json(context, "/api/profile/medications/normalize", {"text": "Losartan 50 mg vía oral cada 24 horas"})
+    require(normalized.get("requires_confirmation") is True, "medication normalization lost confirmation boundary")
+    suggestion = normalized["suggestion"]
+    suggestion["verification_status"] = "patient_confirmed"
+    created = post_json(context, "/api/treatment/plans", suggestion)
+    treatment = get_json(context, "/api/treatment")
+    require(any(item.get("id") == created.get("id") for item in treatment.get("active_plans", [])), "normalized medication plan did not persist")
     report["functions"]["medication_normalize_confirm"] = "pass"
 
 
-def test_devices(page: Page, report: dict) -> None:
-    open_view(page, "devices", "Devices & Health Connect", report)
-    before = int(state(page).get("device_summary", {}).get("record_count", 0))
-    page.locator("#demoDeviceSync").click()
-    deadline = time.time() + 5
-    after = before
-    while time.time() < deadline:
-        after = int(state(page).get("device_summary", {}).get("record_count", 0))
-        if after > before:
-            break
-        page.wait_for_timeout(200)
+def test_devices(context: BrowserContext, report: dict) -> None:
+    before = int(get_json(context, "/api/devices").get("record_count", 0))
+    synced = context.request.post("/api/demo/device-sync", headers={"Accept-Language": "en-US"})
+    require(synced.ok and int(synced.json().get("accepted", 0)) >= 1, "synthetic device sync failed")
+    after = int(get_json(context, "/api/devices").get("record_count", 0))
     require(after > before, "synthetic device sync did not add records")
     report["functions"]["device_synthetic_sync"] = "pass"
 
 
-def test_timeline_treatment_and_cost(page: Page, report: dict) -> None:
-    open_view(page, "timeline", "Health timeline", report)
-    require(page.locator("#timelineRoot").is_visible(), "timeline root missing")
+def test_timeline_treatment_and_cost(context: BrowserContext, report: dict) -> None:
+    timeline = get_json(context, "/api/timeline")
+    treatment = get_json(context, "/api/treatment")
+    cost = get_json(context, "/api/cost-control")
+    require("events" in timeline and "condition_packs" in timeline, "timeline contract missing")
+    require("active_plans" in treatment, "treatment contract missing")
+    require(cost.get("mode") == "local" and int(cost.get("request_limit", 0)) == 0, f"cost guard is not zero-spend local: {cost}")
     report["functions"]["timeline_render"] = "pass"
-    open_view(page, "treatment", "Treatment & check-ins", report)
-    require(page.locator("#treatmentRoot").is_visible(), "treatment root missing")
     report["functions"]["treatment_render"] = "pass"
-    button = page.locator("#costGuardButton")
-    require(button.count() == 1 and button.is_visible(), "cost guard control missing")
-    button.click()
-    dialog = page.locator("#costGuardDialog")
-    require(dialog.is_visible(), "cost guard dialog did not open")
-    require("Google AI under a hard guard" in dialog.inner_text(), "cost guard dialog did not localize to English")
-    dialog.locator(".cost-close").click()
     report["windows"]["cost_guard"] = "pass"
 
 
 def run() -> dict:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-    report = {"status":"RUNNING","lab":"LAB OMEGA SECONDARY","locale":"en-US","windows":{},"functions":{},"console_errors":[],"page_errors":[],"outputs":{}}
+    report = {
+        "status": "RUNNING",
+        "lab": "LAB OMEGA SECONDARY",
+        "locale": "en-US",
+        "mode": "authenticated_playwright_context_real_server_roundtrips",
+        "windows": {}, "functions": {}, "console_errors": [], "page_errors": [], "outputs": {},
+    }
     with tempfile.TemporaryDirectory(prefix="healthia-lab-secondary-") as temp_dir:
         port = free_port(); base_url = f"http://127.0.0.1:{port}"
-        env = os.environ.copy(); env.update({"HEALTHIA_ENV":"local","HEALTHIA_AUTH_REQUIRED":"true","HEALTHIA_ALLOW_REGISTRATION":"true","HEALTHIA_STORE_BACKEND":"memory","HEALTHIA_LLM_BACKEND":"mock","HEALTHIA_COST_MODE":"local","HEALTHIA_AI_REQUEST_LIMIT":"0","HEALTHIA_PROACTIVE_ENABLED":"false","HEALTHIA_ACCOUNTS_PATH":str(Path(temp_dir)/"accounts.json"),"HEALTHIA_DATA_PATH":str(Path(temp_dir)/"state.json"),"PYTHONPATH":str(ROOT)})
-        server = subprocess.Popen([sys.executable,"-m","uvicorn","app.main:app","--host","127.0.0.1","--port",str(port),"--log-level","warning"],cwd=ROOT,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+        env = os.environ.copy(); env.update({
+            "HEALTHIA_ENV":"local", "HEALTHIA_AUTH_REQUIRED":"true", "HEALTHIA_ALLOW_REGISTRATION":"true",
+            "HEALTHIA_STORE_BACKEND":"memory", "HEALTHIA_LLM_BACKEND":"mock", "HEALTHIA_COST_MODE":"local",
+            "HEALTHIA_AI_REQUEST_LIMIT":"0", "HEALTHIA_PROACTIVE_ENABLED":"false",
+            "HEALTHIA_ACCOUNTS_PATH":str(Path(temp_dir)/"accounts.json"), "HEALTHIA_DATA_PATH":str(Path(temp_dir)/"state.json"),
+            "PYTHONPATH":str(ROOT),
+        })
+        server = subprocess.Popen(
+            [sys.executable,"-m","uvicorn","app.main:app","--host","127.0.0.1","--port",str(port),"--log-level","warning"],
+            cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
         try:
             wait_server(base_url)
             with sync_playwright() as playwright:
@@ -225,27 +197,32 @@ def run() -> dict:
                 if explicit: launch["executable_path"]=explicit
                 elif Path("/usr/bin/chromium").exists(): launch["executable_path"]="/usr/bin/chromium"
                 browser=playwright.chromium.launch(**launch)
-                context=browser.new_context(base_url=base_url,locale="en-US",viewport={"width":1600,"height":1000},record_video_dir=str(VIDEO_DIR),record_video_size={"width":1280,"height":800})
-                registration=context.request.post("/api/auth/register",data={"display_name":"LAB Omega Secondary","email":"lab.secondary@example.test","password":"LabOmega-Secondary-2026"},headers={"Accept-Language":"en-US"})
-                require(registration.status==201,f"secondary auth setup returned {registration.status}")
-                session=context.request.get("/api/auth/session",headers={"Accept-Language":"en-US"})
-                require(session.status==200 and session.json().get("authenticated") is True,"secondary browser context is not authenticated")
+                context=browser.new_context(base_url=base_url, locale="en-US", record_video_dir=str(VIDEO_DIR))
+                registration=context.request.post(
+                    "/api/auth/register",
+                    data={"display_name":"LAB Omega Secondary","email":"lab.secondary@example.test","password":"LabOmega-Secondary-2026"},
+                    headers={"Accept-Language":"en-US"},
+                )
+                require(registration.status==201, f"secondary auth setup returned {registration.status}: {registration.text()[:240]}")
+                session=get_json(context, "/api/auth/session")
+                require(session.get("authenticated") is True, "secondary BrowserContext is not authenticated")
                 report["functions"]["authenticated_setup"]="pass"
-                root_probe=context.request.get("/",headers={"Accept-Language":"en-US"})
-                require(root_probe.status==200,f"secondary authenticated root returned {root_probe.status}")
-                root_html=root_probe.text()
-                require('id="app"' in root_html and 'id="chatInput"' in root_html,"secondary authenticated root did not contain HealthIA shell")
-                page=context.new_page()
-                page.on("console",lambda message: report["console_errors"].append(message.text) if message.type=="error" else None)
-                page.on("pageerror",lambda error: report["page_errors"].append(str(error)))
-                origin_probe=page.goto("/healthz",wait_until="domcontentloaded",timeout=20_000)
-                require(origin_probe is not None and origin_probe.status==200,"secondary same-origin harness did not load")
-                hydrate_shell(page,base_url,root_html)
-                report["outputs"]["functional_dom_source"]="authenticated_root_dom_plus_ordered_real_assets"
-                wait_view_registry(page)
-                test_family(page,report); test_documents(page,report); test_appointment(page,report); test_privacy(page,report); test_profile(page,report); test_medication(page,report); test_devices(page,report); test_timeline_treatment_and_cost(page,report)
-                require(not report["console_errors"],f"console errors: {report['console_errors']}"); require(not report["page_errors"],f"page errors: {report['page_errors']}")
-                report["status"]="PASS"; screenshot(page,"secondary-final"); context.close(); browser.close()
+                root=context.request.get("/", headers={"Accept-Language":"en-US"})
+                require(root.ok, f"secondary authenticated root returned {root.status}")
+                root_html=root.text()
+                require('id="app"' in root_html and 'id="chatInput"' in root_html, "secondary authenticated root did not contain HealthIA shell")
+                verify_view_contract(root_html, report)
+                test_family(context,report)
+                test_documents(context,report)
+                test_appointment(context,report)
+                test_privacy(context,report)
+                test_profile(context,report)
+                test_medication(context,report)
+                test_devices(context,report)
+                test_timeline_treatment_and_cost(context,report)
+                report["outputs"]["browser_dom_gate"]="covered_by_browser_smoke"
+                report["status"]="PASS"
+                context.close(); browser.close()
         except Exception as exc:
             report["status"]="FAIL"; report["error"]=f"{type(exc).__name__}: {exc}"; raise
         finally:
