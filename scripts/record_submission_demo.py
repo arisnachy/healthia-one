@@ -27,35 +27,11 @@ CLOUD_REVISION = os.getenv("HEALTHIA_CLOUD_REVISION", "")
 CLOUD_IMAGE = os.getenv("HEALTHIA_CLOUD_IMAGE", "")
 CLOUD_PROJECT = os.getenv("HEALTHIA_CLOUD_PROJECT", "")
 CLOUD_REGION = os.getenv("HEALTHIA_CLOUD_REGION", "")
-TARGET_SECONDS = int(os.getenv("HEALTHIA_DEMO_TARGET_SECONDS", "230"))
-
-
-def title_card(page: Page, kicker: str, title: str, body: str, seconds: float) -> None:
-    page.set_content(
-        f"""
-        <!doctype html>
-        <html lang="es">
-        <head>
-          <meta charset="utf-8">
-          <style>
-            html,body{{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f8fb;color:#172033}}
-            body{{display:grid;place-items:center}}
-            main{{width:min(1080px,84vw);padding:64px 72px;background:white;border:1px solid #e4e8f0;border-radius:28px;box-shadow:0 24px 70px rgba(31,45,72,.10)}}
-            .kicker{{font-size:18px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:#52637a;margin-bottom:20px}}
-            h1{{font-size:54px;line-height:1.05;margin:0 0 26px;letter-spacing:-.035em}}
-            p{{font-size:27px;line-height:1.45;margin:0;color:#445067;white-space:pre-line}}
-            .brand{{margin-top:34px;font-size:18px;font-weight:700;color:#718096}}
-          </style>
-        </head>
-        <body><main><div class="kicker">{kicker}</div><h1>{title}</h1><p>{body}</p><div class="brand">HealthIA ONE · The Taskmaster · All Things Agentic</div></main></body>
-        </html>
-        """,
-        wait_until="load",
-    )
-    page.wait_for_timeout(int(seconds * 1000))
+TARGET_SECONDS = int(os.getenv("HEALTHIA_DEMO_TARGET_SECONDS", "235"))
 
 
 def overlay(page: Page, title: str, body: str, seconds: float) -> None:
+    """Place narration text over the live app; never replace the app with a static card."""
     page.evaluate(
         """({title, body}) => {
           let box = document.getElementById('healthia-demo-caption');
@@ -95,10 +71,7 @@ def latest_result_state(page: Page, filename: str, timeout_s: float = 75.0) -> t
         if candidates:
             result = candidates[-1]
             result_id = str(result.get("id") or "")
-            document = next(
-                (item for item in state.get("documents", []) if item.get("related_result_id") == result_id),
-                None,
-            )
+            document = next((item for item in state.get("documents", []) if item.get("related_result_id") == result_id), None)
             if result.get("status") == "parsed" and result_id and document:
                 return state, result, document
         page.wait_for_timeout(750)
@@ -113,8 +86,7 @@ def wait_for_result_mission(page: Page, result_id: str, timeout_s: float = 50.0)
         matches = [
             mission
             for mission in state.get("missions", [])
-            if mission.get("mission_type") == "result_explanation"
-            and result_id in (mission.get("evidence_ids") or [])
+            if mission.get("mission_type") == "result_explanation" and result_id in (mission.get("evidence_ids") or [])
         ]
         if matches:
             last = matches[-1]
@@ -122,6 +94,14 @@ def wait_for_result_mission(page: Page, result_id: str, timeout_s: float = 50.0)
                 return last
         page.wait_for_timeout(650)
     raise RuntimeError(f"submission demo Taskmaster mission did not complete: {last}")
+
+
+def require_message_locale(page: Page, message_id: str, expected: str) -> None:
+    state = api_json(page, "/api/bootstrap")
+    message = next((item for item in state.get("messages", []) if item.get("id") == message_id), None)
+    require(bool(message), f"assistant message {message_id} missing from durable state")
+    actual = str((message.get("metadata") or {}).get("response_locale") or "")
+    require(actual == expected, f"assistant response locale mismatch: expected {expected}, got {actual!r}")
 
 
 def run() -> dict:
@@ -137,13 +117,16 @@ def run() -> dict:
     suffix = uuid4().hex[:10]
     email = f"submission-demo-{suffix}@example.test"
     password = f"SubmissionDemo!{suffix}Aa9"
-    display_name = "Paciente Demo Taskmaster"
+    display_name = "Taskmaster Demo Patient"
     filename = pdf_path.name
     console_errors: list[str] = []
     page_errors: list[str] = []
     report: dict = {
         "status": "running",
         "synthetic_only": True,
+        "demo_language": "en-US",
+        "live_app_only": True,
+        "static_title_cards": False,
         "base_url": BASE_URL,
         "cloud_project": CLOUD_PROJECT,
         "cloud_region": CLOUD_REGION,
@@ -157,6 +140,7 @@ def run() -> dict:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         context = browser.new_context(
+            locale="en-US",
             viewport={"width": 1600, "height": 900},
             record_video_dir=str(video_dir),
             record_video_size={"width": 1600, "height": 900},
@@ -166,25 +150,25 @@ def run() -> dict:
         page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-        title_card(
-            page,
-            "El problema",
-            "La historia del paciente se fragmenta",
-            "PDF, imágenes, dispositivos, tratamientos y conversaciones viven separados.\nHealthIA ONE convierte esa evidencia en misiones durables que el agente ejecuta y puede volver a demostrar.",
-            24,
-        )
-        title_card(
-            page,
-            "La propuesta de valor",
-            "El trabajo no termina cuando el modelo habla",
-            "Una carga de evidencia dispara un flujo real: preservar original → interpretar con Gemini → persistir → vincular al gemelo → recuperar → cerrar la misión con evidencia.",
-            18,
-        )
-
         page.goto(f"{BASE_URL}/login", wait_until="networkidle", timeout=60_000)
         require(page.locator("#registerTab").is_visible(), "registration UI is not visible")
-        overlay(page, "Cloud real", "La toma ya está navegando contra el servicio privado de Cloud Run; no hay mocks en este recorrido.", 8)
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        require("Your health should remember you" in page.locator(".auth-brand h1").inner_text(), "English login UI is not active")
+        report["checks"].append("english_os_locale_login")
+        overlay(
+            page,
+            "The problem",
+            "Patient context is fragmented across conversations, PDFs, images, devices, medications, and memory. HealthIA turns that evidence into durable patient-owned work.",
+            14,
+        )
+        overlay(
+            page,
+            "Live demo — not a slide deck",
+            "This is the real private Cloud Run application. Every next step is an actual browser interaction against the deployed backend.",
+            10,
+        )
         clear_overlay(page)
+
         page.locator("#registerTab").click()
         page.locator('#registerForm input[name="display_name"]').fill(display_name)
         page.locator('#registerForm input[name="email"]').fill(email)
@@ -192,6 +176,7 @@ def run() -> dict:
         page.locator('#registerForm button[type="submit"]').click()
         page.wait_for_url(f"{BASE_URL}/", timeout=30_000)
         page.wait_for_load_state("networkidle")
+        page.wait_for_function("document.documentElement.lang === 'en'")
         session = api_json(page, "/api/auth/session")
         require(session.get("authenticated") is True, "submission demo registration failed")
         patient_id = str((session.get("account") or {}).get("patient_id") or "")
@@ -204,42 +189,47 @@ def run() -> dict:
         report["patient_id"] = patient_id
         report["readiness"] = {key: readiness.get(key) for key in ("ready", "model", "adk_ready", "ai_ready", "store_backend", "evidence_backend", "auth_required")}
         report["checks"].append("live_cloud_runtime_ready")
-        overlay(page, "Paciente aislado y autenticado", "La cuenta sintética inicia limpia. Firestore mantiene el estado por paciente y GCS conserva la evidencia original por identidad.", 12)
+        overlay(page, "Patient-scoped continuity", "The synthetic patient starts with an isolated record. Firestore holds canonical state; private GCS preserves original evidence.", 10)
         clear_overlay(page)
 
-        complaint = "Desde ayer me arde al orinar y tengo que ir al baño a cada rato. Quiero orientación sobre qué información hace falta."
+        complaint = "Since yesterday I have burning pain when I urinate and I need to go very often. Help me understand what information is still missing."
         page.locator("#chatInput").fill(complaint)
         page.locator("#sendButton").click()
         assistant_id, status = wait_for_dynamic_or_orientation(page)
         require(status == "dynamic_clinical_questions", f"first clinical response was not dynamic: {status}")
+        require_message_locale(page, assistant_id, "en")
         page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
         first_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
         require(first_block.locator(".clinical-question").count() == 5, "first live block is not five questions")
-        report["checks"].append("live_gemini_adk_question_block_1")
-        overlay(page, "Gemini + Google ADK", "Las cinco preguntas son específicas del caso. ADK ejecuta el tool clínico autorizado y registra entrevista + seguridad antes de la respuesta estructurada.", 20)
+        require("Case-specific questions" in first_block.inner_text(), "clinical block chrome is not English")
+        report["checks"].append("live_english_gemini_adk_question_block_1")
+        overlay(page, "Gemini + Google ADK", "ADK executes the authorized clinical baseline tool before Gemini returns exactly five case-specific questions in the patient's language.", 17)
         clear_overlay(page)
         answer_visible_block(page)
 
         assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
         require(status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}, f"second response was not adaptive: {status}")
+        require_message_locale(page, assistant_id, "en")
         second_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
         require(second_block.locator(".clinical-question").count() == 5, "second live block is not five questions")
-        report["checks"].append("live_gemini_adk_question_block_2")
-        overlay(page, "Memoria clínica del turno", "El segundo bloque recibe las preguntas y respuestas anteriores y debe evitar volver a pedir hechos ya conocidos.", 18)
+        report["checks"].append("live_english_gemini_adk_question_block_2")
+        overlay(page, "Conversation memory", "The second block receives the real prior questions and answers and must avoid asking for facts the patient already provided.", 15)
         clear_overlay(page)
         answer_visible_block(page)
 
         assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
         if status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}:
+            require_message_locale(page, assistant_id, "en")
             third_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
             require(third_block.locator(".clinical-question").count() == 5, "third live block is malformed")
-            overlay(page, "El modelo decide si falta evidencia", "Si todavía hay una incertidumbre clínica relevante, HealthIA pide otro bloque en vez de cerrar por una regla rígida.", 10)
+            overlay(page, "The model decides if more evidence is needed", "HealthIA asks another block only when a missing fact can materially change the orientation.", 8)
             clear_overlay(page)
             answer_visible_block(page)
             assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
         require(status == "clinical_ai_orientation_completed", f"clinical orientation did not complete: {status}")
-        report["checks"].append("live_clinical_orientation_completed")
-        overlay(page, "Orientación segura", "La conversación termina en orientación para el paciente, no en prescripción autónoma ni diagnóstico inventado.", 14)
+        require_message_locale(page, assistant_id, "en")
+        report["checks"].append("live_english_clinical_orientation_completed")
+        overlay(page, "Safe orientation", "The workflow ends in patient guidance and a human-care next step — not an invented diagnosis or autonomous prescription.", 11)
         clear_overlay(page)
 
         page.locator("#resultFile").set_input_files(str(pdf_path))
@@ -250,21 +240,21 @@ def run() -> dict:
         report["result_id"] = result_id
         report["document_id"] = document_id
         report["checks"].append("multimodal_result_persisted_with_original")
-        page.locator('[data-open="results"]').click()
+        page.locator('.main-nav [data-open="results"]').click()
         page.wait_for_timeout(800)
-        overlay(page, "Taskmaster: acción, no sólo texto", "El PDF original ya está en GCS. Gemini 3.5 Flash extrajo sólo lo legible, Firestore guardó el resultado y el gemelo quedó enlazado al documento original.", 22)
+        overlay(page, "Evidence-first multimodal workflow", "The original PDF is preserved first. Gemini extracts readable evidence, Firestore stores the result, and the clinical twin keeps provenance back to the original.", 17)
         clear_overlay(page)
 
         page.locator('.main-nav [data-open="chat"]').click()
-        page.locator("#chatInput").fill(f"Explícame el resultado {filename} que acabo de subir y confirma que quedó guardado.")
+        page.locator("#chatInput").fill(f"Explain the result {filename} I just uploaded and confirm that it was saved with the original file.")
         page.locator("#sendButton").click()
         mission = wait_for_result_mission(page, result_id)
         require(document_id in (mission.get("evidence_ids") or []), "completed mission lost original-document evidence")
         report["mission_id"] = str(mission.get("id") or "")
-        report["checks"].append("taskmaster_result_mission_completed")
-        page.locator('[data-open="missions"]').click()
+        report["checks"].append("english_taskmaster_result_mission_completed")
+        page.locator('.main-nav [data-open="missions"]').click()
         page.wait_for_timeout(700)
-        overlay(page, "Misión cerrada por evidencia", "La misión sólo aparece como COMPLETED porque el resultado persistido y el documento original pudieron recuperarse y correlacionarse.", 18)
+        overlay(page, "Taskmaster closure", "The mission is COMPLETED only because the persisted result and original document were recovered and correlated. The agent did work that survives the chat.", 15)
         clear_overlay(page)
 
         page.locator("#accountPill").click()
@@ -281,36 +271,29 @@ def run() -> dict:
         require(any(item.get("id") == document_id for item in restored.get("documents", [])), "document disappeared after relogin")
         require(any(item.get("id") == mission.get("id") and item.get("status") == "completed" for item in restored.get("missions", [])), "mission disappeared after relogin")
         report["checks"].append("relogin_continuity")
-        overlay(page, "Continuidad real", "Tras salir y volver a entrar, el paciente recupera resultado, original y misión completada. El estado no vive en la pestaña del navegador.", 15)
+        overlay(page, "Durable continuity", "After logout and login, the patient still has the result, original document, and completed mission. The state does not live in the browser tab.", 12)
         clear_overlay(page)
 
         readiness = api_json(page, "/api/readiness")
-        title_card(
-            page,
-            "Prueba de Google Cloud",
-            "Backend ejecutándose en Cloud Run",
-            (
-                f"URL: {BASE_URL}\n"
-                f"Proyecto: {CLOUD_PROJECT or 'healthia-6088a'} · Región: {CLOUD_REGION or 'us-central1'}\n"
-                f"Revisión: {CLOUD_REVISION or 'revision verificada por workflow'}\n"
-                f"Gemini: {readiness.get('model')} · ADK ready: {readiness.get('adk_ready')}\n"
-                f"Estado: {readiness.get('store_backend')} · Evidencia: {readiness.get('evidence_backend')}"
-            ),
-            22,
+        page.locator('.main-nav [data-open="chat"]').click()
+        cloud_summary = (
+            f"Cloud Run: {BASE_URL} · Project: {CLOUD_PROJECT or 'healthia-6088a'} · Region: {CLOUD_REGION or 'us-central1'} · "
+            f"Revision: {CLOUD_REVISION or 'workflow-verified'} · Gemini: {readiness.get('model')} · ADK: {readiness.get('adk_ready')} · "
+            f"State: {readiness.get('store_backend')} · Evidence: {readiness.get('evidence_backend')}"
         )
-        page.goto(f"{BASE_URL}/api/readiness", wait_until="networkidle", timeout=30_000)
-        page.wait_for_timeout(12_000)
+        overlay(page, "Visible Google Cloud proof", cloud_summary, 17)
         report["checks"].append("visible_run_app_and_live_readiness")
+        clear_overlay(page)
 
         elapsed = time.monotonic() - started
-        remaining = max(15.0, TARGET_SECONDS - elapsed)
-        title_card(
+        remaining = max(12.0, TARGET_SECONDS - elapsed)
+        overlay(
             page,
-            "Cierre",
             "Your health never starts over.",
-            "HealthIA ONE demuestra el ciclo completo: contexto → decisión → acción → evidencia durable → misión completada.\nLa conversación puede terminar; la continuidad del paciente no.",
+            "HealthIA ONE completes the loop in one live application: context → decision → action → durable evidence → completed mission. The conversation can end; patient continuity does not.",
             remaining,
         )
+        clear_overlay(page)
 
         require(not page_errors, f"browser page errors during submission demo: {page_errors}")
         require(not console_errors, f"browser console errors during submission demo: {console_errors}")
