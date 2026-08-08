@@ -2,6 +2,10 @@ name: Candidate Cloud deployment permission readiness
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/cloud-proof-trigger.txt
 
 permissions:
   contents: read
@@ -12,6 +16,7 @@ concurrency:
 
 jobs:
   cloud-permissions:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     timeout-minutes: 8
     steps:
@@ -19,6 +24,10 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: kira/event-driven-results-twin-p1
+          fetch-depth: 1
+
+      - name: Record candidate SHA
+        run: echo "HEALTHIA_CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -36,6 +45,22 @@ jobs:
 
       - name: Test deploy permissions without mutating Cloud
         run: python deployment/check_cloud_permissions.py --project healthia-6088a --json-out deployment/cloud-permissions-latest.json
+
+      - name: Bind permission evidence to exact candidate
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path=Path('deployment/cloud-permissions-latest.json')
+          payload={}
+          if path.exists():
+              payload=json.loads(path.read_text(encoding='utf-8'))
+          payload['candidate_sha']=os.environ.get('HEALTHIA_CANDIDATE_SHA','')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          PY
 
       - name: Upload sanitized permission evidence
         if: always()
