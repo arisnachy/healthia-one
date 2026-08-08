@@ -88,16 +88,10 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
     checkpoint(f"login_{expected_lang}_pass")
 
 
-def registered_context(browser: Browser, base_url: str, report: dict) -> BrowserContext:
-    """Create a real account through the UI and prove its cookie/session boundary."""
+def register_and_export_session(browser: Browser, base_url: str, report: dict) -> dict:
+    """Register in the real UI, prove the session, then export its signed cookie."""
     checkpoint("register_start")
-    context = browser.new_context(
-        base_url=base_url,
-        locale="en-US",
-        viewport={"width": 1600, "height": 1000},
-        record_video_dir=str(VIDEO_DIR),
-        record_video_size={"width": 1280, "height": 800},
-    )
+    context = browser.new_context(base_url=base_url, locale="en-US", viewport={"width": 1600, "height": 1000})
     page = context.new_page()
     configure_page(page, report)
     page.goto("/login", wait_until="networkidle")
@@ -124,33 +118,64 @@ def registered_context(browser: Browser, base_url: str, report: dict) -> Browser
     report["outputs"]["browser_session_cookie_after_register"] = {
         "present": True,
         "secure": False,
+        "httpOnly": bool(session_cookie.get("httpOnly")),
         "sameSite": session_cookie.get("sameSite"),
         "path": session_cookie.get("path"),
+        "domain": session_cookie.get("domain"),
     }
     report["outputs"]["post_register_session_authenticated"] = True
     checkpoint("registration_session_pass")
 
-    page.close(run_before_unload=False)
-    checkpoint("registration_page_closed")
-    return context
+    exported = {
+        "name": str(session_cookie["name"]),
+        "value": str(session_cookie["value"]),
+        "url": base_url,
+        "httpOnly": bool(session_cookie.get("httpOnly", True)),
+        "secure": False,
+        "sameSite": str(session_cookie.get("sameSite") or "Lax"),
+    }
+    context.close()
+    checkpoint("registration_context_closed")
+    return exported
 
 
-def open_authenticated_shell(context: BrowserContext, base_url: str, report: dict) -> Page:
-    checkpoint("authenticated_page_create_start")
+def open_authenticated_context(browser: Browser, base_url: str, session_cookie: dict, report: dict) -> tuple[BrowserContext, Page]:
+    """Reopen HealthIA from the exact signed session in a clean browser context."""
+    checkpoint("continuity_context_start")
+    context = browser.new_context(
+        base_url=base_url,
+        locale="en-US",
+        viewport={"width": 1600, "height": 1000},
+        record_video_dir=str(VIDEO_DIR),
+        record_video_size={"width": 1280, "height": 800},
+    )
+    context.add_cookies([session_cookie])
+    checkpoint("continuity_cookie_restored")
+
+    session = context.request.get("/api/auth/session", headers={"Accept-Language": "en-US"})
+    require(session.status == 200 and session.json().get("authenticated") is True, "signed session did not survive clean browser context")
+    report["checks"]["signed_session_survives_clean_browser_context"] = "pass"
+
+    root_probe = context.request.get("/", headers={"Accept-Language": "en-US"})
+    require(root_probe.status == 200, f"authenticated root returned {root_probe.status}")
+    root_html = root_probe.text()
+    require('id="app"' in root_html and 'id="chatInput"' in root_html, "authenticated root did not return HealthIA shell HTML")
+    report["checks"]["authenticated_root_returns_real_shell"] = "pass"
+    checkpoint("authenticated_root_probe_pass")
+
     page = context.new_page()
     configure_page(page, report)
-    checkpoint("authenticated_page_created")
     started = time.monotonic()
-    page.goto(f"{base_url}/", wait_until="commit", timeout=20_000)
-    checkpoint("authenticated_navigation_committed")
+    response = page.goto("/", wait_until="domcontentloaded", timeout=20_000)
+    require(response is not None and response.status == 200, f"browser root navigation failed: {getattr(response, 'status', None)}")
     require(page.url.rstrip("/") == base_url, f"authenticated navigation did not stay on app shell: {page.url}")
-    page.locator("#app").wait_for(state="attached", timeout=20_000)
-    page.locator("#chatInput").wait_for(state="visible", timeout=20_000)
+    page.locator("#app").wait_for(state="attached", timeout=10_000)
+    page.locator("#chatInput").wait_for(state="visible", timeout=10_000)
     report["outputs"]["authenticated_shell_ready_ms"] = int((time.monotonic() - started) * 1000)
     report["outputs"]["functional_page_url"] = page.url
     report["checks"]["authenticated_navigation_from_registered_session"] = "pass"
+    checkpoint("authenticated_navigation_pass")
 
-    checkpoint("composer_probe_start")
     composer = page.locator("#chatInput")
     composer.fill("LAB Omega readiness probe")
     require(composer.input_value() == "LAB Omega readiness probe", "authenticated composer rejected text")
@@ -159,7 +184,7 @@ def open_authenticated_shell(context: BrowserContext, base_url: str, report: dic
     report["checks"]["authenticated_shell_interactive"] = "pass"
     screenshot(page, "home-authenticated-en")
     checkpoint("register_and_composer_pass")
-    return page
+    return context, page
 
 
 def exercise_registered_views(page: Page, report: dict) -> None:
@@ -332,8 +357,8 @@ def run() -> dict:
                 browser = playwright.chromium.launch(**launch)
                 login_language_probe(browser, base_url, "en-US", "en", "Your health should remember you", report)
                 login_language_probe(browser, base_url, "es-DO", "es", "Tu salud debería recordarte", report)
-                context = registered_context(browser, base_url, report)
-                page = open_authenticated_shell(context, base_url, report)
+                session_cookie = register_and_export_session(browser, base_url, report)
+                context, page = open_authenticated_context(browser, base_url, session_cookie, report)
                 exercise_registered_views(page, report)
 
                 checkpoint("collapse_start")
