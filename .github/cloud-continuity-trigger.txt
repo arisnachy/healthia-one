@@ -1,6 +1,6 @@
 HealthIA ONE exact-candidate Cloud Run cross-revision continuity proof
 
-enabled=true
-Purpose: prove that canonical patient state, completed Taskmaster mission, clinical twin provenance and original GCS evidence survive a genuinely new Cloud Run revision while patient A/B isolation remains intact.
+enabled=false
+Purpose: explicit opt-in only for one controlled cross-revision continuity proof.
 Method: prepare durable synthetic state on the current proven revision, force a new revision with the exact same container image using a harmless revision marker, then re-authenticate and independently read back Firestore/GCS/application state.
-Cost policy: one controlled continuity proof; no continuous deployment.
+Cost policy: disabled after run 31262903731 was frozen on candidate e01aa35b912def31bb4e68b95cb236582090b476; normal commits must not create revisions or consume Gemini.
