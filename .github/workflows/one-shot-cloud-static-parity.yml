@@ -1,0 +1,79 @@
+name: One-shot Cloud static asset parity diagnosis
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static-parity:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-judge
+      CANDIDATE_SHA: 928ad1a2b666f3ffe5e2c83891fb2dfef9c5ec9a
+      EXPECTED_REVISION: healthia-one-judge-00003-dd9
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 1
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+      - name: Compare served assets byte-for-byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p deployment/static-parity
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test "$revision" = "$EXPECTED_REVISION"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          echo "::add-mask::$token"
+          for asset in app.js account.js clinical-council.js index.html; do
+            if [ "$asset" = index.html ]; then
+              path="/"
+              local="web/index.html"
+            else
+              path="/assets/$asset"
+              local="web/$asset"
+            fi
+            curl -fsS -H "Authorization: Bearer ${token}" "$url$path" -o "deployment/static-parity/served-$asset"
+            local_sha="$(sha256sum "$local" | awk '{print $1}')"
+            served_sha="$(sha256sum "deployment/static-parity/served-$asset" | awk '{print $1}')"
+            printf '%s local=%s served=%s equal=' "$asset" "$local_sha" "$served_sha" | tee -a deployment/static-parity/hashes.txt
+            if cmp -s "$local" "deployment/static-parity/served-$asset"; then
+              echo true | tee -a deployment/static-parity/hashes.txt
+            else
+              echo false | tee -a deployment/static-parity/hashes.txt
+            fi
+          done
+          grep -n -E 'runtimeLabel|falta|ai_ready|patientName|heroPatientName' deployment/static-parity/served-app.js > deployment/static-parity/served-app-key-lines.txt || true
+          grep -n -E 'accountEmail|accountDialog|session' deployment/static-parity/served-account.js > deployment/static-parity/served-account-key-lines.txt || true
+          python - <<'PY'
+          import json, pathlib, os
+          hashes=pathlib.Path('deployment/static-parity/hashes.txt').read_text().splitlines()
+          pathlib.Path('deployment/static-parity/runtime.json').write_text(json.dumps({
+            'candidate_sha':os.environ['CANDIDATE_SHA'],
+            'revision':os.environ['EXPECTED_REVISION'],
+            'hashes':hashes,
+          },indent=2),encoding='utf-8')
+          PY
+      - name: Upload static parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-cloud-static-parity
+          path: deployment/static-parity
+          if-no-files-found: error
+          retention-days: 7
