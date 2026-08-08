@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-22.04
-    timeout-minutes: 42
+    timeout-minutes: 48
     env:
       HEALTHIA_LLM_BACKEND: mock
       HEALTHIA_STORE_BACKEND: memory
@@ -56,14 +56,24 @@ jobs:
           path: dist/browser-smoke
           if-no-files-found: warn
           retention-days: 30
-      - name: LAB OMEGA full-window functional laboratory
+      - name: LAB OMEGA core full-window functional laboratory
         run: python scripts/lab_omega.py
-      - name: Upload LAB OMEGA evidence
+      - name: Upload LAB OMEGA core evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: HealthIA-LAB-OMEGA
           path: dist/lab-omega
+          if-no-files-found: warn
+          retention-days: 30
+      - name: LAB OMEGA secondary windows and state-changing functions
+        run: python scripts/lab_omega_secondary.py
+      - name: Upload LAB OMEGA secondary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-LAB-OMEGA-secondary
+          path: dist/lab-omega-secondary
           if-no-files-found: warn
           retention-days: 30
       - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py deployment/verify_cloud_demo.py
@@ -191,7 +201,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install playwright
           python -m playwright install --with-deps chromium
-      - name: Record one continuous unmocked submission demo
+      - name: Record one continuous unmocked English submission demo
         env:
           HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
           HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
@@ -199,7 +209,7 @@ jobs:
           HEALTHIA_CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
           HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
-          HEALTHIA_DEMO_TARGET_SECONDS: "230"
+          HEALTHIA_DEMO_TARGET_SECONDS: "235"
         run: python scripts/record_submission_demo.py
       - name: Verify recording duration
         shell: bash
