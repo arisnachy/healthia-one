@@ -1,192 +1,209 @@
 # HealthIA ONE — Devpost submission draft
 
-> **Status:** judge-facing draft. Replace the two explicit placeholders only after the real Cloud strict proof and final unedited video exist. Do not convert unproven claims into marketing copy.
-
 ## Category
 
 **The Taskmaster**
 
-## Project URL
+## One-line pitch
 
-`[CLOUD_RUN_URL_AFTER_STRICT_PROOF]`
-
-The hosted URL is added only after the exact deployed candidate passes `deployment/verify_cloud_demo.py`.
-
-## Repository
-
-https://github.com/arisnachy/healthia-one
-
-## Demo video
-
-`[FINAL_UNEDITED_4_MIN_VIDEO_URL]`
-
-## One-line description
-
-**HealthIA ONE is a patient-owned continuity agent that turns scattered health evidence into durable, verifiable missions instead of one-off chatbot answers.**
+**HealthIA ONE turns a patient's scattered health evidence into durable, patient-scoped missions: it asks what is missing, preserves the original, uses Gemini + Google ADK to do the work, updates a longitudinal clinical twin, and closes the task only when the evidence-backed outcome actually exists.**
 
 ## The problem
 
-Patients carry pieces of their health across laboratory PDFs, imaging reports, devices, prescriptions, appointments, family history and memory. A conventional chatbot can explain one item in one conversation, but it does not reliably preserve the original evidence, update longitudinal state, prove what action was completed, or recover the same evidence later under the same patient identity.
+A patient's health context is fragmented across PDFs, images, laboratory portals, medications, devices, family history and memory. Most AI health experiences are still transient chat: they can discuss a result once but do not reliably preserve the original evidence, reconnect it to longitudinal state, or prove that a multi-step task was actually completed.
 
-HealthIA ONE is designed around a different contract: **your health never starts over**. The patient owns a persistent state, and the agent team activates only when a goal requires work.
+HealthIA ONE treats continuity itself as the job.
 
 ## What HealthIA ONE does
 
-### Adaptive clinical conversation
+### Adaptive patient interview
 
-A patient can describe a concern in natural language. Gemini 3.5 Flash and Google ADK generate five case-specific questions from the complaint, existing patient context and previous answers. Later blocks receive accumulated question/answer memory and avoid blindly repeating the first block. Gemini decides when another material question block is useful and when the system should stop asking and provide a patient-facing orientation.
+The patient describes a problem in natural language. Google ADK runs on demand, executes a real aggregate clinical baseline tool containing deterministic interview + safety checks, and Gemini 3.5 Flash generates exactly five context-specific questions under a structured-output contract. Later blocks receive the prior questions/answers so the system can avoid asking known facts again and decide when the interview is sufficiently complete to orient the patient to the next safe step.
 
-The Google ADK runtime always includes interview and safety tools and selects at most two additional specialists for the current goal. Agent execution is demand-driven instead of a permanent background swarm.
+### Evidence-first multimodal results
 
-### Closed-loop Taskmaster result mission
+When the patient uploads a PDF or clinical image:
 
-The central Taskmaster workflow is more than summarization:
+1. HealthIA stores the **original bytes first** in private Google Cloud Storage;
+2. Gemini 3.5 Flash on Vertex AI extracts only readable/visible evidence into structured JSON;
+3. Firestore stores the patient-scoped result/document state;
+4. the clinical twin receives provenance linking the derived result to the original;
+5. if AI interpretation fails, the original remains available and the result stays pending instead of inventing findings.
 
-1. the patient uploads a synthetic PDF/image;
-2. HealthIA persists the original bytes before interpretation;
-3. Gemini 3.5 Flash on Vertex AI performs multimodal extraction under a controlled JSON schema;
-4. the structured result is committed to patient state;
-5. the clinical twin is updated with provenance to the result and original document;
-6. when the patient later asks about that study, HealthIA retrieves the exact persisted evidence;
-7. the system returns the saved patient explanation and original link;
-8. the mission becomes `COMPLETED` only when the persisted result really exists;
-9. the completed mission carries `result_id`, `document_id` and explicit closure evidence;
-10. the outcome survives logout/login and remains isolated from another authenticated synthetic patient.
+PDFs use Gemini 3 low visual-media resolution with native PDF text to reduce latency/cost; clinical images retain high visual resolution.
 
-A live GitHub Actions proof ran this flow with a **one-model-request ceiling**. After Gemini had extracted the PDF, HealthIA still completed the mission from durable state without spending a second model request just to paraphrase the same evidence.
+### Closed-loop Taskmaster mission
 
-### Patient-owned longitudinal state
+A later request such as “explain the result I just uploaded” retrieves the **persisted** result and original-document metadata, returns the saved patient explanation/original link and closes a `result_explanation` mission only when the evidence exists. The completed mission retains correlated `result_id`, `document_id` and closure markers.
 
-HealthIA organizes synthetic patient information into a timeline and clinical twin spanning results, vitals, weight/activity, medication check-ins, appointments, family history, documents, missions and auditable events.
+That closed outcome survives logout/login and a real Cloud Run revision while remaining invisible to another authenticated patient.
 
-Original uploaded evidence remains independently retrievable rather than being replaced by model output.
+## Why it is agentic
 
-### Identity and safety boundaries
+HealthIA is not a permanent swarm and not a prompt wrapper. Work is event-driven and demand-driven:
 
-- salted scrypt password hashes;
-- signed HttpOnly sessions;
-- patient-scoped Firestore/JSON/Memory state;
-- patient-scoped documents, SSE and device ingestion;
-- signed device credentials bound to patient + device + connection;
-- deterministic safety boundary before agent reasoning;
-- no autonomous prescribing or treatment changes;
-- no fabricated multimodal interpretation when evidence cannot be read reliably.
+```text
+patient/event goal
+  → auth + deterministic safety boundary
+  → load patient-scoped longitudinal state
+  → Google ADK / Gemini action only when needed
+  → durable outcome + evidence
+  → patient-visible state update
+```
 
-## Technologies used
+The clinical ADK path executes one real function-tool trajectory (`inspect_clinical_baseline`) that runs mandatory interview + safety checks. Tool execution is audited separately, and the runtime reconstructs specialist evidence from what actually executed instead of trusting the model to claim it did.
 
-### Google AI and agents
+## Google technologies
 
 - **Gemini 3.5 Flash**
 - **Vertex AI** through Google Cloud ADC/service identity
 - **Google Agent Development Kit (ADK)**
-- **Google Gen AI SDK**
-- structured multimodal output using JSON schema
+- **Cloud Run**
+- **Firestore**
+- **Google Cloud Storage**
+- **Secret Manager**
+- **Cloud Build**
+- Google GenAI SDK / Interactions transport
 
-### Google Cloud
-
-- **Cloud Run** — FastAPI application runtime; scale-to-zero demo configuration
-- **Firestore Native** — canonical patient/account/mission state in Cloud mode
-- **Cloud Storage** — private original clinical evidence
-- **Secret Manager** — application session/device signing secrets
-- **Cloud Build** — source build using a dedicated build identity
-- **IAM** — separate provisioning, build and runtime identities
-
-The Cloud Run runtime does **not** receive a Gemini API key. It uses its Google Cloud service identity for Vertex AI.
-
-### Application stack
-
-- Python 3.12
-- FastAPI
-- Pydantic
-- Playwright / Chromium E2E
-- vanilla browser JavaScript/CSS
-- Android Health Connect bridge contract
-
-## Other data sources
-
-The judge/demo environment uses **synthetic data only**. No real patient records or identifiers are required for the hackathon proof.
-
-The product can accept patient-entered structured data and synthetic PDF/image evidence. The Android bridge defines the patient-bound contract for Health Connect-compatible activity/vitals data.
+No Gemini API key is injected into the Cloud Run proof deployment.
 
 ## Architecture
 
-The full diagram and trust boundaries are documented in `docs/ARCHITECTURE.md`.
+See `docs/ARCHITECTURE.md` for the Mermaid architecture and evidence-flow diagrams.
 
-Core flow:
+High-level path:
 
-`Patient → Cloud Run/FastAPI → safety + demand-driven orchestrator → Google ADK / Gemini 3.5 Vertex → Firestore + private GCS → clinical twin/timeline → patient`
+```text
+Patient UI
+  → Cloud Run / FastAPI
+  → patient auth + policy boundary
+     ↳ Google ADK Runner → interview+safety tool → Gemini 3.5 structured questions
+     ↳ multimodal pipeline → original GCS → Gemini 3.5 extraction
+  → Firestore canonical state + missions
+  → provenance-linked clinical twin
+  → patient UI / persisted outcome
+```
 
-Build and runtime identities are separated. The build service account receives build-specific capability, while the Cloud Run runtime receives only the application permissions needed for Vertex AI, Firestore, evidence storage and application secrets.
+## Data sources
 
-## Evidence
+The hackathon/demo paths use **synthetic patients and synthetic clinical files only**. The system may also accept patient-entered longitudinal state and a signed Android/Health Connect device bridge contract, but no real patient record is required for the submission demo.
 
-### Live Vertex Taskmaster proof
+## Production-minded boundaries
 
-- GitHub Actions run: `31228561751`
-- candidate SHA: `d01c06fc40d074c15da4f43513aff32dd93060c9`
-- project: `healthia-6088a`
-- model: `gemini-3.5-flash`
-- transport: Vertex AI / Google Cloud ADC
-- model request ceiling: 1
-- proof artifact id: `9012957895`
+- signed `HttpOnly` patient sessions;
+- salted `scrypt` account hashes;
+- patient-scoped Firestore state;
+- private patient-scoped GCS object paths;
+- cross-patient document denial;
+- signed patient/device/connection identity;
+- separate Cloud Build and Cloud Run service identities;
+- explicit AI request ceilings;
+- Cloud Run min `0`, max `1` for the bounded proof environment;
+- proactive agent work disabled by default;
+- original evidence persisted before model interpretation;
+- fail-closed multimodal behavior;
+- explicit opt-in billable Cloud proof workflows.
 
-### Current deterministic release candidate
+## What we actually proved
 
-- candidate SHA: `fef8b2af898af3c0117c5a62fa57e476bdc9f560`
-- GitHub Actions run: `31229957923`
-- pytest: passed
-- fourteen full-system workflows: passed
-- Chromium E2E: passed
-- compile/smoke/Judge/frontend/PowerShell checks: passed
-- release ZIP verification: passed
-- pytest from extracted release ZIP: passed
-- release artifact id: `9013468149`
+### Exact-candidate Cloud + browser — PASS
 
-### Cloud deployment evidence
+GitHub Actions run **`31262429792`** froze candidate SHA `a28955c3641c37a9e5a06f5f0ccf943ccb197bbd`, deployed it to Google Cloud and passed both the strict API proof and a complete unmocked Chromium journey.
 
-`[ADD_CLOUD_RUN_REVISION_AND_STRICT_PROOF_ARTIFACT_AFTER_GATE_PASSES]`
+- Cloud Run proof revision: `healthia-one-demo-00012-jvl`
+- Cloud Run URL: `https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app`
+- Gemini 3.5 Flash / Vertex AI / ADC
+- real Google ADK tool trajectory
+- two adaptive five-question blocks
+- multimodal PDF extraction
+- Firestore state
+- private GCS original evidence
+- clinical-twin provenance
+- completed Taskmaster mission
+- two-patient isolation
+- logout/relogin restoration
+- zero browser console/page errors
+
+Sanitized permanent evidence: `hackathon/evidence/cloud_exact_candidate_proof.json`.
+
+### Cross-revision continuity — PASS
+
+GitHub Actions run **`31262903731`** prepared durable patient A/B state, forced a genuinely new Cloud Run revision with the **same image**, then reauthenticated and independently read back application/Firestore/GCS state.
+
+- before: `healthia-one-demo-00013-2bz`
+- after: `healthia-one-demo-00014-ns8`
+- same image: true
+- result/document/completed mission/twin persisted
+- GCS generation unchanged
+- original SHA-256 unchanged
+- patient B remained isolated
+
+Sanitized permanent evidence: `hackathon/evidence/cloud_revision_continuity_proof.json`.
+
+### Earlier one-request Vertex proof — PASS
+
+Run `31228561751` demonstrated that after one Gemini multimodal request persists the original/result/twin, HealthIA can retrieve that evidence and close the Taskmaster mission without spending a second Gemini request merely to restate it.
+
+### Evidence excluded
+
+Run `31203021748` ended in HTTP 429 due depleted credits/quota and is **not** counted as passing evidence.
+
+Full index: `docs/EVIDENCE.md`.
 
 ## Findings and learnings
 
-### 1. Agentic value is easier to prove when completion is a state transition
+1. **Agentic does not mean always-on.** For a patient system, event-driven/demand-driven agents are easier to audit, cheaper and more natural than a permanent swarm.
+2. **Evidence must exist before interpretation.** Persisting original bytes before Gemini creates a safe provenance boundary and makes failure recoverable.
+3. **Tool evidence should come from execution, not model prose.** HealthIA reconstructs the ADK specialist trace from tools that actually ran.
+4. **Latency needs architecture, not bigger timeouts.** The clinical path became reliable after collapsing mandatory checks into one ADK tool call, using Gemini minimal thinking, structured output and bounded response size.
+5. **Multimodal latency is media-dependent.** Low PDF visual resolution + native text and a compact schema removed a live Cloud timeout without lowering image fidelity for clinical images.
+6. **Durability must be tested across a process boundary.** Logout/login is useful but not enough; the project now proves persistence across a genuinely new Cloud Run revision.
+7. **Cost control is part of architecture.** A legacy automatic deployment route discovered during testing was retired; billable evidence workflows now require explicit opt-in.
 
-A useful agent should not be judged only by how convincing its text looks. HealthIA missions therefore have explicit durable states and correlated evidence. The Taskmaster proof checks `COMPLETED`, result/document IDs and closure markers rather than accepting a good-looking answer.
+## Spin-up instructions
 
-### 2. Model calls and workflow completion should be decoupled
+### Local zero-spend mode
 
-The one-request proof exposed an important design principle: Gemini should do the work that requires a model, while persisted state should handle later deterministic retrieval and completion. Re-calling an LLM to repeat saved evidence increases cost and makes an agent less reliable, not more agentic.
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[test]"
+HEALTHIA_LLM_BACKEND=mock HEALTHIA_COST_MODE=local HEALTHIA_AI_REQUEST_LIMIT=0 uvicorn app.main:app --port 8000
+```
 
-### 3. Original evidence must survive model interpretation
+Windows also includes `deployment/run-local-secure.ps1`.
 
-HealthIA stores uploaded bytes first and treats the model output as a derived interpretation. This keeps provenance available for later review and prevents the clinical twin from becoming an untraceable source of truth.
+### Cloud proof deployment
 
-### 4. Demand-driven specialists are more useful than a permanent swarm
+```powershell
+.\deployment\deploy-cloud-demo.ps1 `
+  -ProjectId YOUR_PROJECT_ID `
+  -RequestLimit 20
+```
 
-A fixed multi-agent swarm adds latency and cost even when a goal only needs two capabilities. HealthIA requires interview+safety for clinical questioning and selects only the additional specialists needed for the current case.
+The project expects required Google Cloud APIs/permissions to be preconfigured and fails closed otherwise. See `README.md` and `deployment/check_cloud_permissions.py`.
 
-### 5. Cloud proof should be independent from deployment success
+## Repository
 
-A successful `gcloud run deploy` command is not enough. HealthIA has a separate strict verifier that must demonstrate patient isolation, Vertex/ADK behavior, Firestore persistence, private GCS evidence and clinical-twin provenance on the deployed service.
+`https://github.com/arisnachy/healthia-one`
 
-## How to run
+## Hosted project
 
-The README contains reproducible local and Cloud instructions.
+**Final submission choice:** use the proven Cloud Run deployment only if judge access is intentionally enabled/provided. The current proof service is private at the Cloud Run IAM boundary even though the application itself also has patient authentication.
 
-Local mode defaults to zero model spend. The final hackathon Cloud architecture uses Gemini 3.5 Flash on Vertex AI with Google Cloud ADC.
+Proven Cloud URL: `https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app`
 
-## Safety / scope
+If the final Devpost field requires direct interactive judge access, either provide an explicit judge-access mechanism or omit the optional hosted URL rather than claiming that a private endpoint is publicly testable.
 
-HealthIA ONE is a synthetic hackathon release candidate. It is not a medical device, emergency service or autonomous prescription system. It does not claim clinical effectiveness, regulatory clearance or production security certification.
+## Demo video
 
-## Final recording plan
+**FINAL VIDEO URL: TODO**
 
-`docs/DEMO_SCRIPT.md` contains the approximately four-minute unedited sequence. The final take will show:
+Use `docs/DEMO_SCRIPT.md`. The final recording must be approximately four minutes, unedited, and visibly show the live application plus Google Cloud evidence.
 
-1. Cloud Run URL/revision and Vertex evidence;
-2. live adaptive Gemini + ADK questioning;
-3. real synthetic PDF upload;
-4. original evidence + clinical twin update;
-5. Taskmaster mission `COMPLETED`;
-6. logout/login continuity and patient isolation;
-7. matching Firestore and private GCS evidence;
-8. architecture and green GitHub proof.
+## Submission status
+
+Technical hard gates are green. JUDGE Ω currently scores the evidence-backed candidate **98/100** and deliberately withholds the last two Demo & Production Readiness points until the final unedited video/submission package exists.
+
+Do not claim `100/100` or `SUBMISSION_LOCKED` until the video URL/package is present and final CI/JUDGE passes on the exact submission head.
