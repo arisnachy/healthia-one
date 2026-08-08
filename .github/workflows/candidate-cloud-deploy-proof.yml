@@ -1,178 +1,21 @@
-name: Candidate Cloud Run + Vertex strict proof
+name: Legacy manual Cloud proof
 
 on:
-  workflow_run:
-    workflows: ["Candidate Cloud deployment permission readiness"]
-    types: [completed]
   workflow_dispatch:
-    inputs:
-      candidate_ref:
-        description: Candidate branch or SHA to deploy
-        required: true
-        default: kira/event-driven-results-twin-p1
 
 permissions:
   contents: read
 
-concurrency:
-  group: healthia-cloud-proof-healthia-6088a
-  cancel-in-progress: false
-
 jobs:
-  deploy-and-prove:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'kira/event-driven-results-twin-p1')
+  delegated:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
-    env:
-      PROJECT_ID: healthia-6088a
-      REGION: us-central1
-      VERTEX_LOCATION: global
-      SERVICE_NAME: healthia-one-demo
-      BUCKET_NAME: healthia-6088a-healthia-evidence
+    timeout-minutes: 3
     steps:
-      - name: Resolve candidate source ref
-        id: candidate
+      - name: Explain authoritative Cloud gates
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "ref=kira/event-driven-results-twin-p1" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ inputs.candidate_ref }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout candidate source ref
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ steps.candidate.outputs.ref }}
-          fetch-depth: 1
-
-      - name: Freeze exact candidate SHA
-        id: exact
-        shell: bash
-        run: |
-          sha="$(git rev-parse HEAD)"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "HEALTHIA_EXACT_CANDIDATE_SHA=$sha" >> "$GITHUB_ENV"
-          echo "Exact candidate SHA: $sha"
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
-          create_credentials_file: true
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: healthia-6088a
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install exact candidate
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[test]"
-
-      - name: Recheck provisioning and proof permissions
-        run: |
-          python deployment/check_cloud_permissions.py \
-            --project "$PROJECT_ID" \
-            --json-out deployment/cloud-permissions-latest.json
-
-      - name: Deploy bounded private Cloud Run stack and execute strict proof
-        shell: pwsh
-        run: |
-          ./deployment/deploy-cloud-demo.ps1 `
-            -ProjectId $env:PROJECT_ID `
-            -Region $env:REGION `
-            -VertexLocation $env:VERTEX_LOCATION `
-            -BucketName $env:BUCKET_NAME `
-            -ServiceName $env:SERVICE_NAME `
-            -RequestLimit 12 `
-            -MaxOutputTokens 1400 `
-            -Confirmed
-
-      - name: Capture sanitized Cloud Run revision evidence
-        if: always()
-        shell: bash
-        run: |
-          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
-          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
-          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)' 2>/dev/null || true)"
-          runtime_sa="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)"
-          export HEALTHIA_CLOUD_URL="$url"
-          export HEALTHIA_CLOUD_REVISION="$revision"
-          export HEALTHIA_CLOUD_IMAGE="$image"
-          export HEALTHIA_CLOUD_RUNTIME_SA="$runtime_sa"
-          export HEALTHIA_CANDIDATE_SOURCE_REF='${{ steps.candidate.outputs.ref }}'
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          payload = {
-              "project": os.environ["PROJECT_ID"],
-              "region": os.environ["REGION"],
-              "vertex_location": os.environ["VERTEX_LOCATION"],
-              "model": "gemini-3.5-flash",
-              "service": os.environ["SERVICE_NAME"],
-              "url": os.environ.get("HEALTHIA_CLOUD_URL", ""),
-              "latest_ready_revision": os.environ.get("HEALTHIA_CLOUD_REVISION", ""),
-              "image": os.environ.get("HEALTHIA_CLOUD_IMAGE", ""),
-              "runtime_service_account": os.environ.get("HEALTHIA_CLOUD_RUNTIME_SA", ""),
-              "build_service_account": "healthia-one-build@healthia-6088a.iam.gserviceaccount.com",
-              "candidate_sha": os.environ.get("HEALTHIA_EXACT_CANDIDATE_SHA", ""),
-              "candidate_source_ref": os.environ.get("HEALTHIA_CANDIDATE_SOURCE_REF", ""),
-              "vertex_adc": True,
-              "gemini_api_key_used": False,
-              "min_instances": 0,
-              "max_instances": 1,
-              "proactive_agents": False,
-          }
-          Path("deployment/cloud-runtime-evidence.json").write_text(
-              json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
-          )
-          PY
-
-      - name: Judge-facing Cloud summary
-        if: always()
-        shell: bash
-        run: |
-          echo "### HealthIA ONE — Cloud proof" >> "$GITHUB_STEP_SUMMARY"
-          if [ -f deployment/cloud-runtime-evidence.json ]; then
-            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-          p=json.loads(Path('deployment/cloud-runtime-evidence.json').read_text())
-          print(f"- Candidate SHA: `{p.get('candidate_sha','')}`")
-          print(f"- Candidate source: `{p.get('candidate_source_ref','')}`")
-          print(f"- Project: `{p.get('project','')}`")
-          print(f"- Cloud Run URL: `{p.get('url','') or 'not-created'}`")
-          print(f"- Ready revision: `{p.get('latest_ready_revision','') or 'not-created'}`")
-          print(f"- Image: `{p.get('image','') or 'not-created'}`")
-          print(f"- Vertex: **Gemini 3.5 Flash / ADC**")
-          print(f"- Gemini API key: **not used**")
-          PY
-          fi
-          if [ -f deployment/cloud-proof-latest.json ]; then
-            echo "- Strict verifier artifact: **produced**" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- Strict verifier artifact: **not produced / not passed**" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Upload sanitized Cloud proof artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: healthia-cloud-run-vertex-proof
-          path: |
-            deployment/cloud-permissions-latest.json
-            deployment/cloud-runtime-evidence.json
-            deployment/cloud-proof-latest.json
-          if-no-files-found: warn
-          retention-days: 14
+          echo "This legacy workflow is intentionally manual-only."
+          echo "It must never deploy from workflow_run or from an ordinary pull-request update."
+          echo "Use candidate-cloud-permission-readiness.yml for the explicit enabled=true exact-candidate Cloud + browser proof."
+          echo "Use candidate-cloud-revision-continuity.yml for the separate explicit cross-revision persistence proof."
+          echo "This file remains only as a non-billable pointer so stale external references do not trigger Cloud work."
