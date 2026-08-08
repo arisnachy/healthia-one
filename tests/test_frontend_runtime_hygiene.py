@@ -22,6 +22,7 @@ def test_core_runtime_serializes_refresh_and_owns_one_event_stream() -> None:
 def test_only_semantic_frontend_modules_are_loaded() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     expected = (
+        "i18n.js",
         "app.js",
         "clinical-council.js",
         "patient-record.js",
@@ -41,6 +42,24 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
     icons = (WEB / "icons.js").read_text(encoding="utf-8")
     assert "loadScript(" not in icons
     assert "document.createElement('script')" not in icons
+
+
+def test_i18n_runtime_is_os_aware_and_has_input_language_override() -> None:
+    i18n = (WEB / "i18n.js").read_text(encoding="utf-8")
+    index = (WEB / "index.html").read_text(encoding="utf-8")
+    login = (WEB / "login.html").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "navigator.languages" in i18n
+    assert "navigator.language" in i18n
+    assert "detectInputLocale" in i18n
+    assert 'const responseLocale = inputLocale(clean)' in app
+    assert '"Accept-Language":responseLocale' in app
+    assert '<html lang="en">' in index
+    assert '<html lang="en">' in login
+    assert '/assets/i18n.js' in index
+    assert '/assets/i18n.js' in login
+    assert 'data-i18n="chat.hero"' in index
+    assert 'data-i18n="auth.hero"' in login
 
 
 def test_browser_runtime_has_no_permanent_interval_polling() -> None:
