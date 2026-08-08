@@ -190,13 +190,20 @@ def open_authenticated_context(browser: Browser, base_url: str, session_cookie: 
     response = page.goto("/", wait_until="domcontentloaded", timeout=20_000)
     require(response is not None and response.status == 200, f"browser root navigation failed: {getattr(response, 'status', None)}")
     checkpoint("browser_navigation_domcontentloaded")
+    screenshot(page, "post-navigation-shell")
 
     report["outputs"]["browser_root_url"] = page.url
     report["outputs"]["browser_root_status"] = response.status
     require(page.url.rstrip("/") == base_url, f"authenticated navigation did not stay on app shell: {page.url}")
-    page.locator("#app").wait_for(state="attached", timeout=5_000)
-    checkpoint("browser_app_attached")
-    page.locator("#chatInput").wait_for(state="visible", timeout=5_000)
+    page.wait_for_function(
+        "() => Boolean(document.getElementById('app') && document.getElementById('chatInput'))",
+        timeout=10_000,
+    )
+    checkpoint("browser_shell_dom_present")
+    page.wait_for_function(
+        "() => { const el=document.getElementById('chatInput'); if(!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; }",
+        timeout=5_000,
+    )
     checkpoint("browser_chat_visible")
     report["outputs"]["authenticated_shell_ready_ms"] = int((time.monotonic() - started) * 1000)
     report["outputs"]["functional_page_url"] = page.url
