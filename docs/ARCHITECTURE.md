@@ -13,9 +13,10 @@ flowchart LR
     VTX[Gemini 3.5 Flash\nVertex AI / ADC]
     MM[Multimodal evidence pipeline]
     FS[(Firestore\ncanonical patient state)]
-    GCS[(Private GCS\noriginal evidence)]
+    GCS[(Private GCS\noriginal clinical evidence)]
     TWIN[Clinical twin + timeline\nprovenance-linked]
     AUDIT[Execution audit]
+    VIDEO[Public GitHub Release\nsynthetic judge video only]
 
     P --> UI --> RUN --> AUTH
     AUTH -->|clinical goal| ADK --> BASE
@@ -28,9 +29,12 @@ flowchart LR
     GCS --> TWIN
     ADK --> AUDIT
     TWIN --> RUN --> UI
+    UI -. synthetic demo publication .-> VIDEO
 ```
 
 The hackathon Cloud transport is **Gemini 3.5 Flash through Vertex AI using Google Cloud ADC/service identity**. A Gemini API key is not injected into Cloud Run.
+
+The public submission video is deliberately **not** stored in the patient clinical-evidence bucket. It is a GitHub Release asset containing synthetic demo data only; the clinical GCS bucket remains private.
 
 ## Execution model
 
@@ -47,28 +51,24 @@ patient/event goal
 
 ### Clinical ADK path
 
-The interactive clinical path is intentionally bounded for latency and auditability:
-
 ```text
 patient complaint + authorized longitudinal context
   → Google ADK Runner
-  → exactly one aggregate function-tool call: inspect_clinical_baseline
+  → exactly one aggregate tool call: inspect_clinical_baseline
        ↳ deterministic interview check
        ↳ deterministic safety check
   → Gemini 3.5 Flash (thinking=minimal)
   → structured JSON: exactly five adaptive questions
-  → runtime derives executed specialist evidence from the real tool trace
+  → runtime derives executed specialist evidence from real tool execution
 ```
 
-`interview` and `safety` are audited separately even though they execute inside one aggregate tool call. The model is not trusted to assert that a tool ran; `selected_specialists` is reconstructed from actual execution.
-
-Prior questions/answers are fed into later blocks so the agent can avoid repeated facts and choose whether to continue the interview or produce a patient-facing orientation.
+`interview` and `safety` are audited separately even though they execute inside one aggregate call. The model is not trusted to assert that a tool ran. Prior questions/answers are supplied to later blocks so the agent can avoid repeated facts and decide whether to continue interviewing or produce a patient-facing orientation.
 
 ## Dependency boundary
 
-The runtime deliberately installs **Google ADK core** (`google-adk`) rather than the broad optional `google-adk[gcp]` extras bundle. HealthIA declares only the Cloud clients it actually uses — `google-cloud-firestore` and `google-cloud-storage` — alongside `google-genai`.
+The runtime installs **Google ADK core** (`google-adk`) rather than the broad optional `google-adk[gcp]` extras bundle. HealthIA explicitly declares the Cloud clients it actually uses — `google-cloud-firestore`, `google-cloud-storage` and `google-genai`.
 
-This keeps the application dependency graph aligned with the real architecture instead of pulling unrelated BigQuery/Bigtable/Spanner/Speech-style integrations into the runtime. `tests/test_dependency_boundaries.py` and FORJA runtime contracts prevent accidental re-expansion.
+`tests/test_dependency_boundaries.py` and FORJA runtime contracts prevent accidental dependency re-expansion.
 
 ## Closed-loop Taskmaster result mission
 
@@ -97,18 +97,18 @@ A mission closes only when the requested persisted result exists. It retains `re
 
 ## Multimodal truth boundary
 
-`healthia_one/result_ai.py` supports PDF, PNG, JPEG and WebP with result hints for laboratory reports, CT/TAC, MRI/RM, X-ray, ultrasound, ECG/EKG, pathology and clinical reports.
+`healthia_one/result_ai.py` supports PDF, PNG, JPEG and WebP and classifies common result types including laboratory reports, CT/TAC, MRI/RM, X-ray, ultrasound, ECG/EKG, pathology and clinical reports.
 
 Production-proof behavior:
 
 - original bytes are persisted **before** interpretation;
-- PDF input uses Gemini 3 `resolution=low`, retaining native PDF text while reducing visual-media latency/token cost;
-- clinical images keep `resolution=high` to protect small visual details;
-- output uses controlled JSON generation with a compact bounded schema;
+- PDF uses low visual media resolution while retaining native PDF text;
+- clinical images retain high visual resolution;
+- output uses controlled JSON generation with a compact schema;
 - `thinking_level=minimal`;
-- configured multimodal output ceiling: 1400 tokens in the proof deployment;
-- multimodal work gets a dedicated 45-second ceiling, separate from the interactive chat timeout;
-- unreadable/failed evidence is not invented: the original remains available and state stays `pending_multimodal`.
+- proof deployment output ceiling is 1400 tokens;
+- multimodal work has a dedicated 45-second ceiling;
+- failed/unreadable evidence is never fabricated: original evidence remains stored and state stays `pending_multimodal`.
 
 ## Canonical state and clinical twin
 
@@ -116,62 +116,55 @@ Production-proof behavior:
 
 The clinical twin is **derived** from canonical state. It is not a second writable source of truth. Result nodes retain provenance to the persisted result and original document.
 
-## Identity boundaries
+## Identity and security boundaries
 
 - salted `scrypt` password hashes;
 - HMAC-signed `HttpOnly` application sessions;
 - patient-scoped Memory/JSON/Firestore state;
 - patient-scoped document paths;
 - cross-patient document lookup denied;
-- device credential binds patient + connection + device + expiry;
-- stable device-signing secret makes device identity restart-safe.
+- device credentials bind patient + connection + device + expiry;
+- stable signing secrets make device identity restart-safe;
+- original clinical evidence remains private;
+- public submission media contains synthetic demo data only and lives outside the clinical GCS boundary.
 
 ## Google Cloud architecture
 
 ### Cloud Run
 
-Proof deployment:
-
-- `min=0`;
-- `max=1`;
-- proactive background work disabled;
-- explicit per-process AI request ceiling;
-- application-level patient authentication;
-- dedicated runtime identity.
+Proof deployment uses min `0`, max `1`, proactive work disabled, an explicit per-process AI request ceiling, application patient authentication and a dedicated runtime identity.
 
 ### Vertex AI
 
-The runtime service account uses `roles/aiplatform.user` and the Google GenAI client is created for Vertex AI/ADC. No Gemini API key is required in Cloud Run.
+The runtime identity uses Vertex AI through ADC. No Gemini API key is required in Cloud Run.
 
 ### Firestore
 
-`FirestoreStore` is the canonical persistent patient-state backend. Proof tooling independently reads the Firestore document to compare durable state with API behavior.
+`FirestoreStore` is canonical persistent patient state. Proof tooling independently reads Firestore to compare durable state with API behavior.
 
 ### Cloud Storage
 
-Original clinical bytes are stored in a private bucket with patient-scoped object paths. Proof tooling checks the object URI, generation, size and byte integrity.
+Original clinical bytes are stored in a **private** bucket under patient-scoped paths. Proof tooling validates object URI, generation, size and byte integrity.
 
 ### Secret Manager
 
-Secret Manager stores application signing material such as session/device secrets. It is not used to smuggle a Gemini API key into the deployment.
+Secret Manager stores application signing material such as session/device secrets; it is not used to hide a Gemini API key.
 
 ### Build/runtime separation
 
-Cloud Build and Cloud Run use separate service identities. Build-time privileges do not automatically become clinical-runtime privileges.
+Cloud Build and Cloud Run use separate service identities so build-time privileges do not automatically become clinical-runtime privileges.
 
-## Cost and deployment safety
+## Cost and mutation safety
 
-The required Google Cloud APIs are expected to be pre-enabled. Provisioning fails closed if services/permissions are missing; the proof path does not silently enable project APIs.
+Required Google Cloud APIs are expected to be pre-enabled. Provisioning fails closed if services or permissions are missing.
 
-Billable Cloud evidence and the live judge recording are explicit opt-in. Ordinary CI must not deploy Cloud or consume Gemini quota.
+Billable Cloud evidence, live recording and publication mutation workflows are explicit opt-in. Ordinary CI must not deploy Cloud or consume Gemini quota. The Cloud, recording and publication triggers are returned to `enabled=false` after controlled proof runs.
 
-During hardening, JUDGE identified a legacy `workflow_run` path capable of triggering an unintended deployment after another successful workflow. That path was retired. The final one-take recording gate was also returned to `enabled=false` immediately after the passing capture.
+A legacy automatic `workflow_run` deployment path discovered during hardening was removed.
 
-## Four independent proof layers
+## Five independent proof layers
 
-### 1. Deterministic CI
-
-Runs without silently spending Gemini quota:
+### 1. Deterministic CI — PASS
 
 - pytest;
 - 14 full-system flows;
@@ -181,55 +174,49 @@ Runs without silently spending Gemini quota:
 - frontend semantics/syntax;
 - PowerShell parsing;
 - release ZIP verification;
-- pytest again from extracted release.
+- pytest from extracted release.
 
-### 2. Exact-candidate Cloud + browser proof — PASS
+### 2. Exact-candidate Cloud + browser — PASS
 
-GitHub Actions run `31262429792`, candidate `a28955c3641c37a9e5a06f5f0ccf943ccb197bbd`.
+Run `31262429792`, candidate `a28955c3641c37a9e5a06f5f0ccf943ccb197bbd`, revision `healthia-one-demo-00012-jvl`.
 
-Proven revision: `healthia-one-demo-00012-jvl`.
+Proves Cloud Run, Vertex Gemini 3.5, real Google ADK execution, Firestore, private GCS, two-patient isolation, multimodal PDF extraction, twin provenance, original evidence round trip and a full unmocked Chromium journey with zero console/page errors.
 
-The strict API verifier demonstrated Cloud Run, Vertex Gemini 3.5, real Google ADK tool execution, Firestore, private GCS, two-patient isolation, multimodal PDF extraction, twin provenance and original evidence round trip. The same workflow then executed a full unmocked Chromium journey with zero console/page errors.
+Evidence: `hackathon/evidence/cloud_exact_candidate_proof.json`.
 
-Permanent sanitized evidence: `hackathon/evidence/cloud_exact_candidate_proof.json`.
+### 3. Cross-revision continuity — PASS
 
-### 3. Cross-revision continuity proof — PASS
+Run `31262903731` changed Cloud Run revision from `healthia-one-demo-00013-2bz` to `healthia-one-demo-00014-ns8` with the same container image. Patient A state/result/document/mission/twin and exact GCS evidence survived; patient B remained isolated.
 
-GitHub Actions run `31262903731`.
+Evidence: `hackathon/evidence/cloud_revision_continuity_proof.json`.
 
-The verifier prepared persistent synthetic patient A/B evidence, then forced a genuinely new Cloud Run revision **without changing the container image**:
+### 4. Continuous judge demo — PASS
 
-- before: `healthia-one-demo-00013-2bz`
-- after: `healthia-one-demo-00014-ns8`
-- same image: true
+Run `31265639488`, candidate `3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`.
 
-After the revision, patient A state/result/document/mission/twin remained intact, the GCS generation and original SHA-256 were unchanged, and patient B remained isolated.
+- artifact `9024139098`;
+- video SHA-256 `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19`;
+- duration `290.16 s`;
+- live revision `healthia-one-demo-00016-mct`;
+- problem/value/app/Cloud runtime visible;
+- live Gemini 3.5 + ADK + Firestore + GCS;
+- completed Taskmaster mission;
+- relogin continuity;
+- zero console/page errors.
 
-Permanent sanitized evidence: `hackathon/evidence/cloud_revision_continuity_proof.json`.
+Evidence: `hackathon/evidence/final_judge_demo_proof.json`.
 
-### 4. Continuous judge-demo proof — PASS
+### 5. Stable public video publication — PASS
 
-GitHub Actions run `31265639488`, candidate `3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`.
+**Public video:**  
+`https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm`
 
-The workflow required the same candidate to pass deterministic verification first, then reused the existing private Cloud Run service without redeploying it and recorded one continuous Playwright journey.
+Publication run `31267268584` recovered and revalidated the source artifact, published the GitHub Release asset, downloaded it anonymously and matched the original SHA. Independent probe run `31267268597` independently downloaded the full public asset without credentials and matched the same SHA.
 
-- artifact: `HealthIA-ONE-final-judge-demo` / `9024139098`
-- artifact digest: `sha256:71ee6e2ce665a9b98e44ca11aae7c7334849b73ac7e756b157afa47b3a249f33`
-- video SHA-256: `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19`
-- duration: `290.16 s`
-- live revision shown: `healthia-one-demo-00016-mct`
-- problem/value/app/Cloud runtime visible
-- Gemini 3.5 + ADK + Firestore + GCS live
-- completed Taskmaster result mission
-- relogin continuity
-- zero console/page errors
-
-Permanent sanitized evidence: `hackathon/evidence/final_judge_demo_proof.json`.
+Evidence: `hackathon/evidence/public_judge_video_proof.json`.
 
 ## Current truth boundary
 
-HealthIA ONE is a synthetic hackathon release candidate, not a regulated medical device, clinical-effectiveness study or autonomous prescribing system. Green tests prove software behavior within the tested boundaries; they do not establish medical efficacy, regulatory compliance or universal security certification.
+HealthIA ONE is a synthetic hackathon release candidate, not a regulated medical device, clinical-effectiveness study or autonomous prescribing system. Green tests prove software behavior within tested boundaries; they do not establish medical efficacy, regulatory compliance or universal security certification.
 
-Functional, architecture, Gemini/ADK, Cloud, browser, cross-revision and continuous-video content gates are proven. The sole remaining submission blocker is **publication of that already-proven video at the stable judge-facing URL used by Devpost**, followed by final exact-head CI/JUDGE and merge/lock.
-
-See `docs/EVIDENCE.md` for exact runs, artifacts and digests.
+All internal JUDGE hard gates are now proven. The **100/100 score is an evidence-backed rubric assessment, not a guarantee that external hackathon judges will award a win**. Final operational lock requires the exact final branch head to pass CI/JUDGE/public-video probe and PR #29 to merge without changing that verified head.
