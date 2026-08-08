@@ -190,6 +190,20 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def reveal_and_answer(block) -> None:
+    require(block.locator(".clinical-question").count() == 5, "dynamic clinical block is not exactly five questions")
+    require(block.locator(".clinical-question:visible").count() == 2, "progressive block must begin with exactly two visible questions")
+    reveal = block.locator(".clinical-show-all")
+    require(reveal.is_visible(), "progressive 2+3 continuation control is missing")
+    reveal.click()
+    require(block.locator(".clinical-question:visible").count() == 5, "remaining three questions were not revealed")
+    for field in block.locator(".clinical-question").all():
+        field.locator(".clinical-option").first.click()
+    submit = block.locator(".clinical-submit")
+    require(submit.is_visible(), "clinical submit did not become visible after progressive reveal")
+    submit.click()
+
+
 def run() -> dict:
     bootstrap, responses, simulated_ai_steps = backend_fixture()
     require(simulated_ai_steps == 3, f"expected two question generations plus one resolution, found {simulated_ai_steps}")
@@ -260,28 +274,23 @@ def run() -> dict:
         first_block = page.locator(".clinical-question-block").last
         require(first_block.locator(".clinical-question").count() == 5, "first dynamic block does not have five questions")
         require(first_block.bounding_box() and first_block.bounding_box()["height"] > 100, "first block is not visible")
-        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Case-specific questions · Gemini + ADK", "English dynamic source badge missing")
+        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Questions created for this case", "patient-natural dynamic source badge missing")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after fast response")
         page.screenshot(path=str(OUTPUT / "03-dynamic-block.png"), full_page=True)
 
-        for field in first_block.locator(".clinical-question").all():
-            field.locator(".clinical-option").first.click()
-        first_block.locator(".clinical-submit").click()
+        reveal_and_answer(first_block)
         page.wait_for_function("window.__mockChatIndex >= 2")
         page.wait_for_timeout(350)
         second_block = page.locator(".clinical-question-block").last
         require(second_block.get_attribute("data-stage") == "2", "second block did not render")
-        require(second_block.locator(".clinical-question").count() == 5, "second dynamic block does not have five questions")
-
-        for field in second_block.locator(".clinical-question").all():
-            field.locator(".clinical-option").first.click()
-        second_block.locator(".clinical-submit").click()
+        reveal_and_answer(second_block)
         page.wait_for_function("window.__mockChatIndex >= 3")
         page.wait_for_timeout(350)
         require(page.get_by_text("Ya reuní lo necesario para orientarte con esta consulta.", exact=False).count() > 0, "Spanish patient-facing clinical orientation is missing after Spanish input")
         require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final transcript lost readable question labels")
         require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient transcript")
         require(page.get_by_text("Revisar la orientación con un profesional y actualizar HealthIA con el resultado").count() > 0, "mission card remained stale after AI orientation")
+        require(page.locator(".action-receipt").count() > 0, "visible action receipt was not rendered")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after completion")
         require(not report["console_errors"] and not report["page_errors"], "browser emitted errors")
         page.screenshot(path=str(OUTPUT / "04-final.png"), full_page=True)
@@ -295,10 +304,12 @@ def run() -> dict:
         "first_message_visible": "pass",
         "dynamic_question_source": "pass",
         "two_five_question_blocks": "pass",
+        "progressive_two_plus_three_presentation": "pass",
         "pending_race_removed": "pass",
         "canonical_mission_returned": "pass",
         "mission_upsert_without_sse_race": "pass",
         "patient_facing_orientation": "pass",
+        "visible_action_receipt": "pass",
         "readable_transcript_labels": "pass",
     }
     (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
