@@ -55,3 +55,10 @@ def test_main_runtime_has_no_stale_patient_name_dom_reference() -> None:
     assert '$("#patientName")' not in app_js
     assert 'refs.patientName' not in app_js
     assert 'id="heroPatientName"' in index_html
+
+
+def test_cloud_ai_status_is_driven_by_runtime_readiness_not_key_presence() -> None:
+    app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    assert "readiness.ai_ready" in app_js
+    assert "readiness.api_key_configured" not in app_js
+    assert "readiness.llm_backend" in app_js
