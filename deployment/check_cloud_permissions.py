@@ -11,8 +11,12 @@ from typing import Any
 # by BOTH phases of the judge-facing Cloud evidence path:
 #   1) provision/deploy the bounded Cloud Run stack;
 #   2) independently read back Firestore/GCS/Vertex/Cloud Run evidence.
+#
+# Required Google APIs are treated as project prerequisites, not something the
+# GitHub deploy identity is allowed to mutate. The deploy helper fails closed at
+# the first unavailable service. This keeps serviceusage.services.enable out of
+# the temporary provisioning role set.
 REQUIRED_PERMISSIONS: tuple[str, ...] = (
-    "serviceusage.services.enable",
     "serviceusage.services.use",
     "run.services.create",
     "run.services.update",
@@ -39,8 +43,7 @@ REQUIRED_PERMISSIONS: tuple[str, ...] = (
 # roles/run.sourceDeveloper includes cloudbuild.builds.create, and the Datastore
 # Owner role covers both database provisioning and entity readback.
 ROLE_HINTS: dict[str, str] = {
-    "serviceusage.services.enable": "roles/serviceusage.serviceUsageAdmin",
-    "serviceusage.services.use": "roles/serviceusage.serviceUsageAdmin",
+    "serviceusage.services.use": "roles/serviceusage.serviceUsageConsumer",
     "run.services.create": "roles/run.sourceDeveloper",
     "run.services.update": "roles/run.sourceDeveloper",
     "run.services.get": "roles/run.sourceDeveloper",
@@ -109,6 +112,8 @@ def test_permissions(project: str) -> dict[str, Any]:
         "missing_permissions": missing,
         "role_hints": role_hints,
         "mutation_performed": False,
+        "api_enable_permission_required": False,
+        "api_policy": "pre_enabled_project_services_fail_closed",
         "proof_scope": "provision_and_independent_readback",
     }
 
@@ -140,7 +145,8 @@ def main() -> int:
     if payload["status"] == "ready":
         print(
             "HEALTHIA_CLOUD_PERMISSIONS_READY "
-            f"project={args.project} granted={payload['granted_permission_count']}"
+            f"project={args.project} granted={payload['granted_permission_count']} "
+            "api_enable_permission_required=false"
         )
         return 0
 
