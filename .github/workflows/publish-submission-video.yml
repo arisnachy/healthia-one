@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   actions: read
+  issues: write
 
 jobs:
   gate:
@@ -43,6 +44,7 @@ jobs:
       EXPECTED_VIDEO_SHA256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
       VIDEO_NAME: HealthIA-ONE-final-judge-demo.webm
       PRIVATE_EVIDENCE_BUCKET: healthia-6088a-healthia-evidence
+      PR_NUMBER: '29'
     steps:
       - uses: actions/checkout@v4
 
@@ -151,3 +153,25 @@ jobs:
           path: dist/submission-publication/publication.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Report verified public URL to PR 29
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          <!-- healthia-public-video-proof -->
+          ## KIRA Ω / JUDGE — public submission video publication PASS
+
+          - Public judge URL: ${PUBLIC_VIDEO_URL}
+          - Source artifact: ${ARTIFACT_ID} / run 31265639488
+          - Verified video SHA-256: ${EXPECTED_VIDEO_SHA256}
+          - Public bucket: ${PUBLIC_BUCKET}
+          - Private clinical evidence bucket remains separate: ${PRIVATE_EVIDENCE_BUCKET}
+          - Publication workflow SHA: ${GITHUB_SHA}
+
+          The workflow downloaded the previously verified artifact, revalidated its SHA and synthetic PASS report, published only the WebM to the dedicated submission-media bucket, and fetched the public URL without credentials before posting this comment.
+          EOF
+          )
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --method POST -f body="$body"
