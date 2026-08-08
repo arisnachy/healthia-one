@@ -77,8 +77,11 @@ def test_secondary_modules_are_locale_aware_and_keep_real_endpoints() -> None:
     for name, source in scripts.items():
         assert "window.HealthIAI18n" in source, f"{name} is not bound to the shared i18n runtime"
         assert "Accept-Language" in source, f"{name} does not propagate the visible locale to API calls"
-    for marker in ("renderPatientOS", "setupVoice", "data-health-action", "recognition.lang=localeTag()"):
+    for marker in ("renderPatientOS", "setupVoice", "data-health-action", "localeTag"):
         assert marker in scripts["patient"]
+    assert "recognition.lang" in scripts["patient"]
+    assert 'recognition.lang = "es-DO"' not in scripts["patient"]
+    assert "recognition.lang='es-DO'" not in scripts["patient"]
     for marker in ('text("Family genogram"', 'text("Documents"', "/api/family", "/api/documents/upload"):
         assert marker in scripts["family"]
     for marker in ('text("Health timeline"', 'text("Treatment"', 'text("Appointments & visit"', "/api/appointments"):
