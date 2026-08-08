@@ -15,47 +15,34 @@ CLINICAL_PLAN_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "intent": {"type": "string", "enum": ["clinical_consultation"]},
-        "clinical_focus": {"type": "string"},
+        "clinical_focus": {"type": "string", "maxLength": 120},
         "why_these_questions": {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {"type": "string", "maxLength": 160},
             "minItems": 1,
-            "maxItems": 5,
+            "maxItems": 2,
         },
         "missing_information": {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {"type": "string", "maxLength": 120},
             "minItems": 1,
-            "maxItems": 8,
-        },
-        "selected_specialists": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "role": {"type": "string"},
-                    "reason": {"type": "string"},
-                },
-                "required": ["role", "reason"],
-            },
-            "minItems": 2,
-            "maxItems": 2,
+            "maxItems": 3,
         },
         "questions": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string"},
-                    "prompt": {"type": "string"},
+                    "id": {"type": "string", "maxLength": 48},
+                    "prompt": {"type": "string", "maxLength": 220},
                     "options": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {"type": "string", "maxLength": 90},
                         "minItems": 3,
-                        "maxItems": 7,
+                        "maxItems": 5,
                     },
                     "multiple": {"type": "boolean"},
-                    "detail_placeholder": {"type": "string"},
+                    "detail_placeholder": {"type": "string", "maxLength": 120},
                 },
                 "required": ["id", "prompt", "options", "multiple", "detail_placeholder"],
             },
@@ -68,7 +55,6 @@ CLINICAL_PLAN_JSON_SCHEMA: dict[str, Any] = {
         "clinical_focus",
         "why_these_questions",
         "missing_information",
-        "selected_specialists",
         "questions",
     ],
 }
@@ -93,12 +79,14 @@ Reglas de memoria y naturalidad:
 - Si ya conoces duración, intensidad, medicamento, alergia, exposición, signo vital o señal de alarma, considéralo conocido.
 - Las opciones deben corresponder a la pregunta concreta; no reutilices una lista fija.
 
-Reglas clínicas:
+Reglas clínicas y de concisión:
 - Usa el motivo actual, respuestas anteriores y contexto autorizado.
 - Incluye una pregunta sobre señales de alarma específicas del caso.
 - Nunca confirmes diagnósticos ni indiques iniciar, suspender o cambiar medicamentos/dosis.
 - No conviertas antecedentes familiares en predicciones.
-- Devuelve exactamente cinco preguntas; cada una debe tener entre tres y siete opciones distintas.
+- Devuelve exactamente cinco preguntas y entre tres y cinco opciones breves por pregunta.
+- clinical_focus debe ser una frase breve; why_these_questions máximo dos razones breves; missing_information máximo tres elementos breves.
+- No devuelvas selected_specialists: el runtime lo deriva de las herramientas realmente ejecutadas para no gastar tokens ni permitir evidencia inventada.
 """.strip()
 
 
@@ -113,15 +101,15 @@ class AdkClinicalPlan:
 
 def _answer_payload(previous_answers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     clean: list[dict[str, Any]] = []
-    for item in previous_answers[-30:]:
+    for item in previous_answers[-12:]:
         if not isinstance(item, dict):
             continue
         clean.append(
             {
-                "question_id": str(item.get("question_id") or "")[:80],
-                "question_prompt": str(item.get("question_prompt") or "")[:320],
-                "selected": [str(value)[:160] for value in (item.get("selected") or [])[:8]],
-                "detail": str(item.get("detail") or "")[:500],
+                "question_id": str(item.get("question_id") or "")[:64],
+                "question_prompt": str(item.get("question_prompt") or "")[:220],
+                "selected": [str(value)[:100] for value in (item.get("selected") or [])[:5]],
+                "detail": str(item.get("detail") or "")[:300],
             }
         )
     return clean
@@ -132,8 +120,9 @@ class AdkClinicalRuntime:
 
     One aggregate ADK function tool executes the two mandatory deterministic
     clinical checks and retains separate audit evidence. Gemini 3.5 Flash is
-    constrained to minimal thinking and a JSON response schema so the final
-    post-tool response is both fast and machine-safe on every interview stage.
+    constrained to minimal thinking and a compact JSON response schema. The
+    schema deliberately excludes agent-selection claims because those are
+    reconstructed from the tool trajectory after generation.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -146,12 +135,22 @@ class AdkClinicalRuntime:
             value = value.replace("```json", "", 1).replace("```", "", 1).strip()
         try:
             payload = json.loads(value)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             start = value.find("{")
             end = value.rfind("}")
-            if start < 0 or end <= start:
-                raise ValueError("Google ADK no devolvió un objeto JSON estructurado")
-            payload = json.loads(value[start : end + 1])
+            if start >= 0 and end > start:
+                try:
+                    payload = json.loads(value[start : end + 1])
+                except json.JSONDecodeError as nested:
+                    raise ValueError(
+                        "Google ADK devolvió JSON estructurado incompleto o inválido "
+                        f"(chars={len(value)}, pos={nested.pos}, error={nested.msg})"
+                    ) from nested
+            else:
+                raise ValueError(
+                    "Google ADK no devolvió un objeto JSON estructurado "
+                    f"(chars={len(value)}, pos={exc.pos}, error={exc.msg})"
+                ) from exc
         if not isinstance(payload, dict):
             raise ValueError("Google ADK no devolvió un objeto JSON estructurado")
         return payload
@@ -214,7 +213,7 @@ class AdkClinicalRuntime:
                 "previous_answer_count": len(previous_answers),
             }
 
-        max_output_tokens = min(self.settings.ai_max_output_tokens, 1100)
+        max_output_tokens = self.settings.ai_max_output_tokens
         agent = LlmAgent(
             name="healthia_runtime_coordinator",
             model=Gemini(
@@ -251,13 +250,12 @@ class AdkClinicalRuntime:
             "constraints": {
                 "exact_question_count": 5,
                 "question_options_min": 3,
-                "question_options_max": 7,
+                "question_options_max": 5,
                 "must_execute_tool": "inspect_clinical_baseline",
                 "maximum_adk_function_calls": 1,
                 "mandatory_roles_inside_tool": ["interview", "safety"],
                 "structured_output_required": True,
                 "must_not_repeat_known_answers": True,
-                "must_not_use_generic_template_when_case_specific_question_is_possible": True,
                 "must_not_diagnose_or_prescribe": True,
             },
         }
@@ -268,6 +266,7 @@ class AdkClinicalRuntime:
             nonlocal event_count
             message = types.Content(role="user", parts=[types.Part(text=text)])
             final_text = ""
+            last_text = ""
             async for event in runner.run_async(
                 user_id=user_id,
                 session_id=session_id,
@@ -275,11 +274,17 @@ class AdkClinicalRuntime:
             ):
                 event_count += 1
                 content = getattr(event, "content", None)
-                for part in getattr(content, "parts", None) or []:
-                    part_text = getattr(part, "text", None)
-                    if isinstance(part_text, str) and part_text.strip():
-                        final_text = part_text.strip()
-            return final_text
+                text_parts = [
+                    str(getattr(part, "text", "") or "")
+                    for part in (getattr(content, "parts", None) or [])
+                    if getattr(part, "text", None) and not getattr(part, "thought", False)
+                ]
+                if text_parts:
+                    last_text = "".join(text_parts).strip()
+                is_final = getattr(event, "is_final_response", None)
+                if callable(is_final) and is_final() and text_parts:
+                    final_text = "".join(text_parts).strip()
+            return final_text or last_text
 
         final_text = await run_turn(json.dumps(prompt, ensure_ascii=False, default=str))
 
@@ -292,7 +297,6 @@ class AdkClinicalRuntime:
                     "Ejecuta exactamente una vez inspect_clinical_baseline y después devuelve el objeto final "
                     "que cumple el esquema JSON configurado. No llames la herramienta más de una vez."
                 ),
-                "original_task": prompt,
             }
             repaired_text = await run_turn(json.dumps(correction, ensure_ascii=False, default=str))
             if repaired_text:
@@ -309,6 +313,8 @@ class AdkClinicalRuntime:
             raise RuntimeError("Google ADK devolvió una respuesta clínica vacía")
 
         payload = self._parse_json(final_text)
+        payload.setdefault("why_these_questions", [])
+        payload.setdefault("missing_information", [])
         payload["selected_specialists"] = [
             {
                 "role": role,
