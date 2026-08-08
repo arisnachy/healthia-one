@@ -10,7 +10,7 @@ const refs = {
   shell: $("#app"), leftRail: $("#leftRail"), contextPanel: $("#contextPanel"),
   messageList: $("#messageList"), chatScroll: $("#chatScroll"), chatForm: $("#chatForm"),
   chatInput: $("#chatInput"), runtimeLabel: $("#runtimeLabel"), agentStatus: $("#agentStatus"),
-  runCheck: $("#runCheck"), patientName: $("#patientName"), todayBadge: $("#todayBadge"),
+  runCheck: $("#runCheck"), todayBadge: $("#todayBadge"),
   latestBp: $("#latestBp"), latestBpMeta: $("#latestBpMeta"), latestWeight: $("#latestWeight"),
   weightTrend: $("#weightTrend"), latestActivity: $("#latestActivity"), missionCount: $("#missionCount"),
   missionPreview: $("#missionPreview"), todayList: $("#todayList"), measurementList: $("#measurementList"),
@@ -120,7 +120,6 @@ function renderMessage(message) {
 function renderAll() {
   const data = state.data;
   if (!data) return;
-  refs.patientName.textContent = data.profile.display_name;
   if (refs.heroPatientName) refs.heroPatientName.textContent = data.profile.display_name || "—";
   if (refs.signalSummary) refs.signalSummary.textContent = `${(data.profile.authorized_signals || []).length || 0} activas`;
   if (refs.openMissionSummary) refs.openMissionSummary.textContent = data.missions.filter(item => !["completed","cancelled"].includes(item.status)).length;

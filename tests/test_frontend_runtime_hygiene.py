@@ -47,3 +47,11 @@ def test_repository_contains_no_transfer_or_temporary_workflow_artifacts() -> No
         assert payload.get("project") == "HealthIA ONE"
         assert payload.get("synthetic_demo_only") is True
         assert payload.get("source_ref")
+
+
+def test_main_runtime_has_no_stale_patient_name_dom_reference() -> None:
+    app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    index_html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    assert '$("#patientName")' not in app_js
+    assert 'refs.patientName' not in app_js
+    assert 'id="heroPatientName"' in index_html
