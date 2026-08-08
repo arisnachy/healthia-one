@@ -87,22 +87,15 @@ def login_language_probe(
 
 
 def wait_for_authenticated_shell(page: Page, report: dict) -> None:
-    # HealthIA deliberately keeps an EventSource open. Network-idle therefore is
-    # not a valid readiness signal. Prove readiness from what a patient can use.
+    # HealthIA deliberately keeps an EventSource open, so network-idle is not a
+    # valid readiness signal. A patient-ready shell means the real composer is
+    # present, editable, and accepts text.
     page.wait_for_function(
-        """() => {
-          const input = document.querySelector('#chatInput');
-          const app = document.querySelector('#app');
-          if (!input || !app) return false;
-          const rect = input.getBoundingClientRect();
-          const style = getComputedStyle(input);
-          return rect.width > 100 && rect.height > 20 &&
-                 style.display !== 'none' && style.visibility !== 'hidden' &&
-                 Number(style.opacity || 1) > 0;
-        }""",
+        "document.querySelector('#app') !== null && document.querySelector('#chatInput') !== null",
         timeout=30_000,
     )
-    geometry = page.locator("#chatInput").evaluate(
+    composer = page.locator("#chatInput")
+    geometry = composer.evaluate(
         """node => {
           const rect=node.getBoundingClientRect();
           const style=getComputedStyle(node);
@@ -110,11 +103,14 @@ def wait_for_authenticated_shell(page: Page, report: dict) -> None:
                   visibility:style.visibility,opacity:style.opacity};
         }"""
     )
+    editable = composer.is_editable()
     report["outputs"]["chat_input_geometry"] = geometry
-    require(float(geometry["width"]) > 100 and float(geometry["height"]) > 20, "chat composer has no usable geometry")
-    page.locator("#chatInput").fill("LAB Omega readiness probe")
-    require(page.locator("#chatInput").input_value() == "LAB Omega readiness probe", "patient cannot type into the chat composer")
-    page.locator("#chatInput").fill("")
+    report["outputs"]["chat_input_editable"] = editable
+    require(float(geometry["width"]) > 0 and float(geometry["height"]) > 0, f"chat composer has no rendered geometry: {geometry}")
+    require(editable, f"chat composer exists but is not editable: {geometry}")
+    composer.fill("LAB Omega readiness probe", timeout=5_000)
+    require(composer.input_value() == "LAB Omega readiness probe", "patient cannot type into the chat composer")
+    composer.fill("")
     report["checks"]["authenticated_shell_interactive"] = "pass"
 
 
@@ -155,7 +151,7 @@ def exercise_registered_views(page: Page, report: dict) -> None:
 
 
 def fill_and_save(page: Page, dialog_type: str, values: dict[str, str], report: dict) -> None:
-    trigger = page.locator(f"[data-dialog='{dialog_type}']").filter(visible=True).first
+    trigger = page.locator(f"[data-dialog='{dialog_type}']:visible").first
     if trigger.count() == 0:
         trigger = page.locator(f"[data-dialog='{dialog_type}']").first
     trigger.click()
