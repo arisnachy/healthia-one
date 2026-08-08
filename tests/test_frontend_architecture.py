@@ -53,6 +53,7 @@ def test_chat_shell_logo_scroll_avatar_and_new_consultation_contract() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     css = (WEB / "styles.css").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
+    i18n = (WEB / "i18n.js").read_text(encoding="utf-8")
     for marker in ('id="newConsultation"', 'class="left-rail-scroll"', 'id="accountPill"', 'class="brand-mark"', '<svg viewBox="0 0 48 48"'):
         assert marker in html
     assert ".left-rail-scroll" in css and "overflow-y: auto" in css
@@ -60,7 +61,9 @@ def test_chat_shell_logo_scroll_avatar_and_new_consultation_contract() -> None:
     assert 'api("/api/demo/reset", {method:"POST"})' in app
     assert "setSendState" in app
     assert "function publicName(value)" in app
-    assert "Módulo de salud" in app
+    assert 'tr("app.module")' in app
+    assert '"app.module": "Health module"' in i18n
+    assert '"app.module": "Módulo de salud"' in i18n
 
 
 def test_patient_record_family_continuity_privacy_and_devices_contracts() -> None:
