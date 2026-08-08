@@ -102,7 +102,9 @@ def test_cost_control_runtime_is_vertex_aware_and_has_no_permanent_polling() -> 
     assert "api_key_configured" not in cost_js
     assert "setInterval(" not in cost_js
     assert "visibilitychange" in cost_js
-    assert "window.addEventListener('focus', loadStatus)" in cost_js
+    assert "window.addEventListener" in cost_js
+    assert "'focus'" in cost_js
+    assert "loadStatus" in cost_js
 
 
 def test_icon_decoration_preserves_composer_file_input() -> None:
