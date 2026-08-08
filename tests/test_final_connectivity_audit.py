@@ -22,21 +22,26 @@ def test_gemini_calls_are_stateless_and_the_probe_is_a_live_interaction() -> Non
     assert "Get-NetIPAddress" in launcher
 
 
-def test_runtime_exposes_retryable_google_status_and_complete_device_links() -> None:
+def test_runtime_exposes_retryable_google_status_complete_device_links_and_i18n() -> None:
     runtime = (WEB / "runtime-integrations.js").read_text(encoding="utf-8")
     css = (WEB / "interactions.css").read_text(encoding="utf-8")
     for marker in (
         "/api/ai/test",
         "resource_exhausted",
+        "Google AI quota is currently exhausted",
         "La cuota de Google AI",
+        "Connect phone or watch",
         "Conectar teléfono o reloj",
         "actions/workflows/android-bridge.yml",
         "CONNECT_ANDROID.md",
         "HealthIA-Bridge-debug",
+        "Phone and computer on the same Wi-Fi",
         "Teléfono y computadora",
-        "misma Wi",
-        'reopen.textContent = "›"',
-        'event.key.toLowerCase() !== "b"',
+        "reopen.textContent=\"›\"",
+        'event.key.toLowerCase()!=="b"',
+        "window.HealthIAI18n",
+        "Accept-Language",
+        "recognition.lang=localeTag()",
     ):
         assert marker in runtime
     assert ".runtime-ai-control" in css
