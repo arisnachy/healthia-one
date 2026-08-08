@@ -1,0 +1,158 @@
+name: Candidate Cloud deploy + browser proof
+
+on:
+  push:
+    branches:
+      - kira/event-driven-results-twin-p1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-candidate-cloud-browser-proof
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-prove:
+    if: contains(github.event.head_commit.message, '[cloud-proof]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      VERTEX_LOCATION: global
+      SERVICE_NAME: healthia-one-judge
+      BUCKET_NAME: healthia-6088a-healthia-evidence
+      BUILD_SA: healthia-one-build@healthia-6088a.iam.gserviceaccount.com
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Resolve existing runtime identity
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_sa="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
+          test -n "$runtime_sa"
+          echo "service_account=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "Reusing runtime identity: $runtime_sa"
+
+      - name: Deploy exact candidate as new private Cloud Run revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --build-service-account "projects/$PROJECT_ID/serviceAccounts/$BUILD_SA" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --service-account "${{ steps.runtime.outputs.service_account }}" \
+            --min 0 \
+            --max 1 \
+            --concurrency 20 \
+            --cpu 1 \
+            --memory 512Mi \
+            --timeout 600 \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=20,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_LLM_TIMEOUT_SECONDS=30,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_GCS_BUCKET=$BUCKET_NAME,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=$VERTEX_LOCATION" \
+            --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" \
+            --no-allow-unauthenticated \
+            --quiet
+
+      - name: Bind proof to exact deployed revision
+        id: cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          curl -fsS -H "Authorization: Bearer ${token}" "$url/api/readiness" > /tmp/readiness.json
+          python - <<'PY'
+          import json
+          p=json.load(open('/tmp/readiness.json', encoding='utf-8'))
+          assert p.get('ready') is True
+          assert p.get('ai_ready') is True and p.get('adk_ready') is True
+          assert p.get('model') == 'gemini-3.5-flash'
+          assert p.get('store_backend') == 'firestore'
+          assert p.get('evidence_backend') == 'gcs'
+          c=p.get('cost_control') or {}
+          assert int(c.get('requests_remaining') or 0) >= 12, c
+          print('HEALTHIA_NEW_CLOUD_REVISION_READY', p.get('model'), c.get('requests_remaining'))
+          PY
+
+      - name: Set up Python and Chromium proof harness
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright only
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Execute full unmocked browser journey on new revision
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+        run: python scripts/cloud_browser_judge_proof.py
+
+      - name: Bind evidence to candidate and revision
+        if: always()
+        env:
+          CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          CLOUD_REVISION: ${{ steps.cloud.outputs.revision }}
+          CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
+        shell: bash
+        run: |
+          mkdir -p dist/cloud-browser-judge-proof
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path=Path('dist/cloud-browser-judge-proof/runtime.json')
+          payload={
+            'application_candidate_sha': os.environ['GITHUB_SHA'],
+            'proof_harness_sha': os.environ['GITHUB_SHA'],
+            'cloud_url': os.environ.get('CLOUD_URL',''),
+            'cloud_revision': os.environ.get('CLOUD_REVISION',''),
+            'image': os.environ.get('CLOUD_IMAGE',''),
+            'project': os.environ['PROJECT_ID'],
+            'region': os.environ['REGION'],
+            'service': os.environ['SERVICE_NAME'],
+            'model': 'gemini-3.5-flash',
+            'transport': 'vertex_ai_adc',
+            'store_backend': 'firestore',
+            'evidence_backend': 'gcs',
+            'mocked': False,
+          }
+          path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          PY
+
+      - name: Upload judge-facing Cloud browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-candidate-cloud-browser-proof
+          path: dist/cloud-browser-judge-proof
+          if-no-files-found: warn
+          retention-days: 14
