@@ -95,7 +95,12 @@ def test_runtime_affordances_are_real_locale_aware_and_not_decorative() -> None:
         assert "window.HealthIAI18n" in source
         assert "Accept-Language" in source
     assert "SpeechRecognition" in runtime
-    assert 'json("/api/ai/test",{method:"POST"})' in runtime
+    assert 'json("/api/readiness")' in runtime
+    assert "Continuity connected" in runtime and "Continuidad conectada" in runtime
+    assert "dataset.runtimeBackend" in runtime and "dataset.runtimeModel" in runtime
+    assert "dataset.aiReady" in runtime and "dataset.adkReady" in runtime
+    assert 'json("/api/ai/test",{method:"POST"})' not in runtime
+    assert "label.onclick=null" in runtime and "label.onkeydown=null" in runtime
     assert 'button.setAttribute("aria-pressed"' in runtime
     assert "recognition.lang=localeTag()" in runtime
     for asset in ("runtime-integrations.js", "provider-integrations.js", "cost-control.js"):
