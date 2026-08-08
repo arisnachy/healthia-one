@@ -3,11 +3,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from deployment.verify_cloud_demo import (
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from deployment.verify_cloud_demo import (  # noqa: E402
     CloudProofConfig,
     CloudProofError,
     _json,
