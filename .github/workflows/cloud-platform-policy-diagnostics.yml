@@ -53,18 +53,29 @@ jobs:
           keep={
             'name': d.get('name'),
             'uri': d.get('uri'),
+            'urls': d.get('urls'),
             'ingress': d.get('ingress'),
+            'iapEnabled': d.get('iapEnabled'),
             'invokerIamDisabled': d.get('invokerIamDisabled'),
             'defaultUriDisabled': d.get('defaultUriDisabled'),
             'customAudiences': d.get('customAudiences'),
+            'launchStage': d.get('launchStage'),
+            'reconciling': d.get('reconciling'),
             'latestReadyRevision': d.get('latestReadyRevision'),
             'latestCreatedRevision': d.get('latestCreatedRevision'),
             'traffic': d.get('traffic'),
+            'trafficStatuses': d.get('trafficStatuses'),
+            'terminalCondition': d.get('terminalCondition'),
             'conditions': [
               {k:c.get(k) for k in ('type','state','severity','reason','message')}
               for c in (d.get('conditions') or [])
             ],
             'templateServiceAccount': (d.get('template') or {}).get('serviceAccount'),
+            'containerPorts': [
+              p for c in ((d.get('template') or {}).get('containers') or [])
+              for p in (c.get('ports') or [])
+            ],
+            'containerImages': [c.get('image') for c in ((d.get('template') or {}).get('containers') or [])],
             'annotations': {
               k:v for k,v in (d.get('annotations') or {}).items()
               if k.startswith('run.googleapis.com/')
@@ -74,7 +85,7 @@ jobs:
           Path('deployment/cloud-platform-run-v2.json').write_text(json.dumps(keep,indent=2,ensure_ascii=False),encoding='utf-8')
           PY
 
-      - name: Inspect project ancestry and effective organization policies
+      - name: Inspect project policy and proof principal roles
         shell: bash
         run: |
           set +e
@@ -100,87 +111,82 @@ jobs:
           } | tee deployment/cloud-platform-policy.txt
           exit 0
 
-      - name: Inspect VPC Service Controls visibility
+      - name: Read exact Cloud Run request logs and app logs
         shell: bash
         run: |
           set +e
-          org_id="$(gcloud projects get-ancestors "$PROJECT_ID" --format='value(id)' --filter='type=organization' 2>/dev/null | head -n1)"
-          {
-            echo "organization_id=${org_id:-none}"
-            if [ -z "$org_id" ]; then
-              echo 'No organization ancestor is visible; skipping Access Context Manager policy lookup.'
-            else
-              echo '=== ACCESS POLICIES ==='
-              gcloud access-context-manager policies list --organization="$org_id" --format='table(name,title)' 2>&1
-              policy_ids="$(gcloud access-context-manager policies list --organization="$org_id" --format='value(name)' 2>/dev/null)"
-              for policy in $policy_ids; do
-                policy_id="${policy##*/}"
-                echo "=== SERVICE PERIMETERS policy=${policy_id} ==="
-                gcloud access-context-manager perimeters list --policy="$policy_id" --format=json 2>&1
-              done
-            fi
-          } | tee deployment/cloud-vpc-service-controls.txt
-          exit 0
-
-      - name: Check whether edge probes reached Cloud Run revision logs
-        shell: bash
-        run: |
-          set +e
-          {
-            echo '=== CLOUD RUN REQUEST / APP LOGS LAST 45 MINUTES ==='
-            gcloud logging read \
-              "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE_NAME}" \
-              --project="$PROJECT_ID" \
-              --freshness=45m \
-              --limit=60 \
-              --format=json 2>&1
-          } > deployment/cloud-run-recent-logs-raw.txt
+          request_filter="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SERVICE_NAME}\" AND logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Frequests\""
+          stdout_filter="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SERVICE_NAME}\" AND (logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Fstdout\" OR logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Fstderr\")"
+          gcloud logging read "$request_filter" --project="$PROJECT_ID" --freshness=60m --limit=100 --format=json > deployment/cloud-run-request-logs.json 2>deployment/cloud-run-request-logs.err
+          request_rc=$?
+          gcloud logging read "$stdout_filter" --project="$PROJECT_ID" --freshness=60m --limit=100 --format=json > deployment/cloud-run-app-logs.json 2>deployment/cloud-run-app-logs.err
+          app_rc=$?
           python - <<'PY'
           import json
           from pathlib import Path
-          raw=Path('deployment/cloud-run-recent-logs-raw.txt').read_text(encoding='utf-8',errors='replace')
-          summary={'logging_query_succeeded':False,'entry_count':0,'http_statuses':[],'log_names':[],'error':''}
-          try:
-              entries=json.loads(raw)
-              if isinstance(entries,list):
-                  summary['logging_query_succeeded']=True
-                  summary['entry_count']=len(entries)
-                  statuses=[]; names=[]
-                  for e in entries:
-                      req=e.get('httpRequest') or {}
-                      if req.get('status') is not None: statuses.append(req.get('status'))
-                      if e.get('logName'): names.append(e['logName'].split('/')[-1])
-                  summary['http_statuses']=statuses[-30:]
-                  summary['log_names']=sorted(set(names))
-          except Exception:
-              summary['error']=raw[:1200]
+          def load(path, err, rc):
+              raw=Path(path).read_text(encoding='utf-8',errors='replace') if Path(path).exists() else ''
+              e=Path(err).read_text(encoding='utf-8',errors='replace') if Path(err).exists() else ''
+              out={'command_rc':rc,'query_succeeded':False,'entry_count':0,'statuses':[],'methods':[],'paths':[],'revisions':[],'error':e[:1200]}
+              try:
+                  data=json.loads(raw or '[]')
+                  if isinstance(data,list):
+                      out['query_succeeded']=True
+                      out['entry_count']=len(data)
+                      for item in data:
+                          req=item.get('httpRequest') or {}
+                          if req.get('status') is not None: out['statuses'].append(req.get('status'))
+                          if req.get('requestMethod'): out['methods'].append(req.get('requestMethod'))
+                          if req.get('requestUrl'):
+                              try:
+                                  from urllib.parse import urlsplit
+                                  out['paths'].append(urlsplit(req['requestUrl']).path)
+                              except Exception: pass
+                          rev=((item.get('resource') or {}).get('labels') or {}).get('revision_name')
+                          if rev: out['revisions'].append(rev)
+              except Exception as exc:
+                  out['error']=(e or f'{type(exc).__name__}: {exc}; raw={raw[:800]}')[:1200]
+              out['statuses']=out['statuses'][-50:]
+              out['methods']=out['methods'][-50:]
+              out['paths']=out['paths'][-50:]
+              out['revisions']=sorted(set(out['revisions']))
+              return out
+          summary={
+              'requests': load('deployment/cloud-run-request-logs.json','deployment/cloud-run-request-logs.err',0),
+              'app': load('deployment/cloud-run-app-logs.json','deployment/cloud-run-app-logs.err',0),
+          }
           print(json.dumps(summary,indent=2,ensure_ascii=False))
           Path('deployment/cloud-run-log-summary.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
           PY
           exit 0
 
-      - name: Test Cloud Run service-level IAM permissions endpoint
+      - name: Probe DNS and TLS routing metadata without secrets
+        shell: bash
+        run: |
+          set +e
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          host="${url#https://}"
+          {
+            echo "host=$host"
+            echo '=== getent ==='
+            getent ahosts "$host" | head -n 12
+            echo '=== curl headers ==='
+            curl -sS -D - -o /dev/null "$url/healthz" | sed -n '1,30p'
+          } | tee deployment/cloud-route-network.txt
+          exit 0
+
+      - name: Test service-level IAM permissions
         shell: bash
         run: |
           set +e
           token="$(gcloud auth print-access-token)"
-          code="$(curl -sS -o deployment/cloud-run-test-iam.json -w '%{http_code}' \
+          curl -sS -o deployment/cloud-run-test-iam.json \
             -X POST \
             -H "Authorization: Bearer ${token}" \
             -H 'Content-Type: application/json' \
             "https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/services/${SERVICE_NAME}:testIamPermissions" \
-            -d '{"permissions":["run.routes.invoke","run.services.get","run.services.update","run.services.setIamPolicy"]}')"
-          echo "testIamPermissions HTTP=${code}"
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          p=Path('deployment/cloud-run-test-iam.json')
-          try:
-              d=json.loads(p.read_text())
-          except Exception:
-              d={'raw':p.read_text(errors='replace')[:1000]}
-          print(json.dumps(d,indent=2,ensure_ascii=False))
-          PY
+            -d '{"permissions":["run.routes.invoke","run.services.get","run.services.update","run.services.setIamPolicy"]}'
+          python -m json.tool deployment/cloud-run-test-iam.json || true
           exit 0
 
       - name: Upload sanitized platform diagnostics
@@ -191,8 +197,8 @@ jobs:
           path: |
             deployment/cloud-platform-run-v2.json
             deployment/cloud-platform-policy.txt
-            deployment/cloud-vpc-service-controls.txt
             deployment/cloud-run-log-summary.json
+            deployment/cloud-route-network.txt
             deployment/cloud-run-test-iam.json
           if-no-files-found: warn
           retention-days: 7
