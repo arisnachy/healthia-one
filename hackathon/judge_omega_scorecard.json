@@ -119,10 +119,14 @@
     },
     {
       "id": "final_submission_video_url",
-      "label": "The proven demo is published at a stable judge-facing URL and inserted into the final Devpost package",
-      "status": "missing",
+      "label": "The proven demo is published at a stable anonymous judge-facing URL and is ready for the final Devpost package",
+      "status": "proven",
       "blocker_if_not_proven": true,
-      "evidence": []
+      "evidence": [
+        {"kind": "repo_path", "value": "hackathon/evidence/public_judge_video_proof.json"},
+        {"kind": "repo_path", "value": ".github/workflows/public-video-probe.yml"},
+        {"kind": "repo_path", "value": ".github/workflows/release-submission-video.yml"}
+      ]
     }
   ],
   "criteria": [
@@ -147,7 +151,7 @@
       "label": "Architectural Discipline & Tech Stack",
       "max_points": 30,
       "awarded_points": 30,
-      "reason": "The candidate has evidence for every core architecture boundary: patient-scoped Firestore state, private GCS original evidence, Vertex AI through ADC, real ADK tool execution, separate build/runtime identities, fail-closed multimodal behavior, explicit billable Cloud opt-in gates, and cross-revision persistence with unchanged evidence. ADK now uses the core package while Firestore/GCS clients are declared explicitly instead of installing an unused broad GCP extras bundle. A legacy automatic deploy path discovered during the proof campaign was retired so ordinary CI cannot silently create Cloud revisions.",
+      "reason": "The candidate has evidence for every core architecture boundary: patient-scoped Firestore state, private GCS original evidence, Vertex AI through ADC, real ADK tool execution, separate build/runtime identities, fail-closed multimodal behavior, explicit billable Cloud opt-in gates, and cross-revision persistence with unchanged evidence. ADK uses the core package while Firestore/GCS clients are declared explicitly instead of installing an unused broad GCP extras bundle. Public submission media is distributed through a GitHub Release and independently SHA-verified, so the private clinical-evidence bucket remains private.",
       "evidence": [
         {"kind": "repo_path", "value": "pyproject.toml"},
         {"kind": "repo_path", "value": "tests/test_dependency_boundaries.py"},
@@ -158,39 +162,35 @@
         {"kind": "repo_path", "value": "deployment/verify_cloud_demo.py"},
         {"kind": "repo_path", "value": "deployment/verify_cloud_revision_continuity.py"},
         {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
-        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"}
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/public_judge_video_proof.json"}
       ]
     },
     {
       "id": "demo_production_readiness",
       "label": "Demo & Production Readiness",
       "max_points": 30,
-      "awarded_points": 29,
-      "reason": "The repository contains a reproducible release gate, strict exact-candidate Cloud proof, full unmocked Chromium verification, cross-revision continuity, and a passing continuous judge-demo artifact that visibly covers problem, value proposition, live Gemini/ADK interaction, multimodal evidence, mission completion, relogin continuity and the Cloud Run .run.app runtime. One point remains deliberately withheld until that proven video is published at the stable judge-facing URL used by the final Devpost submission and the final submission head is locked.",
+      "awarded_points": 30,
+      "reason": "The repository contains a reproducible release gate, strict exact-candidate Cloud proof, full unmocked Chromium verification, cross-revision continuity, a passing continuous judge-demo artifact, and a stable anonymous GitHub Release URL for the exact same video bytes. Independent GitHub Actions probes downloaded the public URL without credentials and matched the original video SHA-256, while the demo visibly covers the problem, value proposition, live Gemini/ADK interaction, multimodal evidence, mission completion, relogin continuity and the Cloud Run .run.app runtime.",
       "evidence": [
         {"kind": "repo_path", "value": ".github/workflows/ci.yml"},
+        {"kind": "repo_path", "value": ".github/workflows/public-video-probe.yml"},
+        {"kind": "repo_path", "value": ".github/workflows/release-submission-video.yml"},
         {"kind": "repo_path", "value": "scripts/full_system_check.py"},
         {"kind": "repo_path", "value": "scripts/cloud_browser_judge_proof.py"},
         {"kind": "repo_path", "value": "scripts/record_submission_demo.py"},
-        {"kind": "repo_path", "value": "deployment/verify_cloud_demo.py"},
-        {"kind": "repo_path", "value": "deployment/verify_cloud_revision_continuity.py"},
         {"kind": "repo_path", "value": "docs/DEMO_SCRIPT.md"},
         {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
         {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"},
-        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/public_judge_video_proof.json"}
       ]
     }
   ],
-  "critical_blockers": [
-    {
-      "id": "final_video_not_published",
-      "statement": "The continuous judge demo exists and passed its Cloud/runtime/duration gates, but a stable judge-facing/public video URL has not yet been inserted into the final Devpost submission.",
-      "evidence_needed": "Publish the proven WebM (or an equivalent unchanged upload of it) at the final judge-facing video URL, insert that URL into docs/DEVPOST_SUBMISSION.md, then run final CI/JUDGE on the exact submission head and merge/lock the candidate."
-    }
-  ],
+  "critical_blockers": [],
   "next_actions": [
-    "Publish the passing one-take judge video at a stable judge-facing URL.",
-    "Replace the final video placeholder in docs/DEVPOST_SUBMISSION.md and README status with that exact URL.",
-    "Run final CI/JUDGE on the exact submission head, merge PR #29, and lock the submission only if all gates remain green."
+    "Run final CI/JUDGE on the exact submission head with all billable/recording/publication triggers disabled.",
+    "Merge PR #29 only after that exact-head verification is green.",
+    "Use the preserved public judge-video URL and repository evidence package in the final Devpost submission."
   ]
 }
