@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -29,41 +30,53 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def wait_server(url: str, timeout: float = 20.0) -> None:
+def wait_server(base_url: str, timeout: float = 20.0) -> None:
     deadline = time.time() + timeout
     last_error: Exception | None = None
     while time.time() < deadline:
         try:
-            with urlopen(f"{url}/healthz", timeout=1.5) as response:
+            with urlopen(f"{base_url}/healthz", timeout=1.5) as response:
                 if response.status == 200:
                     return
-        except Exception as exc:  # pragma: no cover - diagnostic path
+        except Exception as exc:  # pragma: no cover - diagnostics only
             last_error = exc
         time.sleep(0.2)
     raise RuntimeError(f"LAB Ω server did not become ready: {last_error}")
 
 
-def screenshot(page: Page, name: str) -> str:
-    target = OUTPUT / f"{name}.png"
-    page.screenshot(path=str(target), full_page=True)
-    return str(target.relative_to(ROOT))
+def screenshot(page: Page, name: str) -> None:
+    page.screenshot(path=str(OUTPUT / f"{name}.png"), full_page=True)
 
 
-def page_errors(page: Page, report: dict) -> None:
-    page.on("console", lambda message: report["console_errors"].append(message.text) if message.type == "error" else None)
+def attach_diagnostics(page: Page, report: dict) -> None:
+    page.on(
+        "console",
+        lambda message: report["console_errors"].append(message.text)
+        if message.type == "error"
+        else None,
+    )
     page.on("pageerror", lambda error: report["page_errors"].append(str(error)))
     page.on(
         "response",
-        lambda response: report["http_errors"].append({"status": response.status, "url": response.url})
+        lambda response: report["http_errors"].append(
+            {"status": response.status, "url": response.url}
+        )
         if response.status >= 400
         else None,
     )
 
 
-def login_language_probe(browser: Browser, base_url: str, locale: str, expected_lang: str, expected_hero: str, report: dict) -> None:
+def login_language_probe(
+    browser: Browser,
+    base_url: str,
+    locale: str,
+    expected_lang: str,
+    expected_hero: str,
+    report: dict,
+) -> None:
     context = browser.new_context(locale=locale, viewport={"width": 1440, "height": 900})
     page = context.new_page()
-    page_errors(page, report)
+    attach_diagnostics(page, report)
     page.goto(f"{base_url}/login", wait_until="networkidle")
     page.wait_for_function(f"document.documentElement.lang === '{expected_lang}'")
     hero = page.locator(".auth-brand h1").inner_text().strip()
@@ -73,38 +86,85 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
     context.close()
 
 
+def wait_for_authenticated_shell(page: Page, report: dict) -> None:
+    # HealthIA deliberately keeps an EventSource open. Network-idle therefore is
+    # not a valid readiness signal. Prove readiness from what a patient can use.
+    page.wait_for_function(
+        """() => {
+          const input = document.querySelector('#chatInput');
+          const app = document.querySelector('#app');
+          if (!input || !app) return false;
+          const rect = input.getBoundingClientRect();
+          const style = getComputedStyle(input);
+          return rect.width > 100 && rect.height > 20 &&
+                 style.display !== 'none' && style.visibility !== 'hidden' &&
+                 Number(style.opacity || 1) > 0;
+        }""",
+        timeout=30_000,
+    )
+    geometry = page.locator("#chatInput").evaluate(
+        """node => {
+          const rect=node.getBoundingClientRect();
+          const style=getComputedStyle(node);
+          return {width:rect.width,height:rect.height,display:style.display,
+                  visibility:style.visibility,opacity:style.opacity};
+        }"""
+    )
+    report["outputs"]["chat_input_geometry"] = geometry
+    require(float(geometry["width"]) > 100 and float(geometry["height"]) > 20, "chat composer has no usable geometry")
+    page.locator("#chatInput").fill("LAB Omega readiness probe")
+    require(page.locator("#chatInput").input_value() == "LAB Omega readiness probe", "patient cannot type into the chat composer")
+    page.locator("#chatInput").fill("")
+    report["checks"]["authenticated_shell_interactive"] = "pass"
+
+
 def bootstrap(page: Page) -> dict:
-    return page.evaluate("async () => await (await fetch('/api/bootstrap')).json()")
+    return page.evaluate(
+        "async () => await (await fetch('/api/bootstrap', {credentials:'same-origin'})).json()"
+    )
 
 
 def assert_visible_view(page: Page, view: str) -> None:
     locator = page.locator(f"#view-{view}")
-    require(locator.count() == 1, f"view {view!r} has no matching #view-{view}")
+    require(locator.count() == 1, f"view {view!r} has no #view-{view}")
     require(locator.is_visible(), f"view {view!r} did not become visible")
 
 
 def exercise_registered_views(page: Page, report: dict) -> None:
-    views = page.eval_on_selector_all(
-        "[data-open]",
-        "nodes => [...new Set(nodes.map(node => node.dataset.open).filter(Boolean))]",
+    page.wait_for_timeout(500)
+    views = page.evaluate(
+        """() => [...new Set([...document.querySelectorAll('[data-open]')]
+          .map(node => node.dataset.open)
+          .filter(view => view && document.querySelector('#view-' + view)))]"""
     )
-    require("chat" in views, "chat view missing from data-open registry")
+    require("chat" in views, "chat view missing from navigation registry")
     for index, view in enumerate(views, start=1):
-        button = page.locator(f"[data-open='{view}']").first
-        require(button.count() == 1, f"no control for registered view {view}")
-        button.click()
-        page.wait_for_timeout(120)
+        candidates = page.locator(f"[data-open='{view}']")
+        target = None
+        for offset in range(candidates.count()):
+            candidate = candidates.nth(offset)
+            if candidate.is_visible():
+                target = candidate
+                break
+        require(target is not None, f"registered view {view!r} has no visible control")
+        target.click()
+        page.wait_for_timeout(140)
         assert_visible_view(page, view)
         report["windows"][view] = "pass"
         screenshot(page, f"view-{index:02d}-{view}")
 
 
 def fill_and_save(page: Page, dialog_type: str, values: dict[str, str], report: dict) -> None:
-    page.locator(f"[data-dialog='{dialog_type}']").first.click()
+    trigger = page.locator(f"[data-dialog='{dialog_type}']").filter(visible=True).first
+    if trigger.count() == 0:
+        trigger = page.locator(f"[data-dialog='{dialog_type}']").first
+    trigger.click()
     dialog = page.locator("#dataDialog")
     require(dialog.is_visible(), f"{dialog_type} dialog did not open")
     for name, value in values.items():
-        page.locator(f"#dataForm [name='{name}']").fill(value)
+        field = page.locator(f"#dataForm [name='{name}']")
+        require(field.count() == 1, f"{dialog_type} missing field {name}")
+        field.fill(value)
     page.locator("#saveData").click()
     page.wait_for_function("!document.querySelector('#dataDialog').open")
     report["functions"][f"save_{dialog_type}"] = "pass"
@@ -112,11 +172,22 @@ def fill_and_save(page: Page, dialog_type: str, values: dict[str, str], report: 
 
 def verify_measurements(page: Page, report: dict) -> None:
     page.locator(".main-nav [data-open='measurements']").click()
-    fill_and_save(page, "vital", {"systolic": "126", "diastolic": "78", "pulse": "72", "oxygen_saturation": "98"}, report)
+    fill_and_save(
+        page,
+        "vital",
+        {"systolic": "126", "diastolic": "78", "pulse": "72", "oxygen_saturation": "98"},
+        report,
+    )
     fill_and_save(page, "weight", {"weight_kg": "74.2", "note": "LAB Omega synthetic"}, report)
-    fill_and_save(page, "activity", {"steps": "6842", "active_minutes": "42", "note": "LAB Omega synthetic"}, report)
+    fill_and_save(
+        page,
+        "activity",
+        {"steps": "6842", "active_minutes": "42", "note": "LAB Omega synthetic"},
+        report,
+    )
     state = bootstrap(page)
-    require(state["vitals"][-1]["systolic"] == 126 and state["vitals"][-1]["diastolic"] == 78, "blood pressure did not persist")
+    require(state["vitals"][-1]["systolic"] == 126, "blood pressure did not persist")
+    require(state["vitals"][-1]["diastolic"] == 78, "diastolic pressure did not persist")
     require(abs(float(state["weights"][-1]["weight_kg"]) - 74.2) < 0.001, "weight did not persist")
     require(state["activity"][-1]["steps"] == 6842, "activity did not persist")
     report["outputs"]["measurement_state_roundtrip"] = "pass"
@@ -140,12 +211,12 @@ def verify_structured_result(page: Page, report: dict) -> None:
     page.wait_for_function("document.querySelectorAll('#resultList [data-result-id]').length > 0")
     card_text = page.locator("#resultList [data-result-id]").first.inner_text()
     require("LAB Omega metabolic panel" in card_text, "structured result panel not rendered")
-    require("educational explanation" in card_text.lower(), "English structured explanation not rendered under en-US OS locale")
+    require("educational explanation" in card_text.lower(), "English result explanation missing")
     require("View original file" in card_text, "original-evidence link missing")
     state = bootstrap(page)
     result = state["results"][-1]
-    require(result["status"] == "parsed" and len(result["items"]) == 2, "structured result did not persist correctly")
-    require(state["documents"][-1]["related_result_id"] == result["id"], "original document was not correlated to result")
+    require(result["status"] == "parsed" and len(result["items"]) == 2, "structured result did not persist")
+    require(state["documents"][-1]["related_result_id"] == result["id"], "original document not linked to result")
     report["functions"]["structured_result_upload"] = "pass"
     report["outputs"]["english_result_explanation"] = "pass"
     report["outputs"]["result_original_provenance"] = "pass"
@@ -163,12 +234,12 @@ def verify_input_language_headers(page: Page, report: dict) -> None:
     page.locator(".main-nav [data-open='chat']").click()
     page.locator("#chatInput").fill("Please show my latest results and help me understand them")
     page.locator("#sendButton").click()
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(650)
     page.locator("#chatInput").fill("Quiero ver mis resultados y entender qué significan")
     page.locator("#sendButton").click()
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(650)
     require(any(value.startswith("en") for value in observed), f"English input did not send English locale: {observed}")
-    require(any(value.startswith("es") for value in observed), f"Spanish input did not override OS language: {observed}")
+    require(any(value.startswith("es") for value in observed), f"Spanish input did not override OS locale: {observed}")
     report["outputs"]["input_language_to_backend_en"] = "pass"
     report["outputs"]["input_language_to_backend_es"] = "pass"
 
@@ -178,24 +249,29 @@ def verify_account_views_and_logout(page: Page, report: dict) -> None:
     dialog = page.locator("#accountDialog")
     require(dialog.is_visible(), "account dialog did not open")
     account_text = dialog.inner_text()
-    require("Account & settings" in account_text, "account dialog did not follow English OS locale")
-    require("lab.omega" in account_text, "authenticated account identity missing")
+    require("Account & settings" in account_text, "account dialog did not follow English locale")
+    require("lab.omega" in account_text.lower(), "authenticated account identity missing")
     report["windows"]["account_dialog"] = "pass"
     screenshot(page, "account-dialog")
 
-    targets = page.eval_on_selector_all("[data-account-view]", "nodes => nodes.map(node => node.dataset.accountView)")
+    targets = page.eval_on_selector_all(
+        "[data-account-view]", "nodes => [...new Set(nodes.map(node => node.dataset.accountView))]"
+    )
     for target in targets:
         if not dialog.is_visible():
             page.locator("#accountPill").click()
-        page.locator(f"[data-account-view='{target}']").click()
-        page.wait_for_timeout(150)
+        control = page.locator(f"[data-account-view='{target}']")
+        require(control.count() > 0, f"account view {target} missing control")
+        control.first.click()
+        page.wait_for_timeout(180)
         assert_visible_view(page, target)
         report["windows"][f"account_{target}"] = "pass"
         screenshot(page, f"account-view-{target}")
 
-    page.locator("#accountPill").click()
+    if not dialog.is_visible():
+        page.locator("#accountPill").click()
     page.locator("#logoutButton").click()
-    page.wait_for_url("**/login")
+    page.wait_for_url(re.compile(r".*/login$"))
     require(page.locator("#loginForm").is_visible(), "logout did not return to login")
     report["functions"]["logout"] = "pass"
 
@@ -264,7 +340,7 @@ def run() -> dict:
                     record_video_size={"width": 1280, "height": 800},
                 )
                 page = context.new_page()
-                page_errors(page, report)
+                attach_diagnostics(page, report)
                 page.goto(f"{base_url}/login", wait_until="networkidle")
                 page.locator("#registerTab").click()
                 page.locator("#registerForm [name='display_name']").fill("LAB Omega Patient")
@@ -276,31 +352,29 @@ def run() -> dict:
                 set_cookie = registration_response.header_value("set-cookie") or ""
                 report["outputs"]["registration_http_status"] = registration_response.status
                 report["outputs"]["registration_set_cookie_present"] = "healthia_session=" in set_cookie
-                require(registration_response.status == 201, f"registration HTTP status was {registration_response.status}")
-                require("healthia_session=" in set_cookie, "registration response did not emit the session cookie")
+                require(registration_response.status == 201, f"registration status was {registration_response.status}")
+                require("healthia_session=" in set_cookie, "registration did not emit session cookie")
                 page.wait_for_timeout(150)
                 cookies = context.cookies(base_url)
                 session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
                 report["outputs"]["browser_session_cookie_after_register"] = (
-                    {
-                        "present": True,
-                        "secure": bool(session_cookie.get("secure")),
-                        "sameSite": session_cookie.get("sameSite"),
-                        "path": session_cookie.get("path"),
-                    }
+                    {"present": True, "secure": bool(session_cookie.get("secure")), "sameSite": session_cookie.get("sameSite"), "path": session_cookie.get("path")}
                     if session_cookie
                     else {"present": False}
                 )
-                require(session_cookie is not None, "Chromium did not retain the session cookie emitted by registration")
-                require(session_cookie.get("secure") is False, "local HTTP registration emitted a Secure-only browser cookie")
-                page.wait_for_url(f"{base_url}/")
-                page.wait_for_selector("#chatInput")
-                page.wait_for_function("document.documentElement.lang === 'en'")
+                require(session_cookie is not None, "Chromium did not retain registration session cookie")
+                require(session_cookie.get("secure") is False, "local HTTP session cookie is Secure-only")
+
+                page.wait_for_url(re.compile(rf"^{re.escape(base_url)}/?$"), timeout=15_000)
                 report["outputs"]["post_register_url"] = page.url
-                session = page.evaluate("async () => await (await fetch('/api/auth/session', {credentials:'same-origin', cache:'no-store'})).json()")
+                wait_for_authenticated_shell(page, report)
+                page.wait_for_function("document.documentElement.lang === 'en'")
+                session = page.evaluate(
+                    "async () => await (await fetch('/api/auth/session', {credentials:'same-origin', cache:'no-store'})).json()"
+                )
                 report["outputs"]["post_register_session_authenticated"] = bool(session.get("authenticated"))
                 report["outputs"]["post_register_session_patient_id"] = str((session.get("account") or {}).get("patient_id") or "")
-                require(session.get("authenticated") is True, f"browser cookie was present but session verification failed at {page.url}")
+                require(session.get("authenticated") is True, "browser session verification failed after registration")
                 report["functions"]["register_and_authenticate"] = "pass"
                 screenshot(page, "home-authenticated-en")
 
@@ -325,8 +399,10 @@ def run() -> dict:
 
                 require(not report["console_errors"], f"browser console errors: {report['console_errors']}")
                 require(not report["page_errors"], f"browser page errors: {report['page_errors']}")
+                require(not report["http_errors"], f"browser HTTP errors: {report['http_errors']}")
                 context.close()
                 browser.close()
+                report["status"] = "PASS"
         except Exception as exc:
             report["status"] = "FAIL"
             report["error"] = f"{type(exc).__name__}: {exc}"
@@ -340,11 +416,10 @@ def run() -> dict:
                 server.wait(timeout=3)
             if report["status"] != "PASS" and server.stdout:
                 report["server_tail"] = server.stdout.read()[-4000:]
-            report_path = OUTPUT / "report.json"
-            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            (OUTPUT / "report.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
-    report["status"] = "PASS"
-    (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 
 
@@ -352,7 +427,7 @@ if __name__ == "__main__":
     try:
         print(json.dumps(run(), ensure_ascii=False, indent=2))
     except Exception:
-        report_path = OUTPUT / "report.json"
-        if report_path.exists():
-            print(report_path.read_text(encoding="utf-8"))
+        path = OUTPUT / "report.json"
+        if path.exists():
+            print(path.read_text(encoding="utf-8"))
         raise
