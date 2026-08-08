@@ -7,24 +7,32 @@ from pathlib import Path
 from typing import Any
 
 
+# This gate is deliberately non-mutating. It asks IAM for the permissions needed
+# by BOTH phases of the judge-facing Cloud evidence path:
+#   1) provision/deploy the bounded Cloud Run stack;
+#   2) independently read back Firestore/GCS/Vertex/Cloud Run evidence.
 REQUIRED_PERMISSIONS: tuple[str, ...] = (
     "serviceusage.services.enable",
     "serviceusage.services.use",
     "run.services.create",
     "run.services.update",
     "run.services.get",
+    "run.routes.invoke",
     "iam.serviceAccounts.create",
     "iam.serviceAccounts.get",
     "iam.serviceAccounts.actAs",
     "resourcemanager.projects.setIamPolicy",
     "datastore.databases.create",
     "datastore.databases.get",
+    "datastore.entities.get",
     "storage.buckets.create",
     "storage.buckets.get",
+    "storage.objects.get",
     "secretmanager.secrets.create",
     "secretmanager.secrets.get",
     "cloudbuild.builds.create",
     "artifactregistry.repositories.create",
+    "aiplatform.endpoints.predict",
 )
 
 ROLE_HINTS: dict[str, str] = {
@@ -33,18 +41,22 @@ ROLE_HINTS: dict[str, str] = {
     "run.services.create": "roles/run.sourceDeveloper",
     "run.services.update": "roles/run.sourceDeveloper",
     "run.services.get": "roles/run.sourceDeveloper",
+    "run.routes.invoke": "roles/run.sourceDeveloper",
     "iam.serviceAccounts.create": "roles/iam.serviceAccountAdmin",
     "iam.serviceAccounts.get": "roles/iam.serviceAccountAdmin",
     "iam.serviceAccounts.actAs": "roles/iam.serviceAccountUser",
     "resourcemanager.projects.setIamPolicy": "roles/resourcemanager.projectIamAdmin",
     "datastore.databases.create": "roles/datastore.owner",
     "datastore.databases.get": "roles/datastore.owner",
+    "datastore.entities.get": "roles/datastore.viewer",
     "storage.buckets.create": "roles/storage.admin",
     "storage.buckets.get": "roles/storage.admin",
+    "storage.objects.get": "roles/storage.objectViewer",
     "secretmanager.secrets.create": "roles/secretmanager.admin",
     "secretmanager.secrets.get": "roles/secretmanager.admin",
     "cloudbuild.builds.create": "roles/cloudbuild.builds.editor",
     "artifactregistry.repositories.create": "roles/artifactregistry.admin",
+    "aiplatform.endpoints.predict": "roles/aiplatform.user",
 }
 
 
@@ -94,6 +106,7 @@ def test_permissions(project: str) -> dict[str, Any]:
         "missing_permissions": missing,
         "role_hints": role_hints,
         "mutation_performed": False,
+        "proof_scope": "provision_and_independent_readback",
     }
 
 
@@ -135,7 +148,7 @@ def main() -> int:
     print("Missing permissions:")
     for permission in payload["missing_permissions"]:
         print(f"- {permission}")
-    print("Suggested temporary provisioning roles:")
+    print("Suggested temporary provisioning/proof roles:")
     for role in payload["role_hints"]:
         print(f"- {role}")
     return 1
