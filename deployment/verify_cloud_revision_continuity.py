@@ -130,8 +130,12 @@ def prepare(config: CloudProofConfig, state_path: Path, before_revision: str) ->
     patient_a = str((account_a.get("account") or {}).get("patient_id") or "")
     _require(patient_a.startswith("patient_"), "Revision proof patient A registration failed")
 
-    weight = _post_json(config, "/api/weight", {"weight_kg": weight_marker, "note": "synthetic revision continuity marker"})
-    _require(abs(float(weight.get("weight_kg", 0)) - weight_marker) < 0.001, "Revision marker write failed")
+    _post_json(config, "/api/weight", {"weight_kg": weight_marker, "note": "synthetic revision continuity marker"})
+    marker_state = _json(config, "GET", "/api/bootstrap")
+    _require(
+        any(abs(float(item.get("weight_kg", 0)) - weight_marker) < 0.001 for item in marker_state.get("weights") or []),
+        "Revision marker was not persisted into canonical patient state",
+    )
 
     pdf = _minimal_pdf()
     filename = "revision-continuity-synthetic-lab.pdf"
