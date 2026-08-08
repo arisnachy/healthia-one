@@ -1,0 +1,153 @@
+name: Publish verified submission video
+
+on:
+  push:
+    branches:
+      - kira/event-driven-results-twin-p1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gate:
+    name: Submission video publication opt-in gate
+    runs-on: ubuntu-22.04
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q '^enabled=true$' .github/submission-publish-trigger.txt; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+            echo 'Public submission-video publication explicitly enabled.'
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'Publication disabled; no artifact download, Cloud mutation, or public sharing attempted.'
+          fi
+
+  publish:
+    name: Publish exact verified WebM to dedicated public GCS media bucket
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      PROJECT_ID: healthia-6088a
+      PUBLIC_BUCKET: healthia-6088a-public-demo
+      ARTIFACT_ID: '9024139098'
+      EXPECTED_VIDEO_SHA256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
+      VIDEO_NAME: HealthIA-ONE-final-judge-demo.webm
+      PRIVATE_EVIDENCE_BUCKET: healthia-6088a-healthia-evidence
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Download the exact previously verified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/healthia-submission-video
+          curl --fail --location --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o /tmp/healthia-submission-video/artifact.zip
+          unzip -q /tmp/healthia-submission-video/artifact.zip -d /tmp/healthia-submission-video/unpacked
+          video="$(find /tmp/healthia-submission-video/unpacked -type f -name '*.webm' -print -quit)"
+          test -n "$video"
+          cp "$video" "/tmp/healthia-submission-video/${VIDEO_NAME}"
+
+      - name: Verify source video identity before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(sha256sum "/tmp/healthia-submission-video/${VIDEO_NAME}" | awk '{print $1}')"
+          echo "source_video_sha256=$actual"
+          test "$actual" = "$EXPECTED_VIDEO_SHA256"
+          python - <<'PY'
+          import json, pathlib
+          report_files=list(pathlib.Path('/tmp/healthia-submission-video/unpacked').rglob('report.json'))
+          assert report_files, 'recording report missing'
+          report=json.loads(report_files[0].read_text(encoding='utf-8'))
+          assert report.get('status') == 'PASS', report
+          assert report.get('synthetic_only') is True, report
+          assert report.get('video_sha256') == 'cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19', report
+          assert report.get('readiness', {}).get('model') == 'gemini-3.5-flash', report
+          print('HEALTHIA_VERIFIED_VIDEO_SOURCE_OK')
+          PY
+
+      - name: Create or validate dedicated public submission-media bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PUBLIC_BUCKET" != "$PRIVATE_EVIDENCE_BUCKET"
+          if ! gcloud storage buckets describe "gs://${PUBLIC_BUCKET}" --project "$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud storage buckets create "gs://${PUBLIC_BUCKET}" \
+              --project "$PROJECT_ID" \
+              --location=US \
+              --uniform-bucket-level-access
+          fi
+          gcloud storage buckets update "gs://${PUBLIC_BUCKET}" --no-public-access-prevention
+          gcloud storage buckets add-iam-policy-binding "gs://${PUBLIC_BUCKET}" \
+            --member=allUsers \
+            --role=roles/storage.objectViewer
+
+      - name: Publish only the synthetic verified video
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud storage cp "/tmp/healthia-submission-video/${VIDEO_NAME}" "gs://${PUBLIC_BUCKET}/${VIDEO_NAME}" \
+            --content-type=video/webm \
+            --cache-control='public,max-age=3600'
+          url="https://storage.googleapis.com/${PUBLIC_BUCKET}/${VIDEO_NAME}"
+          echo "PUBLIC_VIDEO_URL=$url" >> "$GITHUB_ENV"
+          curl --fail --silent --show-error --location --range 0-1023 "$url" -o /tmp/public-prefix.bin
+          test -s /tmp/public-prefix.bin
+
+      - name: Preserve sanitized publication evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/submission-publication
+          python - <<'PY'
+          import json, os, pathlib
+          payload={
+            'status':'PASS',
+            'synthetic_only':True,
+            'source_artifact_id':9024139098,
+            'source_run_id':31265639488,
+            'source_video_sha256':'cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19',
+            'public_url':os.environ['PUBLIC_VIDEO_URL'],
+            'public_bucket':os.environ['PUBLIC_BUCKET'],
+            'private_clinical_evidence_bucket_unchanged':os.environ['PRIVATE_EVIDENCE_BUCKET'],
+            'github_sha':os.environ['GITHUB_SHA'],
+          }
+          pathlib.Path('dist/submission-publication/publication.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          print(json.dumps(payload, indent=2))
+          PY
+
+      - name: Upload publication evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-ONE-public-video-publication-proof
+          path: dist/submission-publication/publication.json
+          if-no-files-found: error
+          retention-days: 30
