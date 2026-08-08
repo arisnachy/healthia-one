@@ -53,6 +53,7 @@ def test_chat_shell_logo_scroll_avatar_and_new_consultation_contract() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     css = (WEB / "styles.css").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
+    i18n = (WEB / "i18n.js").read_text(encoding="utf-8")
     for marker in ('id="newConsultation"', 'class="left-rail-scroll"', 'id="accountPill"', 'class="brand-mark"', '<svg viewBox="0 0 48 48"'):
         assert marker in html
     assert ".left-rail-scroll" in css and "overflow-y: auto" in css
@@ -60,10 +61,12 @@ def test_chat_shell_logo_scroll_avatar_and_new_consultation_contract() -> None:
     assert 'api("/api/demo/reset", {method:"POST"})' in app
     assert "setSendState" in app
     assert "function publicName(value)" in app
-    assert "Módulo de salud" in app
+    assert 'tr("app.module")' in app
+    assert '"app.module": "Health module"' in i18n
+    assert '"app.module": "Módulo de salud"' in i18n
 
 
-def test_patient_record_family_continuity_privacy_and_devices_contracts() -> None:
+def test_secondary_modules_are_locale_aware_and_keep_real_endpoints() -> None:
     scripts = {
         "patient": (WEB / "patient-record.js").read_text(encoding="utf-8"),
         "family": (WEB / "family-documents.js").read_text(encoding="utf-8"),
@@ -71,15 +74,21 @@ def test_patient_record_family_continuity_privacy_and_devices_contracts() -> Non
         "privacy": (WEB / "privacy-controls.js").read_text(encoding="utf-8"),
         "devices": (WEB / "profile-devices.js").read_text(encoding="utf-8"),
     }
-    for marker in ("renderPatientOS", "setupVoice", "data-health-action"):
+    for name, source in scripts.items():
+        assert "window.HealthIAI18n" in source, f"{name} is not bound to the shared i18n runtime"
+        assert "Accept-Language" in source, f"{name} does not propagate the visible locale to API calls"
+    for marker in ("renderPatientOS", "setupVoice", "data-health-action", "localeTag"):
         assert marker in scripts["patient"]
-    for marker in ("Genograma familiar", "Documentos", "/api/family", "/api/documents/upload"):
+    assert "recognition.lang" in scripts["patient"]
+    assert 'recognition.lang = "es-DO"' not in scripts["patient"]
+    assert "recognition.lang='es-DO'" not in scripts["patient"]
+    for marker in ('text("Family genogram"', 'text("Documents"', "/api/family", "/api/documents/upload"):
         assert marker in scripts["family"]
-    for marker in ("Línea de salud", "Tratamiento", "Citas y consulta", "/api/appointments"):
+    for marker in ('text("Health timeline"', 'text("Treatment"', 'text("Appointments & visit"', "/api/appointments"):
         assert marker in scripts["continuity"]
-    for marker in ("Permisos y privacidad", "/api/consent", "/api/export"):
+    for marker in ('text("Permissions & privacy"', "/api/consent", "/api/export"):
         assert marker in scripts["privacy"]
-    for marker in ("Perfil del paciente", "Dispositivos", "Health Connect", "Estado nutricional"):
+    for marker in ('text("Patient profile"', 'text("Devices"', "Health Connect", 'text("Nutritional status"'):
         assert marker in scripts["devices"]
 
 
@@ -89,9 +98,11 @@ def test_visual_system_is_consolidated_and_icon_driven() -> None:
     for marker in (".genogram-board", ".document-grid", ".timeline-list", ".control-grid", ".vital-matrix", ".device-grid"):
         assert marker in css
     assert "MutationObserver" not in icons
-    assert '"Genograma familiar":"family"' in icons
-    assert '"Dispositivos":"device"' in icons
+    assert "const viewIcon=" in icons
+    assert "family:'family'" in icons
+    assert "devices:'device'" in icons
     assert "healthia:ui-updated" in icons
+    assert "healthia:locale-changed" in icons
 
 
 def test_left_rail_reopens_and_composer_floats_inside_chat_surface() -> None:
@@ -108,10 +119,10 @@ def test_left_rail_reopens_and_composer_floats_inside_chat_surface() -> None:
 def test_device_page_exposes_real_pairing_and_no_hardware_demo_paths() -> None:
     js = (WEB / "profile-devices.js").read_text(encoding="utf-8")
     for marker in (
-        "Conectar dispositivo",
+        'text("Connect device"',
         "/api/devices/pairing",
-        "Código temporal",
-        "Probar sin dispositivo",
-        "IP local de tu PC",
+        'text("Temporary code"',
+        'text("Test without hardware"',
+        "LAN IP",
     ):
         assert marker in js

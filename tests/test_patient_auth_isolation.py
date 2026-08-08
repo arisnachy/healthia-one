@@ -104,7 +104,7 @@ async def test_event_broker_does_not_cross_patient_boundary() -> None:
 
 
 def test_local_launcher_enables_auth_and_nonrobotic_ai_budget() -> None:
-    script = ( __import__("pathlib").Path(__file__).resolve().parents[1] / "deployment" / "run-local-secure.ps1").read_text("utf-8")
+    script = (__import__("pathlib").Path(__file__).resolve().parents[1] / "deployment" / "run-local-secure.ps1").read_text("utf-8")
     assert '$env:HEALTHIA_AUTH_REQUIRED = "true"' in script
     assert '$env:HEALTHIA_PROACTIVE_ENABLED = "false"' in script
     assert "[int]$MaxOutputTokens = 1400" in script
@@ -112,7 +112,7 @@ def test_local_launcher_enables_auth_and_nonrobotic_ai_budget() -> None:
     assert "HEALTHIA_DEVICE_TOKEN_SECRET" in script
 
 
-def test_browser_loads_dynamic_questions_and_real_account_controls() -> None:
+def test_browser_loads_progressive_dynamic_questions_and_real_account_controls() -> None:
     root = __import__("pathlib").Path(__file__).resolve().parents[1]
     index = (root / "web" / "index.html").read_text("utf-8")
     clinical = (root / "web" / "clinical-council.js").read_text("utf-8")
@@ -120,7 +120,9 @@ def test_browser_loads_dynamic_questions_and_real_account_controls() -> None:
 
     assert '/assets/clinical-council.js' in index
     assert '/assets/account.js' in index
-    assert "Preguntas creadas para este caso · Gemini + ADK" in clinical
-    assert "No voy a mostrarte preguntas precargadas" in clinical
+    assert "Preguntas creadas para este caso" in clinical
+    assert "Gemini + ADK" not in clinical
+    assert "Continuar con las 3 restantes" in clinical
+    assert "No pude completar las próximas preguntas personalizadas" in clinical
     assert "/api/auth/logout" in account
     assert "event.stopImmediatePropagation()" in account

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from healthia_one.auth import AccountManager, AuthError, bind_principal, current_principal, reset_principal
 from healthia_one.config import Settings
+from healthia_one.language import bind_requested_locale, current_requested_locale, reset_requested_locale
 from healthia_one.service import HealthIAService
 
 
@@ -18,6 +19,17 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(LoginRequest):
     display_name: str = Field(min_length=2, max_length=120)
+
+
+def _header_locale(request: Request) -> str | None:
+    value = request.headers.get("accept-language", "").strip()
+    if not value:
+        return None
+    return value.split(",", 1)[0].split(";", 1)[0].strip()
+
+
+def _detail(es: str, en: str) -> str:
+    return es if current_requested_locale() == "es" else en
 
 
 def install_patient_auth(
@@ -47,6 +59,7 @@ def install_patient_auth(
         token = request.cookies.get(settings.session_cookie_name)
         principal = manager.verify_session(token)
         context_token = bind_principal(principal)
+        locale_token = bind_requested_locale(_header_locale(request))
         try:
             path = request.url.path
             public = path.startswith("/assets/") or path in public_exact
@@ -56,11 +69,17 @@ def install_patient_auth(
                 if path.startswith("/api/"):
                     return JSONResponse(
                         status_code=401,
-                        content={"detail": "Inicia sesión para acceder a los datos del paciente."},
+                        content={
+                            "detail": _detail(
+                                "Inicia sesión para acceder a los datos del paciente.",
+                                "Sign in to access patient data.",
+                            )
+                        },
                     )
             response = await call_next(request)
             return response
         finally:
+            reset_requested_locale(locale_token)
             reset_principal(context_token)
 
     @app.get("/login", include_in_schema=False)

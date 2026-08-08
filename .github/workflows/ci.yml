@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-22.04
-    timeout-minutes: 35
+    timeout-minutes: 48
     env:
       HEALTHIA_LLM_BACKEND: mock
       HEALTHIA_STORE_BACKEND: memory
@@ -44,9 +44,19 @@ jobs:
           retention-days: 7
       - name: Full system verification
         run: python scripts/full_system_check.py
+      - name: KIRA DialogBench multi-turn context gate
+        run: python scripts/dialogbench.py
+      - name: Upload KIRA DialogBench evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-KIRA-DialogBench
+          path: dist/dialogbench
+          if-no-files-found: warn
+          retention-days: 30
       - name: Install Chromium for browser verification
         run: python -m playwright install --with-deps chromium
-      - name: Browser end-to-end verification
+      - name: Browser clinical end-to-end verification
         run: python scripts/browser_smoke.py
       - name: Upload browser verification evidence
         if: always()
@@ -56,12 +66,35 @@ jobs:
           path: dist/browser-smoke
           if-no-files-found: warn
           retention-days: 30
+      - name: LAB OMEGA core full-window functional laboratory
+        shell: bash
+        run: timeout 180s python scripts/lab_omega.py
+      - name: Upload LAB OMEGA core evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-LAB-OMEGA
+          path: dist/lab-omega
+          if-no-files-found: warn
+          retention-days: 30
+      - name: LAB OMEGA secondary windows and state-changing functions
+        shell: bash
+        run: timeout 240s python scripts/lab_omega_secondary.py
+      - name: Upload LAB OMEGA secondary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-LAB-OMEGA-secondary
+          path: dist/lab-omega-secondary
+          if-no-files-found: warn
+          retention-days: 30
       - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py deployment/verify_cloud_demo.py
       - run: python scripts/smoke_test.py
       - name: JUDGE OMEGA evidence review
         run: python scripts/judge_omega.py
       - name: Validate semantic frontend modules
         run: |
+          node --check web/i18n.js
           node --check web/app.js
           node --check web/patient-record.js
           node --check web/family-documents.js
@@ -180,7 +213,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install playwright
           python -m playwright install --with-deps chromium
-      - name: Record one continuous unmocked submission demo
+      - name: Record one continuous unmocked English submission demo
         env:
           HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
           HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
@@ -188,7 +221,7 @@ jobs:
           HEALTHIA_CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
           HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
-          HEALTHIA_DEMO_TARGET_SECONDS: "230"
+          HEALTHIA_DEMO_TARGET_SECONDS: "235"
         run: python scripts/record_submission_demo.py
       - name: Verify recording duration
         shell: bash
@@ -203,8 +236,8 @@ jobs:
           python - "$duration" <<'PY'
           import sys
           duration = float(sys.argv[1])
-          if not 200 <= duration <= 300:
-              raise SystemExit(f"submission demo duration outside approximately four-minute window: {duration:.2f}s")
+          if not 230 <= duration <= 245:
+              raise SystemExit(f"submission demo must stay inside the 3:50–4:05 target window: {duration:.2f}s")
           print(f"HEALTHIA_SUBMISSION_DEMO_DURATION_OK {duration:.2f}s")
           PY
       - name: Upload final judge demo evidence

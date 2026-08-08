@@ -22,25 +22,43 @@ def test_gemini_calls_are_stateless_and_the_probe_is_a_live_interaction() -> Non
     assert "Get-NetIPAddress" in launcher
 
 
-def test_runtime_exposes_retryable_google_status_and_complete_device_links() -> None:
+def test_runtime_keeps_provider_details_out_of_patient_chrome_but_preserves_auditable_state() -> None:
     runtime = (WEB / "runtime-integrations.js").read_text(encoding="utf-8")
-    css = (WEB / "interactions.css").read_text(encoding="utf-8")
     for marker in (
-        "/api/ai/test",
-        "resource_exhausted",
-        "La cuota de Google AI",
+        "Continuity connected",
+        "Continuidad conectada",
+        "Continuity limited",
+        "Continuidad limitada",
+        "dataset.runtimeBackend",
+        "dataset.runtimeModel",
+        "dataset.aiReady",
+        "dataset.adkReady",
+        "dataset.storeBackend",
+        "dataset.evidenceBackend",
+        "Connect phone or watch",
         "Conectar teléfono o reloj",
         "actions/workflows/android-bridge.yml",
         "CONNECT_ANDROID.md",
         "HealthIA-Bridge-debug",
+        "Phone and computer on the same Wi-Fi",
         "Teléfono y computadora",
-        "misma Wi",
-        'reopen.textContent = "›"',
-        'event.key.toLowerCase() !== "b"',
+        "reopen.textContent=\"›\"",
+        'event.key.toLowerCase()!=="b"',
+        "window.HealthIAI18n",
+        "Accept-Language",
+        "recognition.lang=localeTag()",
     ):
         assert marker in runtime
-    assert ".runtime-ai-control" in css
-    assert ".lan-help" in css
+    for patient_tech_copy in (
+        "Gemini · unavailable",
+        "Gemini · testing",
+        "Google AI active",
+        "Test live Google AI connection",
+        "/api/ai/test",
+    ):
+        assert patient_tech_copy not in runtime
+    assert "label.onclick=null" in runtime
+    assert "label.onkeydown=null" in runtime
 
 
 def test_composer_has_no_separate_visual_container() -> None:

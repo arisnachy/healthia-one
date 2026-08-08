@@ -67,40 +67,60 @@ def test_android_bridge_uses_supported_compose_toolchain() -> None:
     assert "composeOptions" not in app_gradle
 
 
-def test_ci_validates_semantic_runtime_modules() -> None:
+def test_ci_validates_semantic_runtime_modules_and_both_labs() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch" in workflow
     assert "deployment/verify_google_ai.py" in workflow
     assert "node --check web/runtime-integrations.js" in workflow
     assert "node --check web/provider-integrations.js" in workflow
     assert "node --check web/cost-control.js" in workflow
+    assert "LAB OMEGA core full-window functional laboratory" in workflow
+    assert "python scripts/lab_omega.py" in workflow
+    assert "HealthIA-LAB-OMEGA" in workflow
+    assert "LAB OMEGA secondary windows and state-changing functions" in workflow
+    assert "python scripts/lab_omega_secondary.py" in workflow
+    assert "HealthIA-LAB-OMEGA-secondary" in workflow
     assert "deployment/deploy-cloud-demo.ps1" in workflow
     assert "deployment/remove-cloud-demo.ps1" in workflow
 
 
-def test_runtime_affordances_are_real_not_decorative() -> None:
+def test_runtime_affordances_are_real_locale_aware_and_not_decorative() -> None:
     index = (ROOT / "web/index.html").read_text(encoding="utf-8")
     runtime = (ROOT / "web/runtime-integrations.js").read_text(encoding="utf-8")
     providers = (ROOT / "web/provider-integrations.js").read_text(encoding="utf-8")
     cost_control = (ROOT / "web/cost-control.js").read_text(encoding="utf-8")
     icons = (ROOT / "web/icons.js").read_text(encoding="utf-8")
     interactions = (ROOT / "web/interactions.css").read_text(encoding="utf-8")
+    for source in (runtime, providers, cost_control):
+        assert "window.HealthIAI18n" in source
+        assert "Accept-Language" in source
     assert "SpeechRecognition" in runtime
-    assert 'json("/api/ai/test", {method: "POST"})' in runtime
+    assert 'json("/api/readiness")' in runtime
+    assert "Continuity connected" in runtime and "Continuidad conectada" in runtime
+    assert "dataset.runtimeBackend" in runtime and "dataset.runtimeModel" in runtime
+    assert "dataset.aiReady" in runtime and "dataset.adkReady" in runtime
+    assert 'json("/api/ai/test",{method:"POST"})' not in runtime
+    assert "label.onclick=null" in runtime and "label.onkeydown=null" in runtime
     assert 'button.setAttribute("aria-pressed"' in runtime
+    assert "recognition.lang=localeTag()" in runtime
     for asset in ("runtime-integrations.js", "provider-integrations.js", "cost-control.js"):
         assert index.count(f'/assets/{asset}') == 1
         assert f'/assets/{asset}' not in icons
     assert "loadScript(" not in icons
     assert "document.createElement('script')" not in icons
-    assert 'fetch("/api/devices")' in providers
+    assert 'fetch("/api/devices",{headers:{"Accept-Language"' in providers
     assert "provider_catalog" in providers
     assert "/api/cost-control" in cost_control
-    assert "IA activa" in cost_control
-    assert "Vertex AI activo" in cost_control
-    assert "Local · 0 llamadas" in cost_control
+    assert "AI active" in cost_control and "IA activa" in cost_control
+    assert "Vertex AI active" in cost_control and "Vertex AI activo" in cost_control
+    assert "Local · 0 calls" in cost_control and "Local · 0 llamadas" in cost_control
+    assert "costGuardButton" in cost_control
+    assert "costGuardToggle" in cost_control
+    assert "/api/ai/test" in cost_control
     assert ".provider-grid" in interactions
-    assert 'content: "Abrir menú"' in interactions
+    assert 'id="expandLeft"' in index
+    assert 'data-i18n-aria="nav.expand"' in index
+    assert 'content: "Abrir menú"' not in interactions
     assert "background: transparent" in interactions
 
 
