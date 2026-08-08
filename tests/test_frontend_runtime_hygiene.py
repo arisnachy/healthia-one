@@ -73,3 +73,12 @@ def test_cost_control_runtime_is_vertex_aware_and_has_no_permanent_polling() -> 
     assert "setInterval(" not in cost_js
     assert "visibilitychange" in cost_js
     assert "window.addEventListener('focus', loadStatus)" in cost_js
+
+
+def test_real_cloud_browser_proof_checks_account_dom_and_vertex_truth() -> None:
+    proof = (ROOT / "scripts" / "cloud_browser_judge_proof.py").read_text(encoding="utf-8")
+    assert 'account_identity = page.locator("#accountIdentity").inner_text()' in proof
+    assert 'require(email in account_identity' in proof
+    assert 'get_by_text(email, exact=True)' not in proof
+    assert 'runtime label contradicts live AI readiness' in proof
+    assert 'browser_runtime_label_matches_live_vertex_readiness' in proof
