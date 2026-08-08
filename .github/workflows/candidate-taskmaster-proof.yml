@@ -7,29 +7,16 @@ on:
         description: Candidate branch or commit to test
         required: true
         default: kira/event-driven-results-twin-p1
-  pull_request:
-    branches: [main]
-    paths:
-      - "healthia_one/config.py"
-      - "healthia_one/gemini.py"
-      - "healthia_one/google_ai_transport.py"
-      - "healthia_one/result_ai.py"
-      - "healthia_one/adk_gemini.py"
-      - "healthia_one/adk_runtime.py"
-      - "healthia_one/service.py"
-      - "scripts/live_taskmaster_proof.py"
-      - "pyproject.toml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: taskmaster-${{ github.event.pull_request.number || github.ref }}
+  group: taskmaster-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   taskmaster-proof:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     env:
@@ -55,7 +42,7 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_ref }}
+          ref: ${{ inputs.candidate_ref }}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
