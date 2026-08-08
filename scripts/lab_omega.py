@@ -24,6 +24,10 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def checkpoint(label: str) -> None:
+    print(f"LAB_OMEGA_CHECKPOINT:{label}", flush=True)
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -45,7 +49,12 @@ def wait_server(base_url: str, timeout: float = 20.0) -> None:
 
 
 def screenshot(page: Page, name: str) -> None:
-    page.screenshot(path=str(OUTPUT / f"{name}.png"), full_page=True)
+    page.screenshot(
+        path=str(OUTPUT / f"{name}.png"),
+        full_page=False,
+        animations="disabled",
+        timeout=8_000,
+    )
 
 
 def attach_diagnostics(page: Page, report: dict) -> None:
@@ -74,8 +83,11 @@ def login_language_probe(
     expected_hero: str,
     report: dict,
 ) -> None:
+    checkpoint(f"login_probe_{expected_lang}_start")
     context = browser.new_context(locale=locale, viewport={"width": 1440, "height": 900})
     page = context.new_page()
+    page.set_default_timeout(8_000)
+    page.set_default_navigation_timeout(15_000)
     attach_diagnostics(page, report)
     page.goto(f"{base_url}/login", wait_until="networkidle")
     page.wait_for_function(f"document.documentElement.lang === '{expected_lang}'")
@@ -84,17 +96,16 @@ def login_language_probe(
     report["checks"][f"login_locale_{expected_lang}"] = "pass"
     screenshot(page, f"login-{expected_lang}")
     context.close()
+    checkpoint(f"login_probe_{expected_lang}_pass")
 
 
 def wait_for_authenticated_shell(page: Page, report: dict) -> None:
-    # HealthIA deliberately keeps an EventSource open. Avoid network-idle and
-    # browser-side waitForFunction heuristics; observe the real DOM from Python
-    # and prove that the patient can actually type into the composer.
+    checkpoint("authenticated_shell_probe_start")
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=15_000)
+        page.wait_for_load_state("domcontentloaded", timeout=10_000)
     except Exception:
         pass
-    deadline = time.time() + 20.0
+    deadline = time.time() + 15.0
     last_probe: dict = {}
     while time.time() < deadline:
         app = page.locator("#app")
@@ -125,6 +136,7 @@ def wait_for_authenticated_shell(page: Page, report: dict) -> None:
                         composer.fill("")
                         report["checks"]["authenticated_shell_interactive"] = "pass"
                         report["outputs"]["shell_readiness_probe"] = last_probe
+                        checkpoint("authenticated_shell_probe_pass")
                         return
             except Exception as exc:
                 last_probe["interaction_error"] = f"{type(exc).__name__}: {exc}"
@@ -146,7 +158,8 @@ def assert_visible_view(page: Page, view: str) -> None:
 
 
 def exercise_registered_views(page: Page, report: dict) -> None:
-    page.wait_for_timeout(500)
+    checkpoint("registered_views_start")
+    page.wait_for_timeout(350)
     views = page.evaluate(
         """() => [...new Set([...document.querySelectorAll('[data-open]')]
           .map(node => node.dataset.open)
@@ -154,6 +167,7 @@ def exercise_registered_views(page: Page, report: dict) -> None:
     )
     require("chat" in views, "chat view missing from navigation registry")
     for index, view in enumerate(views, start=1):
+        checkpoint(f"view_{view}_start")
         candidates = page.locator(f"[data-open='{view}']")
         target = None
         for offset in range(candidates.count()):
@@ -162,31 +176,36 @@ def exercise_registered_views(page: Page, report: dict) -> None:
                 target = candidate
                 break
         require(target is not None, f"registered view {view!r} has no visible control")
-        target.click()
-        page.wait_for_timeout(140)
+        target.click(timeout=8_000)
+        page.wait_for_timeout(100)
         assert_visible_view(page, view)
         report["windows"][view] = "pass"
         screenshot(page, f"view-{index:02d}-{view}")
+        checkpoint(f"view_{view}_pass")
+    checkpoint("registered_views_pass")
 
 
 def fill_and_save(page: Page, dialog_type: str, values: dict[str, str], report: dict) -> None:
+    checkpoint(f"save_{dialog_type}_start")
     trigger = page.locator(f"[data-dialog='{dialog_type}']:visible").first
     if trigger.count() == 0:
         trigger = page.locator(f"[data-dialog='{dialog_type}']").first
-    trigger.click()
+    trigger.click(timeout=8_000)
     dialog = page.locator("#dataDialog")
     require(dialog.is_visible(), f"{dialog_type} dialog did not open")
     for name, value in values.items():
         field = page.locator(f"#dataForm [name='{name}']")
         require(field.count() == 1, f"{dialog_type} missing field {name}")
-        field.fill(value)
-    page.locator("#saveData").click()
-    page.wait_for_function("!document.querySelector('#dataDialog').open")
+        field.fill(value, timeout=8_000)
+    page.locator("#saveData").click(timeout=8_000)
+    page.wait_for_function("!document.querySelector('#dataDialog').open", timeout=8_000)
     report["functions"][f"save_{dialog_type}"] = "pass"
+    checkpoint(f"save_{dialog_type}_pass")
 
 
 def verify_measurements(page: Page, report: dict) -> None:
-    page.locator(".main-nav [data-open='measurements']").click()
+    checkpoint("measurements_start")
+    page.locator(".main-nav [data-open='measurements']").click(timeout=8_000)
     fill_and_save(
         page,
         "vital",
@@ -207,10 +226,12 @@ def verify_measurements(page: Page, report: dict) -> None:
     require(state["activity"][-1]["steps"] == 6842, "activity did not persist")
     report["outputs"]["measurement_state_roundtrip"] = "pass"
     screenshot(page, "measurements-after-save")
+    checkpoint("measurements_pass")
 
 
 def verify_structured_result(page: Page, report: dict) -> None:
-    page.locator(".main-nav [data-open='results']").click()
+    checkpoint("structured_result_start")
+    page.locator(".main-nav [data-open='results']").click(timeout=8_000)
     payload = json.dumps(
         {
             "panel": "LAB Omega metabolic panel",
@@ -221,9 +242,10 @@ def verify_structured_result(page: Page, report: dict) -> None:
         }
     ).encode("utf-8")
     page.locator("#resultFilePage").set_input_files(
-        files=[{"name": "lab-omega-result.json", "mime_type": "application/json", "buffer": payload}]
+        files=[{"name": "lab-omega-result.json", "mime_type": "application/json", "buffer": payload}],
+        timeout=8_000,
     )
-    page.wait_for_function("document.querySelectorAll('#resultList [data-result-id]').length > 0")
+    page.wait_for_function("document.querySelectorAll('#resultList [data-result-id]').length > 0", timeout=8_000)
     card_text = page.locator("#resultList [data-result-id]").first.inner_text()
     require("LAB Omega metabolic panel" in card_text, "structured result panel not rendered")
     require("educational explanation" in card_text.lower(), "English result explanation missing")
@@ -236,9 +258,11 @@ def verify_structured_result(page: Page, report: dict) -> None:
     report["outputs"]["english_result_explanation"] = "pass"
     report["outputs"]["result_original_provenance"] = "pass"
     screenshot(page, "results-structured-upload")
+    checkpoint("structured_result_pass")
 
 
 def verify_input_language_headers(page: Page, report: dict) -> None:
+    checkpoint("input_language_headers_start")
     observed: list[str] = []
 
     def capture(request) -> None:
@@ -246,21 +270,23 @@ def verify_input_language_headers(page: Page, report: dict) -> None:
             observed.append(request.headers.get("accept-language", ""))
 
     page.on("request", capture)
-    page.locator(".main-nav [data-open='chat']").click()
-    page.locator("#chatInput").fill("Please show my latest results and help me understand them")
-    page.locator("#sendButton").click()
+    page.locator(".main-nav [data-open='chat']").click(timeout=8_000)
+    page.locator("#chatInput").fill("Please show my latest results and help me understand them", timeout=8_000)
+    page.locator("#sendButton").click(timeout=8_000)
     page.wait_for_timeout(650)
-    page.locator("#chatInput").fill("Quiero ver mis resultados y entender qué significan")
-    page.locator("#sendButton").click()
+    page.locator("#chatInput").fill("Quiero ver mis resultados y entender qué significan", timeout=8_000)
+    page.locator("#sendButton").click(timeout=8_000)
     page.wait_for_timeout(650)
     require(any(value.startswith("en") for value in observed), f"English input did not send English locale: {observed}")
     require(any(value.startswith("es") for value in observed), f"Spanish input did not override OS locale: {observed}")
     report["outputs"]["input_language_to_backend_en"] = "pass"
     report["outputs"]["input_language_to_backend_es"] = "pass"
+    checkpoint("input_language_headers_pass")
 
 
 def verify_account_views_and_logout(page: Page, report: dict) -> None:
-    page.locator("#accountPill").click()
+    checkpoint("account_views_start")
+    page.locator("#accountPill").click(timeout=8_000)
     dialog = page.locator("#accountDialog")
     require(dialog.is_visible(), "account dialog did not open")
     account_text = dialog.inner_text()
@@ -273,22 +299,25 @@ def verify_account_views_and_logout(page: Page, report: dict) -> None:
         "[data-account-view]", "nodes => [...new Set(nodes.map(node => node.dataset.accountView))]"
     )
     for target in targets:
+        checkpoint(f"account_view_{target}_start")
         if not dialog.is_visible():
-            page.locator("#accountPill").click()
+            page.locator("#accountPill").click(timeout=8_000)
         control = page.locator(f"[data-account-view='{target}']")
         require(control.count() > 0, f"account view {target} missing control")
-        control.first.click()
-        page.wait_for_timeout(180)
+        control.first.click(timeout=8_000)
+        page.wait_for_timeout(120)
         assert_visible_view(page, target)
         report["windows"][f"account_{target}"] = "pass"
         screenshot(page, f"account-view-{target}")
+        checkpoint(f"account_view_{target}_pass")
 
     if not dialog.is_visible():
-        page.locator("#accountPill").click()
-    page.locator("#logoutButton").click()
-    page.wait_for_url(re.compile(r".*/login$"))
+        page.locator("#accountPill").click(timeout=8_000)
+    page.locator("#logoutButton").click(timeout=8_000)
+    page.wait_for_url(re.compile(r".*/login$"), timeout=15_000)
     require(page.locator("#loginForm").is_visible(), "logout did not return to login")
     report["functions"]["logout"] = "pass"
+    checkpoint("account_views_logout_pass")
 
 
 def run() -> dict:
@@ -335,7 +364,9 @@ def run() -> dict:
             text=True,
         )
         try:
+            checkpoint("server_wait_start")
             wait_server(base_url)
+            checkpoint("server_ready")
             with sync_playwright() as playwright:
                 launch: dict = {"headless": True, "args": ["--no-sandbox"]}
                 explicit = os.getenv("HEALTHIA_CHROMIUM_EXECUTABLE")
@@ -348,6 +379,7 @@ def run() -> dict:
                 login_language_probe(browser, base_url, "en-US", "en", "Your health should remember you", report)
                 login_language_probe(browser, base_url, "es-DO", "es", "Tu salud debería recordarte", report)
 
+                checkpoint("registration_start")
                 context: BrowserContext = browser.new_context(
                     locale="en-US",
                     viewport={"width": 1600, "height": 1000},
@@ -355,6 +387,8 @@ def run() -> dict:
                     record_video_size={"width": 1280, "height": 800},
                 )
                 page = context.new_page()
+                page.set_default_timeout(8_000)
+                page.set_default_navigation_timeout(15_000)
                 attach_diagnostics(page, report)
                 page.goto(f"{base_url}/login", wait_until="networkidle")
                 page.locator("#registerTab").click()
@@ -383,7 +417,7 @@ def run() -> dict:
                 page.wait_for_url(re.compile(rf"^{re.escape(base_url)}/?$"), timeout=15_000)
                 report["outputs"]["post_register_url"] = page.url
                 wait_for_authenticated_shell(page, report)
-                page.wait_for_function("document.documentElement.lang === 'en'")
+                page.wait_for_function("document.documentElement.lang === 'en'", timeout=8_000)
                 session = page.evaluate(
                     "async () => await (await fetch('/api/auth/session', {credentials:'same-origin', cache:'no-store'})).json()"
                 )
@@ -392,20 +426,23 @@ def run() -> dict:
                 require(session.get("authenticated") is True, "browser session verification failed after registration")
                 report["functions"]["register_and_authenticate"] = "pass"
                 screenshot(page, "home-authenticated-en")
+                checkpoint("registration_and_shell_pass")
 
                 exercise_registered_views(page, report)
 
-                page.locator("#collapseLeft").click()
+                checkpoint("panel_collapse_start")
+                page.locator("#collapseLeft").click(timeout=8_000)
                 require(page.locator("#app").evaluate("node => node.classList.contains('left-collapsed')"), "left rail did not collapse")
-                page.locator("#expandLeft").click()
+                page.locator("#expandLeft").click(timeout=8_000)
                 require(not page.locator("#app").evaluate("node => node.classList.contains('left-collapsed')"), "left rail did not reopen")
                 report["functions"]["left_navigation_collapse_expand"] = "pass"
 
-                page.locator("#collapseRight").click()
+                page.locator("#collapseRight").click(timeout=8_000)
                 require(page.locator("#app").evaluate("node => node.classList.contains('right-collapsed')"), "context panel did not collapse")
-                page.locator("#collapseRight").click()
+                page.locator("#collapseRight").click(timeout=8_000)
                 require(not page.locator("#app").evaluate("node => node.classList.contains('right-collapsed')"), "context panel did not reopen")
                 report["functions"]["context_collapse_expand"] = "pass"
+                checkpoint("panel_collapse_pass")
 
                 verify_measurements(page, report)
                 verify_structured_result(page, report)
@@ -418,9 +455,11 @@ def run() -> dict:
                 context.close()
                 browser.close()
                 report["status"] = "PASS"
+                checkpoint("lab_core_pass")
         except Exception as exc:
             report["status"] = "FAIL"
             report["error"] = f"{type(exc).__name__}: {exc}"
+            checkpoint(f"lab_core_fail_{type(exc).__name__}")
             raise
         finally:
             server.terminate()
