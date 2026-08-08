@@ -1,0 +1,91 @@
+name: One-shot Cloud reserved health route fix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: healthia-one-shot-cloud-health-route-fix
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR branch for surgical patch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Replace Cloud-only health gate and audit references
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          verifier = Path('deployment/verify_cloud_demo.py')
+          text = verifier.read_text(encoding='utf-8')
+          old = '''    health = _json(config, "GET", "/healthz")
+              if health.get("status") != "ok":
+                  raise CloudProofError(f"Cloud Run health check failed: {health}")
+
+              readiness = _json(config, "GET", "/api/readiness")
+          '''
+          # Keep indentation source-accurate instead of relying on YAML visual indentation.
+          old = old.replace('              ', '')
+          new = '''    # Cloud Run reserves some URL paths ending in `z`. The deployed gate
+              # therefore uses the richer public readiness endpoint; /healthz remains only
+              # as a local/backward-compatibility route.
+              readiness = _json(config, "GET", "/api/readiness")
+              if readiness.get("ready") is not True:
+                  raise CloudProofError(f"Cloud Run readiness check failed: {readiness}")
+          '''.replace('              ', '')
+          if old not in text:
+              raise SystemExit('Expected Cloud /healthz verifier block was not found exactly once')
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one Cloud /healthz verifier block, found {text.count(old)}')
+          verifier.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          cloud_refs = []
+          roots = [Path('deployment'), Path('.github/workflows')]
+          for root in roots:
+              if not root.exists():
+                  continue
+              for path in root.rglob('*'):
+                  if not path.is_file() or path.name == 'one-shot-cloud-health-route-fix.yml':
+                      continue
+                  try:
+                      content = path.read_text(encoding='utf-8')
+                  except UnicodeDecodeError:
+                      continue
+                  for number, line in enumerate(content.splitlines(), start=1):
+                      if '/healthz' in line:
+                          cloud_refs.append((str(path), number, line.strip()))
+          print('Remaining /healthz references under deployment/workflows:')
+          for path, number, line in cloud_refs:
+              print(f'  {path}:{number}: {line}')
+          # Only the verifier's explanatory compatibility comment may remain.
+          unexpected = [item for item in cloud_refs if item[0] != 'deployment/verify_cloud_demo.py']
+          if unexpected:
+              raise SystemExit(f'Unexpected Cloud-facing /healthz references remain: {unexpected}')
+          PY
+
+      - name: Remove this one-shot workflow and push the fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-cloud-health-route-fix.yml
+          git config user.name 'KIRA HealthIA CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add deployment/verify_cloud_demo.py .github/workflows/one-shot-cloud-health-route-fix.yml
+          git diff --cached --check
+          git commit -m 'cloud: avoid reserved healthz route in strict proof'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
