@@ -1,5 +1,7 @@
 HealthIA ONE exact-candidate Cloud proof trigger
 
-Purpose: run the main-branch permission gate and downstream Cloud Run + Vertex strict proof against the current head of kira/event-driven-results-twin-p1.
+Purpose: run the main-branch unified gate against the current head of kira/event-driven-results-twin-p1.
+Gate: permission readiness -> exact SHA freeze -> private Cloud Run deploy -> Vertex Gemini 3.5 -> Firestore/GCS strict verifier -> real browser proof -> bound artifacts.
 Requested by: KIRA / FORJA / JUDGE evidence gate
 Mode: one controlled proof run; no continuous deployment
+Attempt: unified-gate-1
