@@ -71,20 +71,20 @@ Artifact ZIP SHA-256: `2dd927ad058b519bbc815da68c668078305ee8f95aef4c76c5d3d53fc
 
 The run authenticated to project `healthia-6088a` with Google Cloud ADC, used **Gemini 3.5 Flash on Vertex AI**, and enforced a **one-model-request ceiling**.
 
-Passed checks:
+Passed evidence includes:
 
-- authenticated patient created;
-- the single allowed Gemini request interpreted the synthetic PDF and persisted result + original + clinical twin;
-- original PDF survived byte-for-byte round trip;
-- result retrieval closed the Taskmaster mission after the AI ceiling was already exhausted;
-- another authenticated patient could not see the result/document/mission;
-- the completed outcome survived logout/login.
+- authenticated patient creation;
+- the single allowed Gemini request interpreting the synthetic PDF and persisting result + original + clinical twin;
+- original PDF byte-for-byte round trip;
+- result retrieval closing the Taskmaster mission after the AI ceiling was already exhausted;
+- authenticated patient-B isolation from patient-A result/document/mission;
+- the completed outcome surviving logout/login.
 
 This proof intentionally separates *AI work* from *durable workflow completion*: once Gemini has extracted the evidence, HealthIA can finish the mission from persisted state without spending another model request.
 
 ### Earlier live Gemini + ADK interview proof — PASSED
 
-GitHub Actions run: **31203021748** demonstrated authenticated dynamic question generation, multi-block memory, Gemini-selected closure, auditable Google ADK tool execution, multimodal evidence, two-patient isolation and restart-safe patient continuity.
+GitHub Actions run **31203021748** demonstrated authenticated dynamic question generation, multi-block memory, Gemini-selected closure, auditable Google ADK tool execution, multimodal evidence, two-patient isolation and restart-safe patient continuity.
 
 ### Deterministic verification
 
@@ -123,6 +123,7 @@ flowchart LR
 - **Secret Manager** is used for durable application signing secrets, not for a Gemini key.
 - **Google ADK** provides auditable, on-demand agent/tool execution.
 - **Cloud Run** scales to zero and the demo caps maximum instances at one.
+- **Cloud Build and Cloud Run use separate service accounts** so build-time permissions are not inherited by the clinical runtime.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for implementation detail.
 
@@ -197,7 +198,7 @@ The deploy helper provisions a conservative Cloud proof environment:
 - Gemini 3.5 Flash through Vertex AI;
 - Firestore Native patient state;
 - private GCS evidence bucket with public-access prevention;
-- dedicated Cloud Run runtime service account;
+- dedicated Cloud Build and Cloud Run runtime service accounts;
 - Secret Manager only for session/device signing secrets;
 - AI request ceiling and proactive execution disabled;
 - strict post-deploy verifier.
@@ -210,7 +211,7 @@ The deploy helper provisions a conservative Cloud proof environment:
 
 For CI/non-interactive provisioning add `-Confirmed`.
 
-The script enables `aiplatform.googleapis.com`, grants the runtime identity `roles/aiplatform.user`, and **does not inject `GEMINI_API_KEY`**.
+The script enables `aiplatform.googleapis.com`, grants the runtime identity `roles/aiplatform.user`, grants the dedicated build identity `roles/run.builder`, and **does not inject `GEMINI_API_KEY`**.
 
 After deployment, `deployment/verify_cloud_demo.py` verifies the real service rather than accepting a successful deploy command as proof. It checks authenticated A/B isolation, live Gemini/ADK behavior, Firestore persistence, original GCS evidence and clinical-twin continuity.
 
@@ -222,7 +223,7 @@ Cleanup without destroying persistent proof data:
   -ServiceName healthia-one-demo
 ```
 
-Optional destructive cleanup flags exist for the bucket, secrets, runtime service account or project and require explicit confirmation.
+Optional destructive cleanup flags exist for the bucket, secrets, runtime/build service accounts or project and require explicit confirmation.
 
 ### Cloud deployment gate status
 
@@ -239,6 +240,12 @@ python -m compileall -q app healthia_one healthia_agent tests scripts deployment
 python scripts/smoke_test.py
 python scripts/judge_omega.py
 node --check web/app.js
+node --check web/patient-record.js
+node --check web/family-documents.js
+node --check web/continuity.js
+node --check web/privacy-controls.js
+node --check web/profile-devices.js
+node --check web/icons.js
 node --check web/clinical-council.js
 node --check web/runtime-integrations.js
 node --check web/provider-integrations.js
