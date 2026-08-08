@@ -1,8 +1,8 @@
 HealthIA ONE public submission-video publication gate
 
-enabled=false
-Purpose: explicitly opt in to publishing the already-verified synthetic judge-demo WebM at a stable judge-facing URL.
+enabled=true
+Purpose: one controlled publication of the already-verified synthetic judge-demo WebM as a stable public GitHub Release asset.
 Source artifact: GitHub Actions artifact 9024139098 from run 31265639488.
 Expected video SHA-256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
-Safety: publication must use a dedicated public submission-media bucket; the private clinical evidence bucket must never be made public.
-After-run policy: return this trigger to enabled=false immediately after the controlled publication attempt.
+Safety: this attempt publishes only the synthetic judge-demo video and does not change Google Cloud IAM or the private clinical evidence bucket.
+This commit intentionally enables exactly one GitHub Release publication proof and must be returned to enabled=false immediately after triggering.
