@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 8
     env:
-      PUBLIC_VIDEO_URL: https://storage.googleapis.com/healthia-6088a-public-demo/HealthIA-ONE-final-judge-demo.webm
+      PUBLIC_VIDEO_URL: https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm
       EXPECTED_VIDEO_SHA256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
     steps:
       - name: Download public URL without credentials
@@ -44,6 +44,7 @@ jobs:
             'authentication_required':False,
             'source_artifact_id':9024139098,
             'source_run_id':31265639488,
+            'release_tag':'healthia-one-hackathon-judge-demo-2026',
           }
           pathlib.Path('dist/public-video-probe/probe.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
           print(json.dumps(payload, indent=2))
