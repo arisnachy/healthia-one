@@ -1,0 +1,67 @@
+name: Revoke HealthIA temporary Cloud provisioning roles
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  revoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      DEPLOY_PRINCIPAL: healthia-github-vertex-9@healthia-6088a.iam.gserviceaccount.com
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Remove temporary provisioning roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          member="serviceAccount:${DEPLOY_PRINCIPAL}"
+
+          # Project IAM Admin is deliberately removed LAST because it authorizes
+          # the preceding policy mutations. Existing unrelated bindings remain.
+          roles=(
+            roles/serviceusage.serviceUsageAdmin
+            roles/run.sourceDeveloper
+            roles/iam.serviceAccountAdmin
+            roles/datastore.owner
+            roles/secretmanager.admin
+          )
+
+          for role in "${roles[@]}"; do
+            gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+              --member "$member" \
+              --role "$role" \
+              --condition=None \
+              --quiet || true
+          done
+
+          gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+            --member "$member" \
+            --role roles/resourcemanager.projectIamAdmin \
+            --condition=None \
+            --quiet
+
+          echo "Temporary provisioning roles removed from $DEPLOY_PRINCIPAL."
+          echo "Dedicated HealthIA build/runtime service accounts are not modified by this workflow."
+
+      - name: Summarize hardening
+        shell: bash
+        run: |
+          echo "### HealthIA Cloud post-proof hardening" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deploy principal: \`$DEPLOY_PRINCIPAL\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Temporary provisioning roles: **revoked**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build/runtime identities: **preserved**" >> "$GITHUB_STEP_SUMMARY"
