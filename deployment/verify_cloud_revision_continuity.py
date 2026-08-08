@@ -124,7 +124,7 @@ def prepare(config: CloudProofConfig, state_path: Path, before_revision: str) ->
     password = f"RevisionProof!{suffix}Aa9"
     email_a = f"revision-a-{suffix}@example.test"
     email_b = f"revision-b-{suffix}@example.test"
-    weight_marker = 73.456
+    weight_marker = 73.46
 
     account_a = _register(config, email_a, password, "Paciente Revision A")
     patient_a = str((account_a.get("account") or {}).get("patient_id") or "")
