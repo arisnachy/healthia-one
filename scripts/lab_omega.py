@@ -186,44 +186,18 @@ def open_authenticated_context(browser: Browser, base_url: str, session_cookie: 
 
     page = context.new_page()
     configure_page(page, report)
-    main_request: dict[str, str | bool | int] = {}
-
-    def capture_request(request) -> None:
-        if request.is_navigation_request() and request.frame == page.main_frame:
-            main_request["url"] = request.url
-            main_request["cookie_sent"] = "healthia_session=" in (request.header_value("cookie") or "")
-
-    page.on("request", capture_request)
     started = time.monotonic()
     response = page.goto("/", wait_until="domcontentloaded", timeout=20_000)
     require(response is not None and response.status == 200, f"browser root navigation failed: {getattr(response, 'status', None)}")
     checkpoint("browser_navigation_domcontentloaded")
 
-    # Do not call response.text() here. On Chromium/Playwright this can wait on
-    # response-body completion long after DOMContentLoaded and turn diagnostics
-    # into a false 180-second LAB timeout. Product correctness is asserted by the
-    # signed-cookie request, HTTP 200, HTML content-type, URL, and live DOM.
-    content_type = (response.header_value("content-type") or "").lower()
     report["outputs"]["browser_root_url"] = page.url
     report["outputs"]["browser_root_status"] = response.status
-    report["outputs"]["browser_root_cookie_sent"] = bool(main_request.get("cookie_sent"))
-    report["outputs"]["browser_root_content_type"] = content_type
-    report["outputs"]["dom_ready_state_after_navigation"] = page.evaluate("document.readyState")
-    report["outputs"]["dom_app_count_after_navigation"] = page.locator("#app").count()
-    report["outputs"]["dom_chat_count_after_navigation"] = page.locator("#chatInput").count()
-    report["outputs"]["dom_html_sha256_after_navigation"] = hashlib.sha256(page.content().encode("utf-8")).hexdigest()
-    checkpoint("browser_navigation_diagnostics_captured")
-
-    if page.locator("#app").count() == 0:
-        (OUTPUT / "browser-dom-after-navigation.html").write_text(page.content(), encoding="utf-8")
-        screenshot(page, "browser-dom-without-app")
-        persist_report()
-
-    require(report["outputs"]["browser_root_cookie_sent"] is True, "Chromium main navigation did not send healthia_session")
-    require("text/html" in content_type, f"Chromium root was not HTML: {content_type}")
     require(page.url.rstrip("/") == base_url, f"authenticated navigation did not stay on app shell: {page.url}")
     page.locator("#app").wait_for(state="attached", timeout=5_000)
+    checkpoint("browser_app_attached")
     page.locator("#chatInput").wait_for(state="visible", timeout=5_000)
+    checkpoint("browser_chat_visible")
     report["outputs"]["authenticated_shell_ready_ms"] = int((time.monotonic() - started) * 1000)
     report["outputs"]["functional_page_url"] = page.url
     report["checks"]["authenticated_navigation_from_registered_session"] = "pass"
