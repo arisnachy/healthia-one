@@ -4,4 +4,5 @@ Purpose: run the main-branch unified gate against the current head of kira/event
 Gate: permission readiness -> exact SHA freeze -> private Cloud Run deploy -> Vertex Gemini 3.5 -> Firestore/GCS strict verifier -> real browser proof -> bound artifacts.
 Requested by: KIRA / FORJA / JUDGE evidence gate
 Mode: one controlled proof run; no continuous deployment
-Attempt: unified-gate-1
+Attempt: unified-gate-2
+Change under proof: ADK clinical planner forces Gemini 3.5 Flash thinking_level=minimal and max_output_tokens<=1100 to remove the stage-2 timeout while preserving the real aggregate ADK function-tool trajectory.
