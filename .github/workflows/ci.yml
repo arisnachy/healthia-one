@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-22.04
-    timeout-minutes: 35
+    timeout-minutes: 42
     env:
       HEALTHIA_LLM_BACKEND: mock
       HEALTHIA_STORE_BACKEND: memory
@@ -46,7 +46,7 @@ jobs:
         run: python scripts/full_system_check.py
       - name: Install Chromium for browser verification
         run: python -m playwright install --with-deps chromium
-      - name: Browser end-to-end verification
+      - name: Browser clinical end-to-end verification
         run: python scripts/browser_smoke.py
       - name: Upload browser verification evidence
         if: always()
@@ -56,12 +56,23 @@ jobs:
           path: dist/browser-smoke
           if-no-files-found: warn
           retention-days: 30
+      - name: LAB OMEGA full-window functional laboratory
+        run: python scripts/lab_omega.py
+      - name: Upload LAB OMEGA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-LAB-OMEGA
+          path: dist/lab-omega
+          if-no-files-found: warn
+          retention-days: 30
       - run: python -m compileall -q app healthia_one healthia_agent tests scripts deployment/verify_google_ai.py deployment/verify_cloud_demo.py
       - run: python scripts/smoke_test.py
       - name: JUDGE OMEGA evidence review
         run: python scripts/judge_omega.py
       - name: Validate semantic frontend modules
         run: |
+          node --check web/i18n.js
           node --check web/app.js
           node --check web/patient-record.js
           node --check web/family-documents.js
