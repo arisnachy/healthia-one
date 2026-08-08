@@ -205,13 +205,22 @@ def run() -> dict:
                 if explicit: launch["executable_path"]=explicit
                 elif Path("/usr/bin/chromium").exists(): launch["executable_path"]="/usr/bin/chromium"
                 browser=playwright.chromium.launch(**launch)
-                context=browser.new_context(locale="en-US",viewport={"width":1600,"height":1000},record_video_dir=str(VIDEO_DIR),record_video_size={"width":1280,"height":800})
+                context=browser.new_context(base_url=base_url,locale="en-US",viewport={"width":1600,"height":1000},record_video_dir=str(VIDEO_DIR),record_video_size={"width":1280,"height":800})
+                # Core owns the registration-UI contract. Secondary uses the real
+                # auth API only as deterministic setup, then proves every secondary
+                # window and mutation through the authenticated Chromium session.
+                registration=context.request.post("/api/auth/register",data={"display_name":"LAB Omega Secondary","email":"lab.secondary@example.test","password":"LabOmega-Secondary-2026"},headers={"Accept-Language":"en-US"})
+                require(registration.status==201,f"secondary auth setup returned {registration.status}")
+                session=context.request.get("/api/auth/session",headers={"Accept-Language":"en-US"})
+                require(session.status==200 and session.json().get("authenticated") is True,"secondary browser context is not authenticated")
+                report["functions"]["authenticated_setup"]="pass"
                 page=context.new_page()
                 page.on("console",lambda message: report["console_errors"].append(message.text) if message.type=="error" else None)
                 page.on("pageerror",lambda error: report["page_errors"].append(str(error)))
-                page.goto(f"{base_url}/login",wait_until="networkidle")
-                page.locator("#registerTab").click(); page.locator("#registerForm [name='display_name']").fill("LAB Omega Secondary"); page.locator("#registerForm [name='email']").fill("lab.secondary@example.test"); page.locator("#registerForm [name='password']").fill("LabOmega-Secondary-2026")
-                page.locator("#registerForm button[type='submit']").click(); page.wait_for_url(f"{base_url}/"); page.wait_for_selector("#chatInput"); wait_view_registry(page)
+                response=page.goto("/",wait_until="networkidle",timeout=20_000)
+                require(response is not None and response.status==200,"secondary shell did not load")
+                page.wait_for_selector("#chatInput",timeout=10_000)
+                wait_view_registry(page)
                 test_family(page,report); test_documents(page,report); test_appointment(page,report); test_privacy(page,report); test_profile(page,report); test_medication(page,report); test_devices(page,report); test_timeline_treatment_and_cost(page,report)
                 require(not report["console_errors"],f"console errors: {report['console_errors']}"); require(not report["page_errors"],f"page errors: {report['page_errors']}")
                 report["status"]="PASS"; screenshot(page,"secondary-final"); context.close(); browser.close()
