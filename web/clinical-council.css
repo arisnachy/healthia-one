@@ -45,7 +45,8 @@
 .patient-chip { display: none !important; }
 .user-pill { margin-top: auto; }
 
-/* ChatGPT-style collapsed rail: every primary destination remains visible. */
+/* ChatGPT-style collapsed rail: keep the six core destinations immediately
+   reachable while the expanded rail retains every advanced health workspace. */
 @media (min-width: 761px) {
   .left-collapsed .left-rail {
     align-items: center;
@@ -72,6 +73,9 @@
     border-radius: 12px;
     visibility: visible !important;
     opacity: 1 !important;
+  }
+  .left-collapsed .main-nav button:nth-child(n + 7) {
+    display: none !important;
   }
   .left-collapsed .left-rail-scroll {
     display: flex !important;
