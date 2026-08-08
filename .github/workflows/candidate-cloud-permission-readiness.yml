@@ -2,28 +2,23 @@ name: Candidate Cloud deployment permission readiness
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - "deployment/check_cloud_permissions.py"
 
 permissions:
   contents: read
 
 concurrency:
-  group: cloud-permissions-${{ github.event.pull_request.number || github.ref }}
+  group: cloud-permissions-kira-event-driven-results-twin-p1
   cancel-in-progress: true
 
 jobs:
   cloud-permissions:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     timeout-minutes: 8
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'kira/event-driven-results-twin-p1' }}
+          ref: kira/event-driven-results-twin-p1
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
