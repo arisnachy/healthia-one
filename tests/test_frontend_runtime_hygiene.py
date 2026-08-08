@@ -62,3 +62,14 @@ def test_cloud_ai_status_is_driven_by_runtime_readiness_not_key_presence() -> No
     assert "readiness.ai_ready" in app_js
     assert "readiness.api_key_configured" not in app_js
     assert "readiness.llm_backend" in app_js
+
+
+def test_cost_control_runtime_is_vertex_aware_and_has_no_permanent_polling() -> None:
+    cost_js = (WEB / "cost-control.js").read_text(encoding="utf-8")
+    assert "google_ai_configured" in cost_js
+    assert "ai_transport" in cost_js
+    assert "Vertex AI activo" in cost_js
+    assert "api_key_configured" not in cost_js
+    assert "setInterval(" not in cost_js
+    assert "visibilitychange" in cost_js
+    assert "window.addEventListener('focus', loadStatus)" in cost_js
