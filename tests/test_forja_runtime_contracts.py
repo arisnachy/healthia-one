@@ -76,6 +76,7 @@ def test_ci_validates_semantic_runtime_modules() -> None:
 
 
 def test_runtime_affordances_are_real_not_decorative() -> None:
+    index = (ROOT / "web/index.html").read_text(encoding="utf-8")
     runtime = (ROOT / "web/runtime-integrations.js").read_text(encoding="utf-8")
     providers = (ROOT / "web/provider-integrations.js").read_text(encoding="utf-8")
     cost_control = (ROOT / "web/cost-control.js").read_text(encoding="utf-8")
@@ -84,13 +85,16 @@ def test_runtime_affordances_are_real_not_decorative() -> None:
     assert "SpeechRecognition" in runtime
     assert 'json("/api/ai/test", {method: "POST"})' in runtime
     assert 'button.setAttribute("aria-pressed"' in runtime
-    assert "/assets/runtime-integrations.js" in icons
-    assert "/assets/provider-integrations.js" in icons
-    assert "/assets/cost-control.js" in icons
+    for asset in ("runtime-integrations.js", "provider-integrations.js", "cost-control.js"):
+        assert index.count(f'/assets/{asset}') == 1
+        assert f'/assets/{asset}' not in icons
+    assert "loadScript(" not in icons
+    assert "document.createElement('script')" not in icons
     assert 'fetch("/api/devices")' in providers
     assert "provider_catalog" in providers
     assert "/api/cost-control" in cost_control
     assert "IA activa" in cost_control
+    assert "Vertex AI activo" in cost_control
     assert "Local · 0 llamadas" in cost_control
     assert ".provider-grid" in interactions
     assert 'content: "Abrir menú"' in interactions
