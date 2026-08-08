@@ -15,15 +15,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cloud-gate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+      candidate_sha: ${{ steps.gate.outputs.candidate_sha }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: kira/event-driven-results-twin-p1
+          fetch-depth: 1
+      - name: Require explicit Cloud proof opt-in
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "candidate_sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            enabled=true
+          elif grep -Fxq 'enabled=true' .github/cloud-proof-trigger.txt 2>/dev/null; then
+            enabled=true
+          else
+            enabled=false
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_CLOUD_PROOF_GATE enabled=$enabled candidate_sha=$sha"
+
   cloud-permissions:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: cloud-gate
+    if: needs.cloud-gate.outputs.enabled == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 8
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v5
         with:
-          ref: kira/event-driven-results-twin-p1
+          ref: ${{ needs.cloud-gate.outputs.candidate_sha }}
           fetch-depth: 1
 
       - name: Record candidate SHA
@@ -73,8 +103,8 @@ jobs:
 
   deploy-and-prove:
     name: Exact candidate Cloud Run + Vertex + browser proof
-    needs: cloud-permissions
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [cloud-gate, cloud-permissions]
+    if: needs.cloud-gate.outputs.enabled == 'true' && needs.cloud-permissions.result == 'success'
     runs-on: ubuntu-22.04
     timeout-minutes: 55
     env:
@@ -84,17 +114,18 @@ jobs:
       SERVICE_NAME: healthia-one-demo
       BUCKET_NAME: healthia-6088a-healthia-evidence
     steps:
-      - name: Checkout exact candidate
+      - name: Checkout frozen candidate SHA
         uses: actions/checkout@v5
         with:
-          ref: kira/event-driven-results-twin-p1
+          ref: ${{ needs.cloud-gate.outputs.candidate_sha }}
           fetch-depth: 1
 
-      - name: Freeze exact candidate SHA
+      - name: Verify frozen candidate SHA
         id: exact
         shell: bash
         run: |
           sha="$(git rev-parse HEAD)"
+          test "$sha" = "${{ needs.cloud-gate.outputs.candidate_sha }}"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "HEALTHIA_EXACT_CANDIDATE_SHA=$sha" >> "$GITHUB_ENV"
           echo "Exact candidate SHA: $sha"
