@@ -1,0 +1,42 @@
+name: One-shot browser provenance contract fix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Resolve persisted original through canonical document relation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/cloud_browser_judge_proof.py')
+          text=p.read_text(encoding='utf-8')
+          old='''            if candidates:\n                result = candidates[-1]\n                if result.get("status") == "parsed":\n                    break\n            page.wait_for_timeout(750)\n        require(result is not None and result.get("status") == "parsed", f"browser PDF did not become a parsed multimodal result: {result}")\n        result_id = str(result.get("id") or "")\n        document_id = str(result.get("document_id") or "")\n        require(result_id and document_id, "browser PDF result lacks result/document provenance")\n'''
+          new='''            if candidates:\n                result = candidates[-1]\n                result_id_candidate = str(result.get("id") or "")\n                document_candidate = next(\n                    (item for item in state.get("documents", []) if item.get("related_result_id") == result_id_candidate),\n                    None,\n                )\n                if result.get("status") == "parsed" and result_id_candidate and document_candidate:\n                    break\n            page.wait_for_timeout(750)\n        require(result is not None and result.get("status") == "parsed", f"browser PDF did not become a parsed multimodal result: {result}")\n        result_id = str(result.get("id") or "")\n        document = next(\n            (item for item in state.get("documents", []) if item.get("related_result_id") == result_id),\n            None,\n        )\n        document_id = str((document or {}).get("id") or "")\n        require(result_id and document_id, "browser PDF result lacks canonical result/original provenance")\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one stale provenance block, found {text.count(old)}')
+          p.write_text(text.replace(old,new,1),encoding='utf-8')
+          PY
+          python -m py_compile scripts/cloud_browser_judge_proof.py
+          rm .github/workflows/one-shot-browser-provenance-fix.yml
+          git config user.name 'KIRA HealthIA CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add scripts/cloud_browser_judge_proof.py .github/workflows/one-shot-browser-provenance-fix.yml
+          git diff --cached --check
+          git commit -m 'test: follow canonical result-to-original provenance in Cloud browser proof'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
