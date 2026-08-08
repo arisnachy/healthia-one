@@ -4,12 +4,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_clinical_council_frontend_is_loaded() -> None:
+def test_clinical_council_frontend_is_loaded_explicitly() -> None:
+    html = (ROOT / "web/index.html").read_text(encoding="utf-8")
     icons = (ROOT / "web/icons.js").read_text(encoding="utf-8")
     script = (ROOT / "web/clinical-council.js").read_text(encoding="utf-8")
     styles = (ROOT / "web/clinical-council.css").read_text(encoding="utf-8")
 
-    assert "/assets/clinical-council.js" in icons
+    assert html.count('/assets/clinical-council.js') == 1
+    assert "/assets/clinical-council.js" not in icons
+    assert "loadScript(" not in icons
     assert "/assets/clinical-council.css" in script
     assert "[ENTREVISTA_CLINICA]" in script
     assert "clinical-question-block" in script
