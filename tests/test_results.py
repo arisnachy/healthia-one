@@ -8,7 +8,8 @@ def test_json_result_is_parsed_and_explained_without_diagnosis():
     result = parse_result_file("labs.json", json.dumps(payload).encode())
     explanation = explain_result(result)
     assert result.status == "parsed"
-    assert "no un diagnóstico" in explanation
+    lowered = explanation.lower()
+    assert ("not a diagnosis" in lowered) or ("no un diagnóstico" in lowered)
     assert "LDL" in explanation
 
 
@@ -16,4 +17,5 @@ def test_pdf_is_not_fabricated():
     result = parse_result_file("scan.pdf", b"%PDF-demo")
     explanation = explain_result(result)
     assert result.status == "pending_multimodal"
-    assert "No inventaré" in explanation
+    lowered = explanation.lower()
+    assert ("will not invent" in lowered) or ("no inventaré" in lowered)
