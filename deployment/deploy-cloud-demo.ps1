@@ -102,7 +102,10 @@ if (-not $Confirmed) {
 & gcloud config set project $ProjectId | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "No se pudo seleccionar el proyecto." }
 
-Write-Host "Activando APIs necesarias..." -ForegroundColor Cyan
+# The GitHub provisioning identity intentionally does not need permission to
+# enable project services. The hackathon project is preconfigured; if any
+# required API below is unavailable, the first dependent gcloud operation fails
+# closed and the Cloud proof is not counted.
 $apis = @(
     "run.googleapis.com",
     "aiplatform.googleapis.com",
@@ -113,8 +116,10 @@ $apis = @(
     "artifactregistry.googleapis.com",
     "iam.googleapis.com"
 )
-& gcloud services enable @apis --project $ProjectId | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "No se pudieron activar las APIs necesarias." }
+Write-Host "Usando APIs preconfiguradas (sin serviceusage.services.enable):" -ForegroundColor Cyan
+foreach ($api in $apis) {
+    Write-Host "- $api" -ForegroundColor DarkGray
+}
 
 Ensure-Secret $DeviceSecretName "identidad durable de dispositivos"
 Ensure-Secret $SessionSecretName "sesiones firmadas de pacientes"
