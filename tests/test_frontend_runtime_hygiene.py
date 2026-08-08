@@ -43,6 +43,11 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
     assert "document.createElement('script')" not in icons
 
 
+def test_browser_runtime_has_no_permanent_interval_polling() -> None:
+    offenders = [path.name for path in WEB.glob("*.js") if "setInterval(" in path.read_text(encoding="utf-8")]
+    assert offenders == [], f"Permanent browser polling found in: {offenders}"
+
+
 def test_repository_contains_no_transfer_or_temporary_workflow_artifacts() -> None:
     assert not (ROOT / ".cleanup-bundle").exists()
     assert not list(ROOT.glob(".audit-tree-probe*"))
