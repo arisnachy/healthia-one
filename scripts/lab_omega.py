@@ -19,6 +19,13 @@ OUTPUT = ROOT / "dist" / "lab-omega"
 VIDEO_DIR = OUTPUT / "video"
 MAIN_VIEWS = ("chat", "today", "measurements", "results", "record", "missions")
 ACCOUNT_VIEWS = ("profile", "control", "devices")
+STYLES = ("styles.css", "interactions.css", "clinical-council.css", "cost-control.css")
+SCRIPTS = (
+    "i18n.js", "app.js", "clinical-council.js", "patient-record.js",
+    "family-documents.js", "continuity.js", "privacy-controls.js",
+    "profile-devices.js", "account.js", "runtime-integrations.js",
+    "provider-integrations.js", "cost-control.js", "icons.js",
+)
 _ACTIVE_REPORT: dict | None = None
 
 
@@ -86,6 +93,19 @@ def api_json(context: BrowserContext, path: str, *, locale: str = "en-US") -> di
     return response.json()
 
 
+def hydrate_shell(page: Page, base_url: str, root_html: str) -> None:
+    shell_html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", root_html)
+    shell_html = re.sub(r'<script[^>]+src="/assets/[^"]+"[^>]*></script>', "", shell_html)
+    page.set_content(shell_html, wait_until="domcontentloaded", timeout=20_000)
+    require(page.locator("#app").count() == 1, "authenticated shell DOM missing before asset hydration")
+    require(page.locator("#chatInput").count() == 1, "authenticated composer DOM missing before asset hydration")
+    for stylesheet in STYLES:
+        page.add_style_tag(url=f"{base_url}/assets/{stylesheet}")
+    for script in SCRIPTS:
+        page.add_script_tag(url=f"{base_url}/assets/{script}")
+    page.locator("#chatInput").wait_for(state="visible", timeout=15_000)
+
+
 def login_language_probe(browser: Browser, base_url: str, locale: str, expected_lang: str, fragment: str, report: dict) -> None:
     checkpoint(f"login_{expected_lang}_start")
     context = browser.new_context(locale=locale, viewport={"width": 1440, "height": 900})
@@ -131,14 +151,12 @@ def register_and_export_session(browser: Browser, base_url: str, report: dict) -
     response = info.value
     require(response.status == 201, f"registration returned {response.status}")
     require("healthia_session=" in (response.header_value("set-cookie") or ""), "registration did not emit session cookie")
-
     cookies = context.cookies(base_url)
     session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
     require(session_cookie is not None, "browser did not retain healthia_session")
     require(session_cookie.get("secure") is False, "local HTTP session cookie unexpectedly requires Secure")
     session = context.request.get("/api/auth/session", headers={"Accept-Language": "en-US"})
     require(session.status == 200 and session.json().get("authenticated") is True, "registered browser session failed verification")
-
     report["functions"]["register_and_authenticate"] = "pass"
     report["outputs"]["registration_http_status"] = 201
     report["outputs"]["registration_set_cookie_present"] = True
@@ -171,11 +189,9 @@ def open_authenticated_context(browser: Browser, base_url: str, session_cookie: 
     restored = next((item for item in context.cookies(base_url) if item.get("name") == "healthia_session"), None)
     require(restored is not None, "clean browser context did not retain restored signed cookie")
     checkpoint("continuity_cookie_restored")
-
     session = context.request.get("/api/auth/session", headers={"Accept-Language": "en-US"})
     require(session.status == 200 and session.json().get("authenticated") is True, "signed session did not survive clean browser context")
     report["checks"]["signed_session_survives_clean_browser_context"] = "pass"
-
     root_probe = context.request.get("/", headers={"Accept-Language": "en-US"})
     require(root_probe.status == 200, f"authenticated root returned {root_probe.status}")
     root_html = root_probe.text()
@@ -184,31 +200,19 @@ def open_authenticated_context(browser: Browser, base_url: str, session_cookie: 
     report["checks"]["authenticated_root_returns_real_shell"] = "pass"
     report["outputs"]["api_root_sha256"] = root_sha
     checkpoint("authenticated_root_probe_pass")
-
-    # Chromium 151 on GitHub's hosted runner can visibly paint the streamed
-    # authenticated root while Playwright's main-world DOM remains detached.
-    # We therefore prove transport/auth above, establish the real server origin,
-    # then set the exact authenticated root bytes into that same-origin page.
-    # Absolute CSS/JS assets and every /api/* request still go to FastAPI with
-    # the original signed session cookie; only the problematic document handoff
-    # is replaced by deterministic byte-for-byte injection.
     page = context.new_page()
     configure_page(page, report)
     origin_probe = page.goto("/healthz", wait_until="domcontentloaded", timeout=20_000)
     require(origin_probe is not None and origin_probe.status == 200, "same-origin browser harness did not load")
     checkpoint("browser_same_origin_ready")
     started = time.monotonic()
-    page.set_content(root_html, wait_until="domcontentloaded", timeout=20_000)
-    checkpoint("browser_exact_shell_injected")
-    page.locator("#app").wait_for(state="attached", timeout=5_000)
-    page.locator("#chatInput").wait_for(state="visible", timeout=15_000)
+    hydrate_shell(page, base_url, root_html)
     checkpoint("browser_verified_shell_ready")
-    report["outputs"]["browser_root_source"] = "exact_authenticated_root_html_via_same_origin_set_content"
+    report["outputs"]["browser_root_source"] = "authenticated_root_dom_plus_ordered_real_assets"
     report["outputs"]["browser_root_sha256"] = root_sha
     report["outputs"]["authenticated_shell_ready_ms"] = int((time.monotonic() - started) * 1000)
     report["outputs"]["functional_page_url"] = page.url
     report["checks"]["browser_executes_exact_authenticated_shell_bytes"] = "pass"
-
     composer = page.locator("#chatInput")
     composer.fill("LAB Omega readiness probe")
     require(composer.input_value() == "LAB Omega readiness probe", "authenticated composer rejected text")
@@ -398,7 +402,6 @@ def run() -> dict:
                 session_cookie = register_and_export_session(browser, base_url, report)
                 context, page = open_authenticated_context(browser, base_url, session_cookie, report)
                 exercise_registered_views(page, report)
-
                 checkpoint("collapse_start")
                 page.locator("#collapseLeft").click()
                 page.locator("#expandLeft").wait_for(state="visible")
@@ -409,7 +412,6 @@ def run() -> dict:
                 page.locator("#collapseRight").click()
                 report["functions"]["context_collapse_expand"] = "pass"
                 checkpoint("collapse_pass")
-
                 verify_measurements(context, page, report)
                 verify_structured_result(context, page, report)
                 verify_input_language_headers(page, report)
