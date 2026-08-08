@@ -64,11 +64,19 @@ def screenshot(page: Page, name: str) -> None:
 
 
 def answer_visible_block(page: Page) -> None:
+    """Answer all five contract questions through the patient-visible 2+3 flow."""
     block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
     require(block.locator(".clinical-question").count() == 5, "dynamic clinical block is not exactly five questions")
+    require(block.locator(".clinical-question:visible").count() == 2, "progressive clinical block must start with two visible questions")
+    reveal = block.locator(".clinical-show-all")
+    require(reveal.is_visible(), "progressive clinical block has no 2+3 continuation control")
+    reveal.click()
+    require(block.locator(".clinical-question:visible").count() == 5, "remaining three clinical questions did not reveal")
     for field in block.locator(".clinical-question").all():
         field.locator(".clinical-option").first.click()
-    block.locator(".clinical-submit").click()
+    submit = block.locator(".clinical-submit")
+    require(submit.is_visible(), "clinical submit did not appear after revealing all five questions")
+    submit.click()
 
 
 def latest_assistant(page: Page) -> tuple[str, str]:
@@ -145,13 +153,16 @@ def run() -> dict:
         report["checks"].append("secure_browser_registration_and_session")
         require(page.locator("#accountPill strong").inner_text().strip() == display_name, "account pill did not render authenticated identity")
         readiness_before = api_json(page, "/api/readiness")
-        runtime_label = page.locator("#runtimeLabel").inner_text().strip()
+        runtime = page.locator("#runtimeLabel")
+        runtime_label = runtime.inner_text().strip()
         require(readiness_before.get("ai_ready") is True, "Cloud browser started without live Google AI readiness")
         require(readiness_before.get("model") == "gemini-3.5-flash", f"unexpected browser model: {readiness_before.get('model')}")
-        require("falta" not in runtime_label.lower() and "no disponible" not in runtime_label.lower(), f"runtime label contradicts live AI readiness: {runtime_label}")
-        require("vertex" in runtime_label.lower() or "google ai" in runtime_label.lower(), f"runtime label does not expose active Google AI transport: {runtime_label}")
+        require(runtime.get_attribute("data-runtime-backend") == readiness_before.get("llm_backend"), "patient chrome lost auditable runtime backend metadata")
+        require(runtime.get_attribute("data-runtime-model") == readiness_before.get("model"), "patient chrome lost auditable runtime model metadata")
+        require("continu" in runtime_label.lower(), f"patient runtime label is not natural continuity language: {runtime_label}")
+        require("gemini" not in runtime_label.lower() and "vertex" not in runtime_label.lower(), "patient chrome leaks implementation branding")
         report["runtime_label"] = runtime_label
-        report["checks"].append("browser_runtime_label_matches_live_vertex_readiness")
+        report["checks"].append("browser_patient_natural_runtime_with_auditable_vertex_metadata")
         screenshot(page, "02-authenticated-home.png")
 
         page.locator("#accountPill").click()
@@ -172,8 +183,8 @@ def run() -> dict:
         first_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
         require(first_block.locator(".clinical-question").count() == 5, "first live Gemini block does not have five questions")
         badge = first_block.locator(".clinical-source.is-dynamic").inner_text().strip()
-        require(badge == "Preguntas creadas para este caso · Gemini + ADK", f"live source badge mismatch: {badge}")
-        report["checks"].append("live_gemini_adk_first_five_question_block")
+        require(badge == "Preguntas creadas para este caso", f"patient-natural live source badge mismatch: {badge}")
+        report["checks"].append("live_gemini_adk_first_five_question_block_progressive")
         screenshot(page, "04-live-question-block-1.png")
         answer_visible_block(page)
 
@@ -182,7 +193,7 @@ def run() -> dict:
         page.wait_for_timeout(500)
         second_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
         require(second_block.locator(".clinical-question").count() == 5, "second live Gemini block does not have five questions")
-        report["checks"].append("live_gemini_adk_second_five_question_block")
+        report["checks"].append("live_gemini_adk_second_five_question_block_progressive")
         screenshot(page, "05-live-question-block-2.png")
         answer_visible_block(page)
 
