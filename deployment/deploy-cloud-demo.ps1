@@ -7,6 +7,7 @@ param(
     [string]$BucketName = "",
     [string]$ServiceName = "healthia-one-demo",
     [string]$RuntimeServiceAccount = "healthia-one-demo",
+    [string]$BuildServiceAccount = "healthia-one-build",
     [string]$DeviceSecretName = "healthia-device-token-secret",
     [string]$SessionSecretName = "healthia-session-secret",
     [ValidateRange(8, 40)][int]$RequestLimit = 20,
@@ -28,6 +29,8 @@ if ([string]::IsNullOrWhiteSpace($BucketName)) {
     $BucketName = "$ProjectId-healthia-evidence"
 }
 $RuntimeServiceAccountEmail = "$RuntimeServiceAccount@$ProjectId.iam.gserviceaccount.com"
+$BuildServiceAccountEmail = "$BuildServiceAccount@$ProjectId.iam.gserviceaccount.com"
+$BuildServiceAccountResource = "projects/$ProjectId/serviceAccounts/$BuildServiceAccountEmail"
 
 function New-CryptoSecretValue {
     $bytes = New-Object byte[] 48
@@ -44,9 +47,8 @@ function New-CryptoSecretValue {
 
 function Ensure-Secret([string]$Name, [string]$Purpose) {
     & gcloud secrets describe $Name --project $ProjectId --format "value(name)" 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        return
-    }
+    if ($LASTEXITCODE -eq 0) { return }
+
     Write-Host "Creando secreto criptografico para $Purpose..." -ForegroundColor Cyan
     $secretValue = New-CryptoSecretValue
     try {
@@ -61,12 +63,32 @@ function Ensure-Secret([string]$Name, [string]$Purpose) {
     }
 }
 
+function Ensure-ServiceAccount([string]$AccountId, [string]$Email, [string]$DisplayName) {
+    & gcloud iam service-accounts describe $Email --project $ProjectId --format "value(email)" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { return }
+
+    & gcloud iam service-accounts create $AccountId `
+        --project $ProjectId `
+        --display-name $DisplayName | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la cuenta de servicio $AccountId." }
+}
+
+function Grant-ProjectRole([string]$Email, [string]$Role) {
+    & gcloud projects add-iam-policy-binding $ProjectId `
+        --member "serviceAccount:$Email" `
+        --role $Role `
+        --condition=None `
+        --quiet | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo asignar $Role a $Email." }
+}
+
 Write-Host "HEALTHIA ONE - CLOUD / VERTEX HACKATHON PROOF" -ForegroundColor Cyan
 Write-Host "Proyecto: $ProjectId" -ForegroundColor White
 Write-Host "Cloud Run: $ServiceName ($Region)" -ForegroundColor White
 Write-Host "Vertex AI: Gemini 3.5 Flash ($VertexLocation), ADC por identidad de servicio" -ForegroundColor White
 Write-Host "Firestore: (default) ($FirestoreLocation)" -ForegroundColor White
 Write-Host "Evidencia clinica: gs://$BucketName ($BucketLocation)" -ForegroundColor White
+Write-Host "Build SA: $BuildServiceAccountEmail" -ForegroundColor White
 Write-Host "Runtime SA: $RuntimeServiceAccountEmail" -ForegroundColor White
 Write-Host "Cloud Run: min 0, max 1; agentes a demanda y proactive=false." -ForegroundColor Green
 Write-Host "Google AI: maximo $RequestLimit solicitudes por proceso y $MaxOutputTokens tokens de salida." -ForegroundColor Green
@@ -74,9 +96,7 @@ Write-Host "No se inyecta GEMINI_API_KEY: Cloud Run usa su service account para 
 
 if (-not $Confirmed) {
     $confirmation = Read-Host "Escribe DEPLOY para aprovisionar/desplegar y probar"
-    if ($confirmation -ne "DEPLOY") {
-        throw "Despliegue cancelado."
-    }
+    if ($confirmation -ne "DEPLOY") { throw "Despliegue cancelado." }
 }
 
 & gcloud config set project $ProjectId | Out-Host
@@ -99,24 +119,22 @@ if ($LASTEXITCODE -ne 0) { throw "No se pudieron activar las APIs necesarias." }
 Ensure-Secret $DeviceSecretName "identidad durable de dispositivos"
 Ensure-Secret $SessionSecretName "sesiones firmadas de pacientes"
 
-& gcloud iam service-accounts describe $RuntimeServiceAccountEmail --project $ProjectId --format "value(email)" 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    & gcloud iam service-accounts create $RuntimeServiceAccount --project $ProjectId --display-name "HealthIA ONE demo runtime" | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la cuenta de servicio de runtime." }
-}
+Ensure-ServiceAccount $BuildServiceAccount $BuildServiceAccountEmail "HealthIA ONE Cloud Build"
+Ensure-ServiceAccount $RuntimeServiceAccount $RuntimeServiceAccountEmail "HealthIA ONE demo runtime"
 
+# Build identity: only what source deployment needs. We specify it explicitly so
+# the proof never depends on whichever default Cloud Build SA the project uses.
+Grant-ProjectRole $BuildServiceAccountEmail "roles/run.builder"
+
+# Runtime identity: least-privilege application access. It receives no deploy or
+# project-IAM administration role.
 foreach ($role in @(
     "roles/aiplatform.user",
     "roles/datastore.user",
     "roles/storage.objectAdmin",
     "roles/secretmanager.secretAccessor"
 )) {
-    & gcloud projects add-iam-policy-binding $ProjectId `
-        --member "serviceAccount:$RuntimeServiceAccountEmail" `
-        --role $role `
-        --condition=None `
-        --quiet | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "No se pudo asignar $role a $RuntimeServiceAccountEmail." }
+    Grant-ProjectRole $RuntimeServiceAccountEmail $role
 }
 
 & gcloud firestore databases describe --database="(default)" --project $ProjectId --format "value(name)" 2>$null | Out-Null
@@ -160,6 +178,7 @@ $envVars = @(
 $args = @(
     "run", "deploy", $ServiceName,
     "--source", ".",
+    "--build-service-account", $BuildServiceAccountResource,
     "--project", $ProjectId,
     "--region", $Region,
     "--service-account", $RuntimeServiceAccountEmail,
