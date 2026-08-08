@@ -111,22 +111,22 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
         record_video_dir=str(VIDEO_DIR),
         record_video_size={"width": 1280, "height": 800},
     )
-    page = context.new_page()
-    configure_page(page, report)
-    page.goto("/login", wait_until="networkidle")
-    page.locator("#registerTab").click()
-    page.locator("#registerForm [name='display_name']").fill("LAB Omega Patient")
-    page.locator("#registerForm [name='email']").fill("lab.omega@example.test")
-    page.locator("#registerForm [name='password']").fill("LabOmega-2026-safe")
-    with page.expect_response("**/api/auth/register") as info:
-        page.locator("#registerForm button[type='submit']").click()
+    registration_page = context.new_page()
+    configure_page(registration_page, report)
+    registration_page.goto("/login", wait_until="networkidle")
+    registration_page.locator("#registerTab").click()
+    registration_page.locator("#registerForm [name='display_name']").fill("LAB Omega Patient")
+    registration_page.locator("#registerForm [name='email']").fill("lab.omega@example.test")
+    registration_page.locator("#registerForm [name='password']").fill("LabOmega-2026-safe")
+    with registration_page.expect_response("**/api/auth/register") as info:
+        registration_page.locator("#registerForm button[type='submit']").click()
     response = info.value
     require(response.status == 201, f"registration returned {response.status}")
     require("healthia_session=" in (response.header_value("set-cookie") or ""), "registration did not emit session cookie")
 
-    # Registration proof and shell proof are deliberately separate. Validate
-    # the cookie/session first, then perform a fresh authenticated navigation.
-    # This removes a redirect-vs-render race without bypassing any product gate.
+    # Prove the session immediately, before touching the shell. This keeps auth
+    # failures distinct from frontend failures and avoids the registration page's
+    # own in-flight redirect competing with our verification navigation.
     cookies = context.cookies(base_url)
     session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
     require(session_cookie is not None and session_cookie.get("secure") is False, "browser registration cookie invalid for local HTTP")
@@ -145,9 +145,14 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
 
     checkpoint("authenticated_navigation_start")
     navigation_started = time.monotonic()
-    page.goto(f"{base_url}/", wait_until="domcontentloaded", timeout=20_000)
-    require(page.url.rstrip("/") == base_url, f"authenticated navigation did not stay on app shell: {page.url}")
+    # A new page in the same BrowserContext inherits the exact registration
+    # cookie but has no competing navigation. That is the cleanest proof that
+    # the newly registered session can open the real application shell.
+    page = context.new_page()
+    configure_page(page, report)
     try:
+        page.goto(f"{base_url}/", wait_until="domcontentloaded", timeout=20_000)
+        require(page.url.rstrip("/") == base_url, f"authenticated navigation did not stay on app shell: {page.url}")
         page.locator("#app").wait_for(state="attached", timeout=20_000)
         composer = page.locator("#chatInput")
         composer.wait_for(state="visible", timeout=20_000)
@@ -168,6 +173,10 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
     screenshot(page, "registered-browser-session")
     screenshot(page, "home-authenticated-en")
     checkpoint("register_and_composer_pass")
+    try:
+        registration_page.close()
+    except Exception:
+        pass
     return context, page
 
 
