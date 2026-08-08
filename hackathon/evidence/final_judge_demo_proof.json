@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-08",
+  "status": "PASS",
+  "synthetic_only": true,
+  "github_actions": {
+    "run_id": 31265639488,
+    "candidate_sha": "3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e",
+    "artifact_id": 9024139098,
+    "artifact_name": "HealthIA-ONE-final-judge-demo",
+    "artifact_digest": "sha256:71ee6e2ce665a9b98e44ca11aae7c7334849b73ac7e756b157afa47b3a249f33"
+  },
+  "video": {
+    "format": "webm",
+    "continuous_take": true,
+    "playwright_recording": true,
+    "duration_seconds": 290.16,
+    "video_sha256": "cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19",
+    "problem_overview_visible": true,
+    "value_proposition_visible": true,
+    "live_app_visible": true,
+    "cloud_runtime_proof_visible": true
+  },
+  "cloud_runtime": {
+    "url": "https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app",
+    "project": "healthia-6088a",
+    "region": "us-central1",
+    "revision": "healthia-one-demo-00016-mct",
+    "image": "us-central1-docker.pkg.dev/healthia-6088a/cloud-run-source-deploy/healthia-one-demo@sha256:4ecf7ea80b36d229d48db16e92313227927d2e30308e7beddadaa656d4db70ef",
+    "model": "gemini-3.5-flash",
+    "adk_ready": true,
+    "ai_ready": true,
+    "store_backend": "firestore",
+    "evidence_backend": "gcs",
+    "auth_required": true
+  },
+  "checks": [
+    "live_cloud_runtime_ready",
+    "live_gemini_adk_question_block_1",
+    "live_gemini_adk_question_block_2",
+    "live_clinical_orientation_completed",
+    "multimodal_result_persisted_with_original",
+    "taskmaster_result_mission_completed",
+    "relogin_continuity",
+    "visible_run_app_and_live_readiness",
+    "zero_browser_console_or_page_errors",
+    "duration_gate_200_to_300_seconds"
+  ],
+  "publication_boundary": {
+    "artifact_preserved": true,
+    "public_devpost_video_url": false,
+    "note": "The one-take video exists and is evidence-backed. A stable judge-facing/public video URL must still be published and inserted into the final Devpost package before SUBMISSION_LOCKED."
+  }
+}
