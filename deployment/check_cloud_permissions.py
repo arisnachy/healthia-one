@@ -35,26 +35,29 @@ REQUIRED_PERMISSIONS: tuple[str, ...] = (
     "aiplatform.endpoints.predict",
 )
 
+# Hints intentionally collapse overlapping roles. For example,
+# roles/run.sourceDeveloper includes cloudbuild.builds.create, and the Datastore
+# Owner role covers both database provisioning and entity readback.
 ROLE_HINTS: dict[str, str] = {
     "serviceusage.services.enable": "roles/serviceusage.serviceUsageAdmin",
-    "serviceusage.services.use": "roles/serviceusage.serviceUsageConsumer",
+    "serviceusage.services.use": "roles/serviceusage.serviceUsageAdmin",
     "run.services.create": "roles/run.sourceDeveloper",
     "run.services.update": "roles/run.sourceDeveloper",
     "run.services.get": "roles/run.sourceDeveloper",
     "run.routes.invoke": "roles/run.sourceDeveloper",
+    "cloudbuild.builds.create": "roles/run.sourceDeveloper",
     "iam.serviceAccounts.create": "roles/iam.serviceAccountAdmin",
     "iam.serviceAccounts.get": "roles/iam.serviceAccountAdmin",
     "iam.serviceAccounts.actAs": "roles/iam.serviceAccountUser",
     "resourcemanager.projects.setIamPolicy": "roles/resourcemanager.projectIamAdmin",
     "datastore.databases.create": "roles/datastore.owner",
     "datastore.databases.get": "roles/datastore.owner",
-    "datastore.entities.get": "roles/datastore.viewer",
+    "datastore.entities.get": "roles/datastore.owner",
     "storage.buckets.create": "roles/storage.admin",
     "storage.buckets.get": "roles/storage.admin",
-    "storage.objects.get": "roles/storage.objectViewer",
+    "storage.objects.get": "roles/storage.admin",
     "secretmanager.secrets.create": "roles/secretmanager.admin",
     "secretmanager.secrets.get": "roles/secretmanager.admin",
-    "cloudbuild.builds.create": "roles/cloudbuild.builds.editor",
     "artifactregistry.repositories.create": "roles/artifactregistry.admin",
     "aiplatform.endpoints.predict": "roles/aiplatform.user",
 }
@@ -148,7 +151,7 @@ def main() -> int:
     print("Missing permissions:")
     for permission in payload["missing_permissions"]:
         print(f"- {permission}")
-    print("Suggested temporary provisioning/proof roles:")
+    print("Suggested minimal temporary provisioning/proof roles:")
     for role in payload["role_hints"]:
         print(f"- {role}")
     return 1
