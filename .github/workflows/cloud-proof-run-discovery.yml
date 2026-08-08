@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
-      - name: Locate latest Cloud deploy proof run
+      - name: Locate recent Cloud deploy proof runs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -31,17 +31,18 @@ jobs:
             echo "HEALTHIA_CLOUD_DEPLOY_RUN_NOT_FOUND"
             exit 1
           fi
-          echo "HEALTHIA_CLOUD_DEPLOY_RUN_FOUND"
-          jq -r '.workflow_runs[0] | [
+          echo "HEALTHIA_CLOUD_DEPLOY_RUNS_FOUND count=${count}"
+          jq -r '.workflow_runs[] | [
             "id=" + (.id|tostring),
             "status=" + (.status // ""),
             "conclusion=" + (.conclusion // ""),
             "event=" + (.event // ""),
             "head_branch=" + (.head_branch // ""),
             "head_sha=" + (.head_sha // ""),
-            "html_url=" + (.html_url // ""),
             "run_number=" + (.run_number|tostring),
             "run_attempt=" + (.run_attempt|tostring),
             "created_at=" + (.created_at // ""),
-            "updated_at=" + (.updated_at // "")
+            "updated_at=" + (.updated_at // ""),
+            "html_url=" + (.html_url // ""),
+            "---"
           ] | .[]' <<<"$response"
