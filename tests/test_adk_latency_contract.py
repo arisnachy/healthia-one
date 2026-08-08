@@ -37,5 +37,9 @@ def test_clinical_schema_requires_five_compact_patient_questions() -> None:
 def test_json_parser_reports_truncated_or_invalid_structured_output() -> None:
     runtime = (ROOT / "healthia_one/adk_runtime.py").read_text(encoding="utf-8")
 
-    assert "JSON estructurado incompleto o inválido" in runtime
+    # Internal diagnostics are developer-facing and must describe the failure
+    # precisely; they are not patient-visible UI and therefore should not be
+    # locked to either English or Spanish wording.
+    assert "incomplete or invalid structured JSON" in runtime
+    assert "did not return a structured JSON object" in runtime
     assert 'f"(chars={len(value)}, pos={nested.pos}, error={nested.msg})"' in runtime
