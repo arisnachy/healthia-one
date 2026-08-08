@@ -1,0 +1,198 @@
+name: Cloud platform policy diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-cloud-platform-policy-diagnostics
+  cancel-in-progress: true
+
+jobs:
+  diagnose-platform:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-demo
+      DEPLOY_PRINCIPAL: healthia-github-vertex-9@healthia-6088a.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Inspect Cloud Run v2 service boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          curl -fsSL \
+            -H "Authorization: Bearer ${token}" \
+            -H "Accept: application/json" \
+            "https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/services/${SERVICE_NAME}" \
+            > /tmp/run-v2.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.load(open('/tmp/run-v2.json'))
+          keep={
+            'name': d.get('name'),
+            'uri': d.get('uri'),
+            'ingress': d.get('ingress'),
+            'invokerIamDisabled': d.get('invokerIamDisabled'),
+            'defaultUriDisabled': d.get('defaultUriDisabled'),
+            'customAudiences': d.get('customAudiences'),
+            'latestReadyRevision': d.get('latestReadyRevision'),
+            'latestCreatedRevision': d.get('latestCreatedRevision'),
+            'traffic': d.get('traffic'),
+            'conditions': [
+              {k:c.get(k) for k in ('type','state','severity','reason','message')}
+              for c in (d.get('conditions') or [])
+            ],
+            'templateServiceAccount': (d.get('template') or {}).get('serviceAccount'),
+            'annotations': {
+              k:v for k,v in (d.get('annotations') or {}).items()
+              if k.startswith('run.googleapis.com/')
+            },
+          }
+          print(json.dumps(keep,indent=2,ensure_ascii=False))
+          Path('deployment/cloud-platform-run-v2.json').write_text(json.dumps(keep,indent=2,ensure_ascii=False),encoding='utf-8')
+          PY
+
+      - name: Inspect project ancestry and effective organization policies
+        shell: bash
+        run: |
+          set +e
+          mkdir -p deployment
+          {
+            echo '=== PROJECT ANCESTRY ==='
+            gcloud projects get-ancestors "$PROJECT_ID" --format='table(type,id)' 2>&1
+            echo
+            echo '=== RUN ALLOWED INGRESS ==='
+            gcloud resource-manager org-policies describe constraints/run.allowedIngress --project="$PROJECT_ID" --effective --format=json 2>&1
+            echo
+            echo '=== RUN REQUIRE INVOKER IAM ==='
+            gcloud resource-manager org-policies describe constraints/run.managed.requireInvokerIam --project="$PROJECT_ID" --effective --format=json 2>&1
+            echo
+            echo '=== RUN ALLOWED VPC EGRESS ==='
+            gcloud resource-manager org-policies describe constraints/run.allowedVPCEgress --project="$PROJECT_ID" --effective --format=json 2>&1
+            echo
+            echo '=== PROJECT ROLES FOR PROOF PRINCIPAL ==='
+            gcloud projects get-iam-policy "$PROJECT_ID" \
+              --flatten='bindings[].members' \
+              --filter="bindings.members:serviceAccount:${DEPLOY_PRINCIPAL}" \
+              --format='value(bindings.role)' 2>&1 | sort -u
+          } | tee deployment/cloud-platform-policy.txt
+          exit 0
+
+      - name: Inspect VPC Service Controls visibility
+        shell: bash
+        run: |
+          set +e
+          org_id="$(gcloud projects get-ancestors "$PROJECT_ID" --format='value(id)' --filter='type=organization' 2>/dev/null | head -n1)"
+          {
+            echo "organization_id=${org_id:-none}"
+            if [ -z "$org_id" ]; then
+              echo 'No organization ancestor is visible; skipping Access Context Manager policy lookup.'
+            else
+              echo '=== ACCESS POLICIES ==='
+              gcloud access-context-manager policies list --organization="$org_id" --format='table(name,title)' 2>&1
+              policy_ids="$(gcloud access-context-manager policies list --organization="$org_id" --format='value(name)' 2>/dev/null)"
+              for policy in $policy_ids; do
+                policy_id="${policy##*/}"
+                echo "=== SERVICE PERIMETERS policy=${policy_id} ==="
+                gcloud access-context-manager perimeters list --policy="$policy_id" --format=json 2>&1
+              done
+            fi
+          } | tee deployment/cloud-vpc-service-controls.txt
+          exit 0
+
+      - name: Check whether edge probes reached Cloud Run revision logs
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '=== CLOUD RUN REQUEST / APP LOGS LAST 45 MINUTES ==='
+            gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE_NAME}" \
+              --project="$PROJECT_ID" \
+              --freshness=45m \
+              --limit=60 \
+              --format=json 2>&1
+          } > deployment/cloud-run-recent-logs-raw.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          raw=Path('deployment/cloud-run-recent-logs-raw.txt').read_text(encoding='utf-8',errors='replace')
+          summary={'logging_query_succeeded':False,'entry_count':0,'http_statuses':[],'log_names':[],'error':''}
+          try:
+              entries=json.loads(raw)
+              if isinstance(entries,list):
+                  summary['logging_query_succeeded']=True
+                  summary['entry_count']=len(entries)
+                  statuses=[]; names=[]
+                  for e in entries:
+                      req=e.get('httpRequest') or {}
+                      if req.get('status') is not None: statuses.append(req.get('status'))
+                      if e.get('logName'): names.append(e['logName'].split('/')[-1])
+                  summary['http_statuses']=statuses[-30:]
+                  summary['log_names']=sorted(set(names))
+          except Exception:
+              summary['error']=raw[:1200]
+          print(json.dumps(summary,indent=2,ensure_ascii=False))
+          Path('deployment/cloud-run-log-summary.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
+          PY
+          exit 0
+
+      - name: Test Cloud Run service-level IAM permissions endpoint
+        shell: bash
+        run: |
+          set +e
+          token="$(gcloud auth print-access-token)"
+          code="$(curl -sS -o deployment/cloud-run-test-iam.json -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            "https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/services/${SERVICE_NAME}:testIamPermissions" \
+            -d '{"permissions":["run.routes.invoke","run.services.get","run.services.update","run.services.setIamPolicy"]}')"
+          echo "testIamPermissions HTTP=${code}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('deployment/cloud-run-test-iam.json')
+          try:
+              d=json.loads(p.read_text())
+          except Exception:
+              d={'raw':p.read_text(errors='replace')[:1000]}
+          print(json.dumps(d,indent=2,ensure_ascii=False))
+          PY
+          exit 0
+
+      - name: Upload sanitized platform diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-cloud-platform-policy-diagnostics
+          path: |
+            deployment/cloud-platform-run-v2.json
+            deployment/cloud-platform-policy.txt
+            deployment/cloud-vpc-service-controls.txt
+            deployment/cloud-run-log-summary.json
+            deployment/cloud-run-test-iam.json
+          if-no-files-found: warn
+          retention-days: 7
