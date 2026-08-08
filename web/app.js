@@ -332,9 +332,14 @@ document.addEventListener("healthia:locale-changed", () => { if (state.data) ren
 (async function boot() {
   try {
     const readiness = await api("/api/readiness");
-    refs.runtimeLabel.textContent = readiness.llm_backend === "gemini_api"
-      ? (readiness.ai_ready ? `${readiness.model} · Google AI` : tr("app.key_missing"))
-      : tr("app.local");
+    const connected = readiness.llm_backend === "gemini_api" && readiness.ai_ready;
+    refs.runtimeLabel.dataset.runtimeBackend = readiness.llm_backend || "unknown";
+    refs.runtimeLabel.dataset.runtimeModel = readiness.model || "";
+    refs.runtimeLabel.textContent = connected
+      ? (i18n?.locale === "es" ? "Continuidad conectada" : "Continuity connected")
+      : readiness.llm_backend === "gemini_api"
+        ? (i18n?.locale === "es" ? "Continuidad limitada" : "Continuity limited")
+        : tr("app.local");
     setSendState(); syncLeftToggle(); syncContextToggle(); await refresh(); connectEvents();
   } catch (error) { showToast(error.message); }
 })();
