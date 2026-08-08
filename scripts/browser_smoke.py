@@ -217,7 +217,7 @@ def run() -> dict:
         elif Path("/usr/bin/chromium").exists():
             launch["executable_path"] = "/usr/bin/chromium"
         browser = playwright.chromium.launch(**launch)
-        page = browser.new_page(viewport={"width": 1600, "height": 900})
+        page = browser.new_page(viewport={"width": 1600, "height": 900}, locale="en-US")
         page.on("console", lambda message: report["console_errors"].append(message.text) if message.type == "error" else None)
         page.on("pageerror", lambda error: report["page_errors"].append(str(error)))
         page.set_content(html, wait_until="domcontentloaded")
@@ -246,9 +246,10 @@ def run() -> dict:
 
         require(page.locator("#accountPill strong").inner_text() == "Ana Martínez", "patient identity not consolidated")
         require(page.locator(".patient-chip").count() == 0, "duplicate identity remains")
+        require(page.locator("html").get_attribute("lang") == "en", "en-US browser locale did not render the English shell")
         page.locator("#collapseLeft").click()
         page.wait_for_timeout(150)
-        require(page.locator(".main-nav button:visible").count() == 6, "collapsed navigation lost icons")
+        require(page.locator(".main-nav button:visible").count() == 6, "collapsed navigation lost core destinations")
         require(page.locator("#newConsultation:visible").count() == 1, "collapsed new-consultation control missing")
         page.screenshot(path=str(OUTPUT / "02-collapsed.png"), full_page=True)
         page.locator("#expandLeft").click()
@@ -259,7 +260,7 @@ def run() -> dict:
         first_block = page.locator(".clinical-question-block").last
         require(first_block.locator(".clinical-question").count() == 5, "first dynamic block does not have five questions")
         require(first_block.bounding_box() and first_block.bounding_box()["height"] > 100, "first block is not visible")
-        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Preguntas creadas para este caso · Gemini + ADK", "dynamic source badge missing")
+        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Case-specific questions · Gemini + ADK", "English dynamic source badge missing")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after fast response")
         page.screenshot(path=str(OUTPUT / "03-dynamic-block.png"), full_page=True)
 
@@ -277,7 +278,7 @@ def run() -> dict:
         second_block.locator(".clinical-submit").click()
         page.wait_for_function("window.__mockChatIndex >= 3")
         page.wait_for_timeout(350)
-        require(page.get_by_text("Ya reuní lo necesario para orientarte con esta consulta.", exact=False).count() > 0, "patient-facing clinical orientation is missing")
+        require(page.get_by_text("Ya reuní lo necesario para orientarte con esta consulta.", exact=False).count() > 0, "Spanish patient-facing clinical orientation is missing after Spanish input")
         require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final transcript lost readable question labels")
         require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient transcript")
         require(page.get_by_text("Revisar la orientación con un profesional y actualizar HealthIA con el resultado").count() > 0, "mission card remained stale after AI orientation")
@@ -288,6 +289,8 @@ def run() -> dict:
 
     report["checks"] = {
         "single_identity": "pass",
+        "english_shell_locale": "pass",
+        "spanish_input_preserves_spanish_clinical_content": "pass",
         "collapsed_navigation": "pass",
         "first_message_visible": "pass",
         "dynamic_question_source": "pass",
