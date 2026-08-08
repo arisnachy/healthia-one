@@ -8,7 +8,7 @@ HealthIA ONE is a patient-owned continuity agent that turns scattered health evi
 **Google AI:** Gemini 3.5 Flash on Vertex AI  
 **Agent framework:** Google ADK  
 **Cloud:** Cloud Run + Firestore + private Cloud Storage + Vertex AI + Secret Manager  
-**JUDGE Ω:** **98/100 evidence-backed; final video/package still required**
+**JUDGE Ω:** **99/100 evidence-backed; only final video publication/Devpost URL remains**
 
 The public/demo flows use synthetic patients and synthetic clinical files only.
 
@@ -45,6 +45,23 @@ HealthIA does not run a permanent polling agent swarm. Work starts from a patien
 
 The permanent judge evidence index is [`docs/EVIDENCE.md`](docs/EVIDENCE.md). Sanitized machine-readable copies are under [`hackathon/evidence/`](hackathon/evidence/).
 
+### Continuous final judge demo — PASS
+
+- GitHub Actions run: **`31265639488`**
+- candidate SHA: **`3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`**
+- artifact: **`HealthIA-ONE-final-judge-demo`** (`9024139098`)
+- artifact digest: `sha256:71ee6e2ce665a9b98e44ca11aae7c7334849b73ac7e756b157afa47b3a249f33`
+- video SHA-256: `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19`
+- continuous WebM duration: **290.16 s**
+- Cloud Run revision shown: **`healthia-one-demo-00016-mct`**
+- synthetic data only: **true**
+
+The one-take browser recording visibly covers the problem, value proposition, live Gemini + ADK interaction, multimodal result, original evidence, clinical-twin linkage, completed Taskmaster mission, logout/relogin continuity, the `.run.app` URL and live readiness proving Gemini 3.5 Flash + ADK + Firestore + GCS. The run passed with zero browser console/page errors and the recording gate was immediately disabled after capture.
+
+Sanitized evidence: [`hackathon/evidence/final_judge_demo_proof.json`](hackathon/evidence/final_judge_demo_proof.json).
+
+**Boundary:** the video content is now proven. The final stable judge-facing/public video URL still has to be published and placed into the Devpost package before `100/100` / `SUBMISSION_LOCKED` is claimed.
+
 ### Exact-candidate Cloud + browser proof — PASS
 
 - GitHub Actions run: **`31262429792`**
@@ -54,20 +71,7 @@ The permanent judge evidence index is [`docs/EVIDENCE.md`](docs/EVIDENCE.md). Sa
 - Cloud Run proof revision: **`healthia-one-demo-00012-jvl`**
 - Cloud URL: `https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app`
 
-The same run passed the strict API proof and a full **unmocked Chromium** journey. Evidence includes:
-
-- Gemini 3.5 Flash through Vertex AI / ADC;
-- real Google ADK Runner tool trajectory;
-- two memory-preserving five-question blocks;
-- Firestore patient-scoped canonical state;
-- private GCS original evidence;
-- multimodal PDF extraction;
-- clinical-twin provenance;
-- completed Taskmaster result mission;
-- two-patient isolation and cross-patient document denial;
-- logout/relogin restoration;
-- original evidence round trip;
-- **zero browser console errors and zero page errors**.
+The same run passed the strict API proof and a full **unmocked Chromium** journey. Evidence includes Gemini 3.5 Flash through Vertex AI/ADC, real Google ADK tool execution, two memory-preserving five-question blocks, patient-scoped Firestore, private GCS original evidence, multimodal PDF extraction, clinical-twin provenance, completed Taskmaster mission, two-patient isolation, logout/relogin restoration, original evidence round trip, and **zero browser console/page errors**.
 
 ### Cross-revision continuity proof — PASS
 
@@ -117,6 +121,7 @@ Key boundaries:
 - **Cloud Build and Cloud Run use separate identities**.
 - **Cloud Run** proof deployment uses min `0`, max `1`.
 - **Clinical ADK** uses one aggregate tool call for mandatory interview/safety, with the executed roles audited separately.
+- **Dependency boundary:** the application installs Google ADK core and declares Firestore/GCS clients explicitly; it does not pull the broad unused `google-adk[gcp]` extras bundle.
 - **PDF multimodal input** uses low visual media resolution with native PDF text to reduce latency; clinical images retain high visual resolution.
 - Multimodal failure is fail-closed: original evidence remains stored and the result stays pending rather than fabricating an interpretation.
 
@@ -181,19 +186,9 @@ For non-interactive provisioning add `-Confirmed`.
 
 The proof path expects the required Google Cloud APIs to be **pre-enabled**. It does not silently enable project services; `deployment/check_cloud_permissions.py` and the deployment scripts fail closed when the project/identity is not ready.
 
-The deployment uses:
+The deployment uses Cloud Run min `0`/max `1`, Gemini 3.5 Flash through Vertex AI, Firestore Native state, private GCS evidence, dedicated build/runtime service accounts, Secret Manager for signing secrets, an explicit model request ceiling, proactive execution disabled, and a strict post-deploy verifier.
 
-- Cloud Run min `0`, max `1`;
-- Gemini 3.5 Flash through Vertex AI;
-- Firestore Native state;
-- private GCS evidence bucket;
-- dedicated build/runtime service accounts;
-- Secret Manager for session/device signing secrets;
-- explicit model request ceiling;
-- proactive execution disabled;
-- strict post-deploy readback verifier.
-
-Billable proof workflows are explicit opt-in. A legacy automatic `workflow_run` deployment path discovered during hardening was retired; ordinary CI must not create Cloud revisions or spend model quota.
+Billable proof/recording workflows are explicit opt-in. A legacy automatic deployment path discovered during hardening was retired; ordinary CI must not create Cloud revisions or spend model quota. The one-take demo trigger is also returned to `enabled=false` immediately after a controlled recording.
 
 Cleanup without deleting persistent proof data:
 
@@ -221,8 +216,6 @@ node --check web/icons.js
 ```
 
 The CI gate additionally runs Chromium, semantic JavaScript validation, PowerShell parsing, release ZIP verification, and pytest again from the extracted release.
-
-Cloud proofs are intentionally separate from ordinary CI.
 
 ## Core patient capabilities
 
@@ -255,8 +248,8 @@ tests/               regression, isolation and runtime contracts
 
 ## Submission status
 
-**Technically proven:** Gemini 3.5 Flash on Vertex AI; real Google ADK tool execution; Cloud Run; Firestore; private GCS; multimodal extraction; closed-loop Taskmaster mission; patient isolation; unmocked browser journey; original-evidence provenance; logout/login continuity; and same-image continuity across a new Cloud Run revision.
+**Proven:** Gemini 3.5 Flash on Vertex AI; real Google ADK tool execution; Cloud Run; Firestore; private GCS; multimodal extraction; closed-loop Taskmaster mission; patient isolation; unmocked browser journey; original-evidence provenance; logout/login continuity; cross-revision durability; reproducible release; and a continuous judge-demo artifact covering problem → value → live app → Cloud proof.
 
-**Still required before claiming 100/100:** record and publish the final approximately four-minute **unedited** judge demo, replace the final submission placeholders, run final CI/JUDGE on the exact submission head, and then merge/lock the candidate.
+**Sole remaining gate before 100/100:** publish that proven video at the stable judge-facing URL used by Devpost, insert the exact URL into the submission package, run final CI/JUDGE on that exact head, then merge/lock PR #29.
 
 See [`docs/EVIDENCE.md`](docs/EVIDENCE.md), [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md), and [`docs/DEVPOST_SUBMISSION.md`](docs/DEVPOST_SUBMISSION.md).
