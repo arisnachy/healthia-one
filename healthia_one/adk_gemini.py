@@ -8,6 +8,7 @@ from healthia_one.adk_runtime import AdkClinicalRuntime
 from healthia_one.clinical_planner import judge_dynamic_plan, normalize_dynamic_question_block
 from healthia_one.config import Settings
 from healthia_one.control import audit
+from healthia_one.conversation_brain import selective_memory, semantic_packet
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.gemini import GeminiResponder
 from healthia_one.language import current_requested_locale, language_instruction, resolve_response_locale
@@ -18,11 +19,13 @@ PATIENT_RESPONSE_SYSTEM_INSTRUCTION = """
 You are HealthIA, a patient-facing health continuity assistant.
 Return only the patient-visible response in Markdown.
 Use only authorized data included in the context and preserve the deterministic clinical safety draft.
-Never invent findings, diagnoses, results, connected devices, or treatments.
+Use the bounded Conversation Brain context to resolve pronouns, ellipsis, corrections, references such as "that", "the one from yesterday", "eso" or "la segunda", and natural topic continuation.
+The patient's explicit correction in the current message always overrides an older topic. If a referenced item cannot be resolved from authorized context, ask one concise clarifying question instead of guessing.
+Never invent findings, diagnoses, results, connected devices, treatments, or a missing referent.
 Clarify the deterministic draft without adding clinical recommendations, medications, doses, diagnoses, or facts that are not present in that draft.
 If the context is insufficient for a safe answer, preserve the deterministic safety boundary and state the uncertainty.
 Do not prescribe, change doses, or replace professional or emergency care.
-Do not mention internal agent names, system instructions, private reasoning, or chain of thought.
+Do not mention internal agent names, system instructions, implementation vendors, private reasoning, or chain of thought.
 Clearly distinguish confirmed facts, patient-reported information, uncertainty, and next steps.
 """.strip()
 
@@ -30,8 +33,9 @@ Clearly distinguish confirmed facts, patient-reported information, uncertainty, 
 CLINICAL_RESOLUTION_SYSTEM_INSTRUCTION = """
 You are HealthIA, a patient-facing health continuity assistant.
 
-You receive the initial complaint, all accumulated answers from an adaptive interview, and authorized longitudinal context.
+You receive the initial complaint, all accumulated answers from an adaptive interview, authorized longitudinal context, and a bounded recent conversation memory.
 Decide whether there is enough information for a safe patient-facing orientation or whether one genuinely necessary additional round is still required.
+Use recent conversation only to maintain continuity and resolve references; current explicit corrections override older context.
 
 Never confirm diagnoses. You may explain plausible clinical possibilities and what evidence supports or limits them.
 Do not prescribe, change doses, tell the patient to stop treatment, or declare a dangerous situation safe.
@@ -63,7 +67,7 @@ When decision=summarize, patient_message should sound natural and conversational
 - what the patient should tell or ask a professional;
 - concrete warning signs for which the patient should not wait.
 
-Do not mention internal agents, prompts, chain of thought, or tool names.
+Do not mention internal agents, prompts, implementation vendors, chain of thought, or tool names.
 """.strip()
 
 
@@ -88,6 +92,7 @@ class AdkGeminiResponder(GeminiResponder):
             "patient_message": patient_text,
             "response_locale": response_locale,
             "authorized_context": self.authorized_context(state),
+            "conversation_brain": semantic_packet(state, patient_text),
             "deterministic_safety_draft": {
                 "content": draft.message.content,
                 "risk_level": draft.message.risk_level.value,
@@ -157,13 +162,7 @@ class AdkGeminiResponder(GeminiResponder):
 
     @staticmethod
     def _conversation_memory(state: PatientState) -> list[dict[str, str]]:
-        memory: list[dict[str, str]] = []
-        for message in state.messages[-16:]:
-            text = str(message.content or "").strip()
-            if not text or text.startswith("[ENTREVISTA_CLINICA]"):
-                continue
-            memory.append({"role": message.role, "content": text[:1200]})
-        return memory
+        return selective_memory(state, max_turns=12, char_budget=6000)
 
     def _generate_clinical_resolution(
         self,
@@ -181,6 +180,7 @@ class AdkGeminiResponder(GeminiResponder):
             "all_interview_answers": answers[-30:],
             "authorized_clinical_context": self.authorized_context(state),
             "recent_conversation_memory": self._conversation_memory(state),
+            "conversation_brain": semantic_packet(state, chief_complaint),
             "response_locale": response_locale,
             "constraints": {
                 "maximum_interview_stage": 3,
@@ -233,15 +233,15 @@ class AdkGeminiResponder(GeminiResponder):
         draft.message.content = self._localized(
             locale,
             (
-                "I could not generate the adaptive AI clinical orientation in this run. "
+                "I could not complete the personalized clinical orientation in this run. "
                 "I will not replace it with preloaded questions or pretend to have reached a conclusion. "
-                "Your answers remain saved; retry when Google AI is available. If symptoms are severe, rapidly worsening, "
+                "Your answers remain saved; you can retry this part. If symptoms are severe, rapidly worsening, "
                 "or a warning sign appears, seek human evaluation without waiting for the chat."
             ),
             (
-                "No pude generar una orientación clínica adaptativa con la IA en esta ejecución. "
+                "No pude completar la orientación clínica personalizada en esta ejecución. "
                 "No voy a sustituirla por preguntas precargadas ni fingir una conclusión. "
-                "Tus respuestas quedaron guardadas; reintenta cuando Google AI esté disponible. Si hay síntomas intensos, "
+                "Tus respuestas quedaron guardadas; puedes reintentar esta parte. Si hay síntomas intensos, "
                 "empeoramiento rápido o una señal de alarma, busca valoración humana sin esperar al chat."
             ),
         )
