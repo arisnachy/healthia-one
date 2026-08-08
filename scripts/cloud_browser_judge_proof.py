@@ -208,13 +208,22 @@ def run() -> dict:
                 candidates = [item for item in state.get("results", []) if filename in json.dumps(item, ensure_ascii=False)]
             if candidates:
                 result = candidates[-1]
-                if result.get("status") == "parsed":
+                result_id_candidate = str(result.get("id") or "")
+                document_candidate = next(
+                    (item for item in state.get("documents", []) if item.get("related_result_id") == result_id_candidate),
+                    None,
+                )
+                if result.get("status") == "parsed" and result_id_candidate and document_candidate:
                     break
             page.wait_for_timeout(750)
         require(result is not None and result.get("status") == "parsed", f"browser PDF did not become a parsed multimodal result: {result}")
         result_id = str(result.get("id") or "")
-        document_id = str(result.get("document_id") or "")
-        require(result_id and document_id, "browser PDF result lacks result/document provenance")
+        document = next(
+            (item for item in state.get("documents", []) if item.get("related_result_id") == result_id),
+            None,
+        )
+        document_id = str((document or {}).get("id") or "")
+        require(result_id and document_id, "browser PDF result lacks canonical result/original provenance")
         report["result_id"] = result_id
         report["document_id"] = document_id
         report["checks"].append("browser_multimodal_pdf_result_with_original_provenance")
