@@ -11,52 +11,94 @@ from healthia_one.config import Settings
 from healthia_one.models import AgentStep, PatientState
 
 
+CLINICAL_PLAN_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "intent": {"type": "string", "enum": ["clinical_consultation"]},
+        "clinical_focus": {"type": "string"},
+        "why_these_questions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 5,
+        },
+        "missing_information": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 8,
+        },
+        "selected_specialists": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["role", "reason"],
+            },
+            "minItems": 2,
+            "maxItems": 2,
+        },
+        "questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "prompt": {"type": "string"},
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 3,
+                        "maxItems": 7,
+                    },
+                    "multiple": {"type": "boolean"},
+                    "detail_placeholder": {"type": "string"},
+                },
+                "required": ["id", "prompt", "options", "multiple", "detail_placeholder"],
+            },
+            "minItems": 5,
+            "maxItems": 5,
+        },
+    },
+    "required": [
+        "intent",
+        "clinical_focus",
+        "why_these_questions",
+        "missing_information",
+        "selected_specialists",
+        "questions",
+    ],
+}
+
+
 ADK_CLINICAL_INSTRUCTION = """
 Eres el coordinador clínico de HealthIA ejecutado por Google Agent Development Kit (ADK).
-No diagnosticas ni recetas. Tu función es ejecutar el control clínico mínimo necesario y producir exactamente cinco preguntas adaptativas para el caso actual.
+No diagnosticas ni recetas. Ejecuta el control clínico mínimo y produce cinco preguntas adaptativas para el caso actual.
 
 Contrato de ejecución:
-1. Antes de responder debes llamar exactamente una vez a inspect_clinical_baseline.
-2. Esa herramienta ejecuta conjuntamente las dos comprobaciones obligatorias del runtime: entrevista y seguridad.
-3. No inventes resultados de herramientas. Usa exclusivamente lo que inspect_clinical_baseline devuelve y el contexto autorizado del mensaje.
-4. No pidas otras herramientas en esta fase. El bloque inicial debe ser rápido, acotado y apto para una conversación de paciente.
-5. No des la respuesta final antes de haber recibido el resultado de inspect_clinical_baseline.
+1. Antes de responder llama exactamente una vez a inspect_clinical_baseline.
+2. Esa herramienta ejecuta conjuntamente las dos comprobaciones obligatorias: entrevista y seguridad.
+3. No inventes resultados de herramientas. Usa sólo el resultado de la herramienta y el contexto autorizado.
+4. No pidas otras herramientas en esta fase.
+5. Después del tool-call devuelve sólo el objeto final que cumple el esquema JSON impuesto por el runtime.
 
 Reglas de memoria y naturalidad:
-- Trata chief_complaint y previous_answers como memoria clínica acumulada, no como texto decorativo.
-- Cada previous_answer incluye la pregunta original, opciones elegidas y detalle libre. No vuelvas a preguntar ese hecho con otras palabras salvo que exista una contradicción concreta.
-- Cada pregunta nueva debe poder justificarse por una incertidumbre específica del caso actual.
-- Evita plantillas genéricas como "¿qué otros síntomas tienes?" cuando ya puedes preguntar por un discriminante concreto.
-- Si la respuesta previa ya contiene duración, intensidad, medicamento, alergia, exposición, signo vital o señal de alarma, considéralo conocido.
-- Las opciones deben corresponder a la pregunta concreta; no uses la misma lista fija entre casos distintos.
+- Trata chief_complaint y previous_answers como memoria clínica acumulada.
+- No vuelvas a preguntar un hecho ya respondido salvo contradicción concreta.
+- Cada pregunta nueva debe resolver una incertidumbre específica del caso.
+- Evita plantillas genéricas cuando puedas preguntar por un discriminante concreto.
+- Si ya conoces duración, intensidad, medicamento, alergia, exposición, signo vital o señal de alarma, considéralo conocido.
+- Las opciones deben corresponder a la pregunta concreta; no reutilices una lista fija.
 
 Reglas clínicas:
-- Usa el motivo actual, respuestas anteriores y contexto autorizado del mensaje.
+- Usa el motivo actual, respuestas anteriores y contexto autorizado.
 - Incluye una pregunta sobre señales de alarma específicas del caso.
 - Nunca confirmes diagnósticos ni indiques iniciar, suspender o cambiar medicamentos/dosis.
 - No conviertas antecedentes familiares en predicciones.
-
-Devuelve únicamente JSON válido, sin Markdown ni texto exterior:
-{
-  "intent": "clinical_consultation",
-  "clinical_focus": "frase breve",
-  "why_these_questions": ["razón 1 ligada a un dato concreto", "razón 2 ligada a un dato concreto"],
-  "missing_information": ["dato 1", "dato 2"],
-  "selected_specialists": [
-    {"role": "interview", "reason": "control clínico ejecutado por ADK"},
-    {"role": "safety", "reason": "control clínico ejecutado por ADK"}
-  ],
-  "questions": [
-    {
-      "id": "identificador_breve",
-      "prompt": "¿Pregunta para el paciente?",
-      "options": ["Opción 1", "Opción 2", "Opción 3"],
-      "multiple": false,
-      "detail_placeholder": "Detalle opcional"
-    }
-  ]
-}
-El arreglo questions contiene exactamente cinco preguntas y cada una entre tres y siete opciones distintas.
+- Devuelve exactamente cinco preguntas; cada una debe tener entre tres y siete opciones distintas.
 """.strip()
 
 
@@ -86,18 +128,12 @@ def _answer_payload(previous_answers: list[dict[str, Any]]) -> list[dict[str, An
 
 
 class AdkClinicalRuntime:
-    """Low-latency per-request ADK coordinator over authorized PatientState.
+    """Low-latency ADK coordinator over authorized PatientState.
 
-    The runtime exposes one aggregate ADK function tool. ADK still performs a
-    real tool call, while the tool executes the two mandatory deterministic
-    clinical checks in one bounded operation. The role-level outputs remain
-    separately audited as evidence.
-
-    Gemini 3.5 Flash is explicitly run at minimal thinking effort for this
-    latency-sensitive patient interaction. The task is constrained and does not
-    benefit from the model's default medium reasoning effort; keeping the ADK
-    turn small also reduces the chance that a later interview stage crosses the
-    application timeout.
+    One aggregate ADK function tool executes the two mandatory deterministic
+    clinical checks and retains separate audit evidence. Gemini 3.5 Flash is
+    constrained to minimal thinking and a JSON response schema so the final
+    post-tool response is both fast and machine-safe on every interview stage.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -114,10 +150,10 @@ class AdkClinicalRuntime:
             start = value.find("{")
             end = value.rfind("}")
             if start < 0 or end <= start:
-                raise ValueError("Google ADK no devolvió un objeto JSON")
+                raise ValueError("Google ADK no devolvió un objeto JSON estructurado")
             payload = json.loads(value[start : end + 1])
         if not isinstance(payload, dict):
-            raise ValueError("Google ADK no devolvió un objeto JSON")
+            raise ValueError("Google ADK no devolvió un objeto JSON estructurado")
         return payload
 
     async def plan_clinical(
@@ -168,7 +204,7 @@ class AdkClinicalRuntime:
             return public_output["result"]
 
         def inspect_clinical_baseline() -> dict[str, Any]:
-            """Call exactly once before answering; runs mandatory interview and safety checks together."""
+            """Call exactly once before answering; runs interview and safety checks together."""
             nonlocal baseline_calls
             baseline_calls += 1
             return {
@@ -178,6 +214,7 @@ class AdkClinicalRuntime:
                 "previous_answer_count": len(previous_answers),
             }
 
+        max_output_tokens = min(self.settings.ai_max_output_tokens, 1100)
         agent = LlmAgent(
             name="healthia_runtime_coordinator",
             model=Gemini(
@@ -188,8 +225,10 @@ class AdkClinicalRuntime:
             instruction=ADK_CLINICAL_INSTRUCTION,
             tools=[inspect_clinical_baseline],
             generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=min(self.settings.ai_max_output_tokens, 1100),
+                max_output_tokens=max_output_tokens,
                 thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+                response_mime_type="application/json",
+                response_json_schema=CLINICAL_PLAN_JSON_SCHEMA,
             ),
         )
 
@@ -216,6 +255,7 @@ class AdkClinicalRuntime:
                 "must_execute_tool": "inspect_clinical_baseline",
                 "maximum_adk_function_calls": 1,
                 "mandatory_roles_inside_tool": ["interview", "safety"],
+                "structured_output_required": True,
                 "must_not_repeat_known_answers": True,
                 "must_not_use_generic_template_when_case_specific_question_is_possible": True,
                 "must_not_diagnose_or_prescribe": True,
@@ -249,9 +289,8 @@ class AdkClinicalRuntime:
             correction = {
                 "task": "repair_missing_mandatory_tool_execution",
                 "instruction": (
-                    "La respuesta anterior no es aceptable. Ejecuta exactamente una vez "
-                    "inspect_clinical_baseline y, después de recibir su resultado, devuelve el objeto JSON "
-                    "clínico completo con exactamente cinco preguntas. No llames la herramienta más de una vez."
+                    "Ejecuta exactamente una vez inspect_clinical_baseline y después devuelve el objeto final "
+                    "que cumple el esquema JSON configurado. No llames la herramienta más de una vez."
                 ),
                 "original_task": prompt,
             }
@@ -284,7 +323,9 @@ class AdkClinicalRuntime:
             "function_tool": "inspect_clinical_baseline",
             "function_call_count": baseline_calls,
             "thinking_level": "minimal",
-            "max_output_tokens": min(self.settings.ai_max_output_tokens, 1100),
+            "max_output_tokens": max_output_tokens,
+            "structured_output": True,
+            "response_mime_type": "application/json",
             "executed_roles": list(executed_roles),
             "tool_outputs": tool_outputs,
         }
