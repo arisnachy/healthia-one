@@ -64,6 +64,12 @@ patient complaint + authorized longitudinal context
 
 Prior questions/answers are fed into later blocks so the agent can avoid repeated facts and choose whether to continue the interview or produce a patient-facing orientation.
 
+## Dependency boundary
+
+The runtime deliberately installs **Google ADK core** (`google-adk`) rather than the broad optional `google-adk[gcp]` extras bundle. HealthIA declares only the Cloud clients it actually uses — `google-cloud-firestore` and `google-cloud-storage` — alongside `google-genai`.
+
+This keeps the application dependency graph aligned with the real architecture instead of pulling unrelated BigQuery/Bigtable/Spanner/Speech-style integrations into the runtime. `tests/test_dependency_boundaries.py` and FORJA runtime contracts prevent accidental re-expansion.
+
 ## Closed-loop Taskmaster result mission
 
 ```mermaid
@@ -157,11 +163,11 @@ Cloud Build and Cloud Run use separate service identities. Build-time privileges
 
 The required Google Cloud APIs are expected to be pre-enabled. Provisioning fails closed if services/permissions are missing; the proof path does not silently enable project APIs.
 
-Billable Cloud evidence is explicit opt-in. Ordinary CI must not deploy Cloud or consume Gemini quota.
+Billable Cloud evidence and the live judge recording are explicit opt-in. Ordinary CI must not deploy Cloud or consume Gemini quota.
 
-During hardening, JUDGE identified a legacy `workflow_run` path capable of triggering an unintended deployment after another successful workflow. That path was retired; the legacy workflow is now manual-only.
+During hardening, JUDGE identified a legacy `workflow_run` path capable of triggering an unintended deployment after another successful workflow. That path was retired. The final one-take recording gate was also returned to `enabled=false` immediately after the passing capture.
 
-## Three independent proof layers
+## Four independent proof layers
 
 ### 1. Deterministic CI
 
@@ -201,10 +207,29 @@ After the revision, patient A state/result/document/mission/twin remained intact
 
 Permanent sanitized evidence: `hackathon/evidence/cloud_revision_continuity_proof.json`.
 
+### 4. Continuous judge-demo proof — PASS
+
+GitHub Actions run `31265639488`, candidate `3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`.
+
+The workflow required the same candidate to pass deterministic verification first, then reused the existing private Cloud Run service without redeploying it and recorded one continuous Playwright journey.
+
+- artifact: `HealthIA-ONE-final-judge-demo` / `9024139098`
+- artifact digest: `sha256:71ee6e2ce665a9b98e44ca11aae7c7334849b73ac7e756b157afa47b3a249f33`
+- video SHA-256: `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19`
+- duration: `290.16 s`
+- live revision shown: `healthia-one-demo-00016-mct`
+- problem/value/app/Cloud runtime visible
+- Gemini 3.5 + ADK + Firestore + GCS live
+- completed Taskmaster result mission
+- relogin continuity
+- zero console/page errors
+
+Permanent sanitized evidence: `hackathon/evidence/final_judge_demo_proof.json`.
+
 ## Current truth boundary
 
 HealthIA ONE is a synthetic hackathon release candidate, not a regulated medical device, clinical-effectiveness study or autonomous prescribing system. Green tests prove software behavior within the tested boundaries; they do not establish medical efficacy, regulatory compliance or universal security certification.
 
-Technical hackathon gates for Gemini/ADK/Cloud/browser/cross-revision persistence are proven. The remaining submission blocker is the final approximately four-minute unedited judge video/package.
+Functional, architecture, Gemini/ADK, Cloud, browser, cross-revision and continuous-video content gates are proven. The sole remaining submission blocker is **publication of that already-proven video at the stable judge-facing URL used by Devpost**, followed by final exact-head CI/JUDGE and merge/lock.
 
 See `docs/EVIDENCE.md` for exact runs, artifacts and digests.
