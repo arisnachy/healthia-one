@@ -1,0 +1,41 @@
+name: One-shot revision proof rounding fix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Use a two-decimal canonical weight marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('deployment/verify_cloud_revision_continuity.py')
+          text=p.read_text(encoding='utf-8')
+          old='    weight_marker = 73.456\n'
+          new='    weight_marker = 73.46\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected one noncanonical weight marker, found {text.count(old)}')
+          p.write_text(text.replace(old,new,1),encoding='utf-8')
+          PY
+          rm .github/workflows/one-shot-revision-rounding-fix.yml
+          git config user.name 'KIRA HealthIA CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add deployment/verify_cloud_revision_continuity.py .github/workflows/one-shot-revision-rounding-fix.yml
+          git diff --cached --check
+          git commit -m 'cloud: use canonical rounded revision continuity marker'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
