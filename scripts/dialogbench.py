@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from healthia_one.conversation_brain import build_frame
+from healthia_one.conversation_brain import ACTION_HINTS, build_frame
 from healthia_one.models import ChatMessage, HealthMission, MissionStatus, PatientState, VitalRecord
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,18 +19,17 @@ class Scenario:
     prior_target: str
     prior_mission: str
     patient_text: str
-    expected_hint: str
 
 
 TOPICS = (
-    ("results", "result_explanation", "resultado", "results"),
-    ("measurements", "blood_pressure", "presion", "blood pressure"),
-    ("treatment", "medication_management", "medicamento", "medication"),
-    ("appointments", "consultation_preparation", "cita", "appointment"),
-    ("timeline", "timeline_review", "historia", "history"),
-    ("family", "family_history", "familia", "family"),
-    ("documents", "document_management", "documento", "document"),
-    ("clinical_interview", "clinical_interview", "consulta", "symptoms"),
+    ("results", "result_explanation"),
+    ("measurements", "blood_pressure"),
+    ("treatment", "medication_management"),
+    ("appointments", "consultation_preparation"),
+    ("timeline", "timeline_review"),
+    ("family", "family_history"),
+    ("documents", "document_management"),
+    ("clinical_interview", "clinical_interview"),
 )
 
 ES_FOLLOWUPS = (
@@ -60,16 +59,16 @@ EN_FOLLOWUPS = (
 
 def scenarios() -> list[Scenario]:
     values: list[Scenario] = []
-    for target, mission, es_hint, en_hint in TOPICS:
+    for target, mission in TOPICS:
         for category, text in ES_FOLLOWUPS:
             values.append(Scenario(
                 id=f"es-{target}-{category}", category=category, locale="es",
-                prior_target=target, prior_mission=mission, patient_text=text, expected_hint=es_hint,
+                prior_target=target, prior_mission=mission, patient_text=text,
             ))
         for category, text in EN_FOLLOWUPS:
             values.append(Scenario(
                 id=f"en-{target}-{category}", category=category, locale="en",
-                prior_target=target, prior_mission=mission, patient_text=text, expected_hint=en_hint,
+                prior_target=target, prior_mission=mission, patient_text=text,
             ))
     return values
 
@@ -102,11 +101,13 @@ def evaluate(scenario: Scenario) -> dict:
     state = state_for(scenario)
     frame = build_frame(state, scenario.patient_text)
     routing_lower = frame.routing_text.lower()
-    expected = scenario.expected_hint.lower()
-    # English follow-ups intentionally route using canonical multilingual hints;
-    # accept either the human label or the stable target hint.
-    canonical = scenario.prior_target.replace("_", " ").lower()
-    resolved = frame.ambiguous_reference and (expected in routing_lower or canonical in routing_lower)
+    canonical_hint = ACTION_HINTS[scenario.prior_target].lower()
+    resolved = (
+        frame.ambiguous_reference
+        and "contextual_routing_hint:" in routing_lower
+        and canonical_hint in routing_lower
+        and frame.last_action_target == scenario.prior_target
+    )
     preserves_user_words = frame.routing_text.startswith(scenario.patient_text)
     bounded_memory = len(frame.recent_turns) <= 12 and sum(len(item["content"]) for item in frame.recent_turns) <= 6000
     return {
