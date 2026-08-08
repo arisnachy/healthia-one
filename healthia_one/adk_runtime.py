@@ -88,13 +88,16 @@ def _answer_payload(previous_answers: list[dict[str, Any]]) -> list[dict[str, An
 class AdkClinicalRuntime:
     """Low-latency per-request ADK coordinator over authorized PatientState.
 
-    The previous runtime exposed nine independent function tools and required the
-    model to call interview and safety separately. A clinically simple patient
-    turn could therefore require several model/tool/model round trips before a
-    five-question block was available. The production runtime now exposes one
-    aggregate ADK function tool. ADK still performs a real tool call, while the
-    tool executes the two mandatory deterministic clinical checks in one bounded
-    operation. The role-level outputs remain separately audited as evidence.
+    The runtime exposes one aggregate ADK function tool. ADK still performs a
+    real tool call, while the tool executes the two mandatory deterministic
+    clinical checks in one bounded operation. The role-level outputs remain
+    separately audited as evidence.
+
+    Gemini 3.5 Flash is explicitly run at minimal thinking effort for this
+    latency-sensitive patient interaction. The task is constrained and does not
+    benefit from the model's default medium reasoning effort; keeping the ADK
+    turn small also reduces the chance that a later interview stage crosses the
+    application timeout.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -184,6 +187,10 @@ class AdkClinicalRuntime:
             description="Low-latency demand-driven HealthIA coordinator over the current authorized patient state.",
             instruction=ADK_CLINICAL_INSTRUCTION,
             tools=[inspect_clinical_baseline],
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=min(self.settings.ai_max_output_tokens, 1100),
+                thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+            ),
         )
 
         session_service = InMemorySessionService()
@@ -276,6 +283,8 @@ class AdkClinicalRuntime:
             "event_count": event_count,
             "function_tool": "inspect_clinical_baseline",
             "function_call_count": baseline_calls,
+            "thinking_level": "minimal",
+            "max_output_tokens": min(self.settings.ai_max_output_tokens, 1100),
             "executed_roles": list(executed_roles),
             "tool_outputs": tool_outputs,
         }
