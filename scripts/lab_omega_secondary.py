@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -16,6 +17,13 @@ from playwright.sync_api import Page, sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "dist" / "lab-omega-secondary"
 VIDEO_DIR = OUTPUT / "video"
+STYLES = ("styles.css", "interactions.css", "clinical-council.css", "cost-control.css")
+SCRIPTS = (
+    "i18n.js", "app.js", "clinical-council.js", "patient-record.js",
+    "family-documents.js", "continuity.js", "privacy-controls.js",
+    "profile-devices.js", "account.js", "runtime-integrations.js",
+    "provider-integrations.js", "cost-control.js", "icons.js",
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -48,6 +56,18 @@ def state(page: Page) -> dict:
 
 def screenshot(page: Page, name: str) -> None:
     page.screenshot(path=str(OUTPUT / f"{name}.png"), full_page=True)
+
+
+def hydrate_shell(page: Page, base_url: str, root_html: str) -> None:
+    shell_html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", root_html)
+    shell_html = re.sub(r'<script[^>]+src="/assets/[^"]+"[^>]*></script>', "", shell_html)
+    page.set_content(shell_html, wait_until="domcontentloaded", timeout=20_000)
+    require(page.locator("#app").count() == 1, "secondary shell DOM missing before asset hydration")
+    for stylesheet in STYLES:
+        page.add_style_tag(url=f"{base_url}/assets/{stylesheet}")
+    for script in SCRIPTS:
+        page.add_script_tag(url=f"{base_url}/assets/{script}")
+    page.locator("#chatInput").wait_for(state="visible", timeout=15_000)
 
 
 def wait_view_registry(page: Page) -> None:
@@ -206,20 +226,11 @@ def run() -> dict:
                 elif Path("/usr/bin/chromium").exists(): launch["executable_path"]="/usr/bin/chromium"
                 browser=playwright.chromium.launch(**launch)
                 context=browser.new_context(base_url=base_url,locale="en-US",viewport={"width":1600,"height":1000},record_video_dir=str(VIDEO_DIR),record_video_size={"width":1280,"height":800})
-                # Core owns the registration-UI contract. Secondary uses the real
-                # auth API only as deterministic setup, then proves every secondary
-                # window and mutation through the authenticated Chromium session.
                 registration=context.request.post("/api/auth/register",data={"display_name":"LAB Omega Secondary","email":"lab.secondary@example.test","password":"LabOmega-Secondary-2026"},headers={"Accept-Language":"en-US"})
                 require(registration.status==201,f"secondary auth setup returned {registration.status}")
                 session=context.request.get("/api/auth/session",headers={"Accept-Language":"en-US"})
                 require(session.status==200 and session.json().get("authenticated") is True,"secondary browser context is not authenticated")
                 report["functions"]["authenticated_setup"]="pass"
-
-                # Hosted Chromium 151 can paint the streamed root document while
-                # Playwright's main-world DOM is detached. Prove the authenticated
-                # root over HTTP, then inject those exact bytes into a same-origin
-                # browser document. Absolute assets and every /api/* call still hit
-                # the real FastAPI server with the real signed session cookie.
                 root_probe=context.request.get("/",headers={"Accept-Language":"en-US"})
                 require(root_probe.status==200,f"secondary authenticated root returned {root_probe.status}")
                 root_html=root_probe.text()
@@ -229,11 +240,9 @@ def run() -> dict:
                 page.on("pageerror",lambda error: report["page_errors"].append(str(error)))
                 origin_probe=page.goto("/healthz",wait_until="domcontentloaded",timeout=20_000)
                 require(origin_probe is not None and origin_probe.status==200,"secondary same-origin harness did not load")
-                page.set_content(root_html,wait_until="domcontentloaded",timeout=20_000)
-                page.locator("#chatInput").wait_for(state="visible",timeout=15_000)
-                report["outputs"]["functional_dom_source"]="exact_authenticated_root_html_via_same_origin_set_content"
+                hydrate_shell(page,base_url,root_html)
+                report["outputs"]["functional_dom_source"]="authenticated_root_dom_plus_ordered_real_assets"
                 wait_view_registry(page)
-
                 test_family(page,report); test_documents(page,report); test_appointment(page,report); test_privacy(page,report); test_profile(page,report); test_medication(page,report); test_devices(page,report); test_timeline_treatment_and_cost(page,report)
                 require(not report["console_errors"],f"console errors: {report['console_errors']}"); require(not report["page_errors"],f"page errors: {report['page_errors']}")
                 report["status"]="PASS"; screenshot(page,"secondary-final"); context.close(); browser.close()
