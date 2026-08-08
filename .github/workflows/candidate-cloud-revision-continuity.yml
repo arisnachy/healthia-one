@@ -1,0 +1,202 @@
+name: Candidate Cloud revision continuity proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/cloud-continuity-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-cloud-revision-continuity
+  cancel-in-progress: false
+
+jobs:
+  continuity-gate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+      candidate_sha: ${{ steps.gate.outputs.candidate_sha }}
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@v5
+        with:
+          ref: kira/event-driven-results-twin-p1
+          fetch-depth: 1
+
+      - name: Require explicit continuity proof opt-in
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "candidate_sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            enabled=true
+          elif grep -Fxq 'enabled=true' .github/cloud-continuity-trigger.txt 2>/dev/null; then
+            enabled=true
+          else
+            enabled=false
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_CONTINUITY_GATE enabled=$enabled candidate_sha=$sha"
+
+  prove-continuity:
+    needs: continuity-gate
+    if: needs.continuity-gate.outputs.enabled == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-demo
+      BUCKET_NAME: healthia-6088a-healthia-evidence
+    steps:
+      - name: Checkout frozen candidate SHA
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.continuity-gate.outputs.candidate_sha }}
+          fetch-depth: 1
+
+      - name: Verify frozen candidate SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "${{ needs.continuity-gate.outputs.candidate_sha }}"
+          echo "HEALTHIA_EXACT_CANDIDATE_SHA=$actual" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install only continuity verifier dependencies
+        run: python -m pip install --quiet google-cloud-firestore google-cloud-storage
+
+      - name: Bind to current proven Cloud Run revision
+        id: before
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          test -n "$url" && test -n "$revision" && test -n "$image"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_CONTINUITY_BEFORE revision=$revision image=$image"
+
+      - name: Prepare durable patient A/B evidence on before revision
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.before.outputs.url }}
+          HEALTHIA_ID_TOKEN: ${{ steps.before.outputs.token }}
+          BEFORE_REVISION: ${{ steps.before.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python deployment/verify_cloud_revision_continuity.py prepare \
+            --url "$HEALTHIA_CLOUD_URL" \
+            --project "$PROJECT_ID" \
+            --bucket "$BUCKET_NAME" \
+            --identity-token "$HEALTHIA_ID_TOKEN" \
+            --state-file /tmp/healthia-revision-private.json \
+            --before-revision "$BEFORE_REVISION" \
+            > /tmp/healthia-continuity-prepare.json
+          python -m json.tool /tmp/healthia-continuity-prepare.json
+          test -s /tmp/healthia-revision-private.json
+
+      - name: Force a new revision without changing application image
+        id: after
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)"
+          before="${{ steps.before.outputs.revision }}"
+          before_image="${{ steps.before.outputs.image }}"
+          gcloud run services update "$SERVICE_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --update-env-vars "HEALTHIA_REVISION_PROOF=$marker" \
+            --quiet
+          after="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          after_image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          test -n "$after"
+          test "$after" != "$before"
+          test "$after_image" = "$before_image"
+          echo "revision=$after" >> "$GITHUB_OUTPUT"
+          echo "image=$after_image" >> "$GITHUB_OUTPUT"
+          echo "marker=$marker" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_NEW_REVISION_READY before=$before after=$after image_unchanged=true"
+
+      - name: Verify continuity after new Cloud Run revision
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.before.outputs.url }}
+          HEALTHIA_ID_TOKEN: ${{ steps.before.outputs.token }}
+          AFTER_REVISION: ${{ steps.after.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python deployment/verify_cloud_revision_continuity.py verify \
+            --url "$HEALTHIA_CLOUD_URL" \
+            --project "$PROJECT_ID" \
+            --bucket "$BUCKET_NAME" \
+            --identity-token "$HEALTHIA_ID_TOKEN" \
+            --state-file /tmp/healthia-revision-private.json \
+            --after-revision "$AFTER_REVISION" \
+            --evidence-file deployment/cloud-revision-continuity-latest.json
+          test -s deployment/cloud-revision-continuity-latest.json
+
+      - name: Bind sanitized evidence to exact candidate and revisions
+        env:
+          BEFORE_REVISION: ${{ steps.before.outputs.revision }}
+          AFTER_REVISION: ${{ steps.after.outputs.revision }}
+          IMAGE: ${{ steps.after.outputs.image }}
+          CLOUD_URL: ${{ steps.before.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path=Path('deployment/cloud-revision-continuity-latest.json')
+          payload=json.loads(path.read_text(encoding='utf-8'))
+          payload.update({
+              'candidate_sha': os.environ['HEALTHIA_EXACT_CANDIDATE_SHA'],
+              'cloud_url': os.environ['CLOUD_URL'],
+              'before_revision': os.environ['BEFORE_REVISION'],
+              'after_revision': os.environ['AFTER_REVISION'],
+              'image': os.environ['IMAGE'],
+              'same_image_across_revision': True,
+              'proof_harness': 'deployment/verify_cloud_revision_continuity.py',
+              'private_state_uploaded': False,
+          })
+          path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+
+      - name: Upload sanitized cross-revision evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-cloud-revision-continuity-proof
+          path: deployment/cloud-revision-continuity-latest.json
+          if-no-files-found: error
+          retention-days: 14
