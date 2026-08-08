@@ -111,6 +111,12 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
     require(response.status == 201, f"registration returned {response.status}")
     require("healthia_session=" in (response.header_value("set-cookie") or ""), "registration did not emit session cookie")
     page.wait_for_url(re.compile(rf"^{re.escape(base_url)}/?$"), timeout=15_000)
+    # A URL transition is not the same thing as an interactive shell. On a cold
+    # Chromium runner the redirect can complete several seconds before deferred
+    # assets finish constructing the app. Wait for the actual shell first so the
+    # laboratory measures product readiness rather than a navigation race.
+    page.wait_for_load_state("domcontentloaded")
+    page.locator("#app").wait_for(state="attached", timeout=15_000)
     cookies = context.cookies(base_url)
     session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
     require(session_cookie is not None and session_cookie.get("secure") is False, "browser registration cookie invalid for local HTTP")
@@ -126,17 +132,17 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
         "path": session_cookie.get("path"),
     }
     report["outputs"]["functional_page_url"] = page.url
-    screenshot(page, "registered-browser-session")
 
     checkpoint("composer_probe_start")
     composer = page.locator("#chatInput")
-    composer.wait_for(state="visible", timeout=8_000)
+    composer.wait_for(state="visible", timeout=20_000)
     composer.fill("LAB Omega readiness probe")
     require(composer.input_value() == "LAB Omega readiness probe", "authenticated composer rejected text")
     composer.fill("")
     require(page.locator("html").get_attribute("lang") == "en", "authenticated shell did not follow en-US")
     report["checks"]["authenticated_shell_interactive"] = "pass"
     report["outputs"]["post_register_session_authenticated"] = True
+    screenshot(page, "registered-browser-session")
     screenshot(page, "home-authenticated-en")
     checkpoint("register_and_composer_pass")
     return context, page
