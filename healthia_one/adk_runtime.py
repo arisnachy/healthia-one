@@ -8,6 +8,7 @@ from typing import Any
 from healthia_one.clinical_planner import ROLE_DEFINITIONS
 from healthia_one.clinical_tools import execute_on_demand_clinical_tools
 from healthia_one.config import Settings
+from healthia_one.language import current_requested_locale, language_instruction, resolve_response_locale
 from healthia_one.models import AgentStep, PatientState
 
 
@@ -61,32 +62,32 @@ CLINICAL_PLAN_JSON_SCHEMA: dict[str, Any] = {
 
 
 ADK_CLINICAL_INSTRUCTION = """
-Eres el coordinador clínico de HealthIA ejecutado por Google Agent Development Kit (ADK).
-No diagnosticas ni recetas. Ejecuta el control clínico mínimo y produce cinco preguntas adaptativas para el caso actual.
+You are HealthIA's clinical coordinator running through Google Agent Development Kit (ADK).
+You do not diagnose or prescribe. Execute the minimum clinical control path and produce five adaptive questions for the current case.
 
-Contrato de ejecución:
-1. Antes de responder llama exactamente una vez a inspect_clinical_baseline.
-2. Esa herramienta ejecuta conjuntamente las dos comprobaciones obligatorias: entrevista y seguridad.
-3. No inventes resultados de herramientas. Usa sólo el resultado de la herramienta y el contexto autorizado.
-4. No pidas otras herramientas en esta fase.
-5. Después del tool-call devuelve sólo el objeto final que cumple el esquema JSON impuesto por el runtime.
+Execution contract:
+1. Before answering, call inspect_clinical_baseline exactly once.
+2. That tool jointly executes the two mandatory checks: interview and safety.
+3. Never invent tool results. Use only the tool result and authorized context.
+4. Do not request any other tool in this phase.
+5. After the tool call, return only the final object that satisfies the JSON schema enforced by the runtime.
 
-Reglas de memoria y naturalidad:
-- Trata chief_complaint y previous_answers como memoria clínica acumulada.
-- No vuelvas a preguntar un hecho ya respondido salvo contradicción concreta.
-- Cada pregunta nueva debe resolver una incertidumbre específica del caso.
-- Evita plantillas genéricas cuando puedas preguntar por un discriminante concreto.
-- Si ya conoces duración, intensidad, medicamento, alergia, exposición, signo vital o señal de alarma, considéralo conocido.
-- Las opciones deben corresponder a la pregunta concreta; no reutilices una lista fija.
+Memory and natural-language rules:
+- Treat chief_complaint and previous_answers as accumulated clinical memory.
+- Do not ask for a fact already answered unless there is a concrete contradiction.
+- Each new question must resolve a case-specific uncertainty.
+- Prefer a concrete discriminator over a generic template.
+- If duration, intensity, medication, allergy, exposure, vital sign, or warning sign is known, treat it as known.
+- Options must fit the specific question; do not reuse a fixed option list.
 
-Reglas clínicas y de concisión:
-- Usa el motivo actual, respuestas anteriores y contexto autorizado.
-- Incluye una pregunta sobre señales de alarma específicas del caso.
-- Nunca confirmes diagnósticos ni indiques iniciar, suspender o cambiar medicamentos/dosis.
-- No conviertas antecedentes familiares en predicciones.
-- Devuelve exactamente cinco preguntas y entre tres y cinco opciones breves por pregunta.
-- clinical_focus debe ser una frase breve; why_these_questions máximo dos razones breves; missing_information máximo tres elementos breves.
-- No devuelvas selected_specialists: el runtime lo deriva de las herramientas realmente ejecutadas para no gastar tokens ni permitir evidencia inventada.
+Clinical and concision rules:
+- Use the current complaint, prior answers, and authorized context.
+- Include one question about case-specific warning signs.
+- Never confirm diagnoses or instruct the patient to start, stop, or change medication/doses.
+- Do not turn family history into predictions.
+- Return exactly five questions with three to five short options each.
+- clinical_focus must be one short phrase; why_these_questions at most two short reasons; missing_information at most three short items.
+- Do not return selected_specialists: the runtime derives that from tools that actually executed.
 """.strip()
 
 
@@ -116,14 +117,7 @@ def _answer_payload(previous_answers: list[dict[str, Any]]) -> list[dict[str, An
 
 
 class AdkClinicalRuntime:
-    """Low-latency ADK coordinator over authorized PatientState.
-
-    One aggregate ADK function tool executes the two mandatory deterministic
-    clinical checks and retains separate audit evidence. Gemini 3.5 Flash is
-    constrained to minimal thinking and a compact JSON response schema. The
-    schema deliberately excludes agent-selection claims because those are
-    reconstructed from the tool trajectory after generation.
-    """
+    """Low-latency ADK coordinator over authorized PatientState."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -143,16 +137,16 @@ class AdkClinicalRuntime:
                     payload = json.loads(value[start : end + 1])
                 except json.JSONDecodeError as nested:
                     raise ValueError(
-                        "Google ADK devolvió JSON estructurado incompleto o inválido "
+                        "Google ADK returned incomplete or invalid structured JSON "
                         f"(chars={len(value)}, pos={nested.pos}, error={nested.msg})"
                     ) from nested
             else:
                 raise ValueError(
-                    "Google ADK no devolvió un objeto JSON estructurado "
+                    "Google ADK did not return a structured JSON object "
                     f"(chars={len(value)}, pos={exc.pos}, error={exc.msg})"
                 ) from exc
         if not isinstance(payload, dict):
-            raise ValueError("Google ADK no devolvió un objeto JSON estructurado")
+            raise ValueError("Google ADK did not return a structured JSON object")
         return payload
 
     async def plan_clinical(
@@ -170,6 +164,11 @@ class AdkClinicalRuntime:
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
+        response_locale = resolve_response_locale(
+            chief_complaint,
+            requested_locale=current_requested_locale(),
+            profile_locale=state.profile.locale,
+        )
         executed_roles: list[str] = []
         tool_outputs: list[dict[str, Any]] = []
         baseline_calls = 0
@@ -214,6 +213,7 @@ class AdkClinicalRuntime:
             }
 
         max_output_tokens = self.settings.ai_max_output_tokens
+        instruction = f"{ADK_CLINICAL_INSTRUCTION}\n\n{language_instruction(response_locale)}"
         agent = LlmAgent(
             name="healthia_runtime_coordinator",
             model=Gemini(
@@ -221,7 +221,7 @@ class AdkClinicalRuntime:
                 retry_options=types.HttpRetryOptions(attempts=2),
             ),
             description="Low-latency demand-driven HealthIA coordinator over the current authorized patient state.",
-            instruction=ADK_CLINICAL_INSTRUCTION,
+            instruction=instruction,
             tools=[inspect_clinical_baseline],
             generate_content_config=types.GenerateContentConfig(
                 max_output_tokens=max_output_tokens,
@@ -247,6 +247,7 @@ class AdkClinicalRuntime:
             "chief_complaint": chief_complaint,
             "previous_answers": _answer_payload(previous_answers),
             "authorized_clinical_context": authorized_clinical_context,
+            "response_locale": response_locale,
             "constraints": {
                 "exact_question_count": 5,
                 "question_options_min": 3,
@@ -257,6 +258,7 @@ class AdkClinicalRuntime:
                 "structured_output_required": True,
                 "must_not_repeat_known_answers": True,
                 "must_not_diagnose_or_prescribe": True,
+                "patient_visible_language": response_locale,
             },
         }
 
@@ -293,9 +295,10 @@ class AdkClinicalRuntime:
         if missing or baseline_calls != 1:
             correction = {
                 "task": "repair_missing_mandatory_tool_execution",
+                "response_locale": response_locale,
                 "instruction": (
-                    "Ejecuta exactamente una vez inspect_clinical_baseline y después devuelve el objeto final "
-                    "que cumple el esquema JSON configurado. No llames la herramienta más de una vez."
+                    "Call inspect_clinical_baseline exactly once, then return the final object that satisfies the configured JSON schema. "
+                    "Do not call the tool more than once. " + language_instruction(response_locale)
                 ),
             }
             repaired_text = await run_turn(json.dumps(correction, ensure_ascii=False, default=str))
@@ -304,21 +307,22 @@ class AdkClinicalRuntime:
 
         missing = [role for role in mandatory if role not in executed_roles]
         if missing:
-            raise ValueError("ADK no ejecutó las comprobaciones obligatorias: " + ", ".join(missing))
+            raise ValueError("ADK did not execute mandatory checks: " + ", ".join(missing))
         if baseline_calls != 1:
-            raise ValueError(f"ADK ejecutó inspect_clinical_baseline {baseline_calls} veces; se exige exactamente una")
+            raise ValueError(f"ADK executed inspect_clinical_baseline {baseline_calls} times; exactly one is required")
         if tuple(executed_roles) != mandatory:
-            raise ValueError(f"ADK ejecutó roles inesperados en el bloque de baja latencia: {executed_roles}")
+            raise ValueError(f"ADK executed unexpected roles in the low-latency block: {executed_roles}")
         if not final_text:
-            raise RuntimeError("Google ADK devolvió una respuesta clínica vacía")
+            raise RuntimeError("Google ADK returned an empty clinical response")
 
         payload = self._parse_json(final_text)
         payload.setdefault("why_these_questions", [])
         payload.setdefault("missing_information", [])
+        payload["response_locale"] = response_locale
         payload["selected_specialists"] = [
             {
                 "role": role,
-                "reason": f"Comprobación {ROLE_DEFINITIONS[role][0]} ejecutada dentro de inspect_clinical_baseline por Google ADK",
+                "reason": f"{ROLE_DEFINITIONS[role][0]} check executed inside inspect_clinical_baseline by Google ADK",
             }
             for role in executed_roles
         ]
@@ -332,6 +336,7 @@ class AdkClinicalRuntime:
             "max_output_tokens": max_output_tokens,
             "structured_output": True,
             "response_mime_type": "application/json",
+            "response_locale": response_locale,
             "executed_roles": list(executed_roles),
             "tool_outputs": tool_outputs,
         }
