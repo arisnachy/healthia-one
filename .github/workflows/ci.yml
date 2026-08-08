@@ -44,6 +44,16 @@ jobs:
           retention-days: 7
       - name: Full system verification
         run: python scripts/full_system_check.py
+      - name: KIRA DialogBench multi-turn context gate
+        run: python scripts/dialogbench.py
+      - name: Upload KIRA DialogBench evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-KIRA-DialogBench
+          path: dist/dialogbench
+          if-no-files-found: warn
+          retention-days: 30
       - name: Install Chromium for browser verification
         run: python -m playwright install --with-deps chromium
       - name: Browser clinical end-to-end verification
@@ -226,8 +236,8 @@ jobs:
           python - "$duration" <<'PY'
           import sys
           duration = float(sys.argv[1])
-          if not 200 <= duration <= 300:
-              raise SystemExit(f"submission demo duration outside approximately four-minute window: {duration:.2f}s")
+          if not 230 <= duration <= 245:
+              raise SystemExit(f"submission demo must stay inside the 3:50–4:05 target window: {duration:.2f}s")
           print(f"HEALTHIA_SUBMISSION_DEMO_DURATION_OK {duration:.2f}s")
           PY
       - name: Upload final judge demo evidence
