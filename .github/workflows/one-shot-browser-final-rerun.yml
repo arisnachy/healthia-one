@@ -1,0 +1,117 @@
+name: One-shot final Cloud browser rerun
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-final-cloud-browser-rerun
+  cancel-in-progress: false
+
+jobs:
+  browser:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-judge
+      APP_CANDIDATE_SHA: 1df8237212ca79d4df46acb56fb8a1c344239fd3
+      HARNESS_SHA: d8e83b5
+      EXPECTED_REVISION: healthia-one-judge-00005-xh8
+    steps:
+      - name: Checkout corrected browser harness
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.HARNESS_SHA }}
+          fetch-depth: 1
+      - name: Capture exact harness SHA
+        id: harness
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install only Playwright and Chromium
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Bind to exact deployed application and verify budget
+        id: cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          test "$revision" = "$EXPECTED_REVISION"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          curl -fsS -H "Authorization: Bearer ${token}" "$url/api/readiness" > /tmp/readiness.json
+          python - <<'PY'
+          import json
+          p=json.load(open('/tmp/readiness.json',encoding='utf-8'))
+          c=p.get('cost_control') or {}
+          remaining=int(c.get('requests_remaining') or 0)
+          print('requests_remaining_before_final_browser=', remaining)
+          assert p.get('ready') is True and p.get('ai_ready') is True and p.get('adk_ready') is True
+          assert p.get('model') == 'gemini-3.5-flash'
+          assert p.get('store_backend') == 'firestore' and p.get('evidence_backend') == 'gcs'
+          assert remaining >= 5, f'Need at least five live requests for full browser proof, have {remaining}'
+          PY
+      - name: Execute full unmocked browser journey
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+        run: python scripts/cloud_browser_judge_proof.py
+      - name: Bind evidence to exact app and harness
+        if: always()
+        env:
+          CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          CLOUD_REVISION: ${{ steps.cloud.outputs.revision }}
+          CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
+          EXACT_HARNESS_SHA: ${{ steps.harness.outputs.sha }}
+        run: |
+          mkdir -p dist/cloud-browser-judge-proof
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('dist/cloud-browser-judge-proof/runtime.json').write_text(json.dumps({
+            'application_candidate_sha':os.environ['APP_CANDIDATE_SHA'],
+            'proof_harness_sha':os.environ.get('EXACT_HARNESS_SHA',''),
+            'cloud_url':os.environ.get('CLOUD_URL',''),
+            'cloud_revision':os.environ.get('CLOUD_REVISION',''),
+            'image':os.environ.get('CLOUD_IMAGE',''),
+            'project':os.environ['PROJECT_ID'],
+            'region':os.environ['REGION'],
+            'service':os.environ['SERVICE_NAME'],
+            'model':'gemini-3.5-flash',
+            'transport':'vertex_ai_adc',
+            'store_backend':'firestore',
+            'evidence_backend':'gcs',
+            'mocked':False
+          },indent=2),encoding='utf-8')
+          PY
+      - name: Upload final browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-final-cloud-browser-proof
+          path: dist/cloud-browser-judge-proof
+          if-no-files-found: warn
+          retention-days: 14
