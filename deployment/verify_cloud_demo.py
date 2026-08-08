@@ -279,11 +279,12 @@ def _verify_clinical_memory_and_resolution(config: CloudProofConfig) -> dict[str
 
 
 def run(config: CloudProofConfig) -> dict[str, Any]:
-    health = _json(config, "GET", "/healthz")
-    if health.get("status") != "ok":
-        raise CloudProofError(f"Cloud Run health check failed: {health}")
-
+    # Cloud Run reserves some URL paths ending in `z`. The deployed gate
+    # therefore uses the richer public readiness endpoint; /healthz remains only
+    # as a local/backward-compatibility route.
     readiness = _json(config, "GET", "/api/readiness")
+    if readiness.get("ready") is not True:
+        raise CloudProofError(f"Cloud Run readiness check failed: {readiness}")
     expected = {
         "llm_backend": "gemini_api",
         "store_backend": "firestore",
