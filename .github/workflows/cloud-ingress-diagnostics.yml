@@ -1,0 +1,145 @@
+name: Cloud Run ingress diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-cloud-ingress-diagnostics
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-demo
+      DEPLOY_PRINCIPAL: healthia-github-vertex-9@healthia-6088a.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Inspect sanitized service and IAM boundary
+        id: service
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          deterministic="https://${SERVICE_NAME}-${project_number}.${REGION}.run.app"
+          reported="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/service.json
+          gcloud run services get-iam-policy "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/iam.json
+          python - <<'PY'
+          import json
+          service=json.load(open('/tmp/service.json'))
+          iam=json.load(open('/tmp/iam.json'))
+          meta=(service.get('metadata') or {}).get('annotations') or {}
+          tmpl=(((service.get('spec') or {}).get('template') or {}).get('metadata') or {}).get('annotations') or {}
+          status=service.get('status') or {}
+          safe={
+            'metadata_annotations': {k:v for k,v in meta.items() if any(x in k.lower() for x in ('ingress','default-url','vpc'))},
+            'template_annotations': {k:v for k,v in tmpl.items() if any(x in k.lower() for x in ('ingress','vpc','network','client'))},
+            'service_account': ((((service.get('spec') or {}).get('template') or {}).get('spec') or {}).get('serviceAccountName')),
+            'status_url': status.get('url'),
+            'latest_ready_revision': status.get('latestReadyRevisionName'),
+            'conditions': [{k:c.get(k) for k in ('type','status','reason','message')} for c in status.get('conditions') or []],
+            'iam_roles': sorted({b.get('role','') for b in iam.get('bindings') or []}),
+            'deploy_principal_bindings': sorted([b.get('role','') for b in iam.get('bindings') or [] if 'serviceAccount:healthia-github-vertex-9@healthia-6088a.iam.gserviceaccount.com' in (b.get('members') or [])]),
+          }
+          print(json.dumps(safe, indent=2, ensure_ascii=False))
+          open('deployment/cloud-ingress-diagnostics.json','w').write(json.dumps(safe, indent=2, ensure_ascii=False))
+          PY
+          echo "deterministic=$deterministic" >> "$GITHUB_OUTPUT"
+          echo "reported=$reported" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "Deterministic URL: $deterministic"
+          echo "Reported URL: $reported"
+          echo "Revision: $revision"
+
+      - name: Probe URL and token combinations
+        shell: bash
+        env:
+          DETERMINISTIC: ${{ steps.service.outputs.deterministic }}
+          REPORTED: ${{ steps.service.outputs.reported }}
+        run: |
+          set -euo pipefail
+          plain_token="$(gcloud auth print-identity-token)"
+          det_token="$(gcloud auth print-identity-token --audiences="$DETERMINISTIC")"
+          rep_token="$(gcloud auth print-identity-token --audiences="$REPORTED")"
+          : > /tmp/codes.txt
+          probe() {
+            label="$1"; url="$2"; header_name="${3:-}"; token="${4:-}"
+            if [ -n "$header_name" ]; then
+              code="$(curl -sS -o /tmp/body.txt -w '%{http_code}' -H "$header_name: Bearer $token" "$url/healthz" || true)"
+            else
+              code="$(curl -sS -o /tmp/body.txt -w '%{http_code}' "$url/healthz" || true)"
+            fi
+            content_type="$(head -c 80 /tmp/body.txt 2>/dev/null | tr '\n' ' ' || true)"
+            printf '%s HTTP=%s body_prefix=%q\n' "$label" "$code" "$content_type" | tee -a /tmp/codes.txt
+          }
+          probe det_no_auth "$DETERMINISTIC"
+          probe rep_no_auth "$REPORTED"
+          probe det_plain_auth "$DETERMINISTIC" Authorization "$plain_token"
+          probe rep_plain_auth "$REPORTED" Authorization "$plain_token"
+          probe det_det_aud "$DETERMINISTIC" Authorization "$det_token"
+          probe rep_det_aud "$REPORTED" Authorization "$det_token"
+          probe det_rep_aud "$DETERMINISTIC" Authorization "$rep_token"
+          probe rep_rep_aud "$REPORTED" Authorization "$rep_token"
+          probe det_rep_aud_xserverless "$DETERMINISTIC" X-Serverless-Authorization "$rep_token"
+          probe rep_rep_aud_xserverless "$REPORTED" X-Serverless-Authorization "$rep_token"
+          cp /tmp/codes.txt deployment/cloud-ingress-http-codes.txt
+
+      - name: Test through official gcloud private-service proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services proxy "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --port 8099 > /tmp/cloud-run-proxy.log 2>&1 &
+          proxy_pid=$!
+          trap 'kill $proxy_pid 2>/dev/null || true' EXIT
+          code="000"
+          for i in {1..20}; do
+            code="$(curl -sS -o /tmp/proxy-health.txt -w '%{http_code}' http://127.0.0.1:8099/healthz 2>/dev/null || true)"
+            if [ "$code" != "000" ]; then break; fi
+            sleep 1
+          done
+          echo "Proxy health HTTP=$code"
+          head -c 400 /tmp/proxy-health.txt 2>/dev/null || true
+          echo
+          echo "--- proxy log tail ---"
+          tail -n 40 /tmp/cloud-run-proxy.log || true
+          printf 'proxy_health_http=%s\n' "$code" > deployment/cloud-proxy-diagnostic.txt
+          if [ "$code" = "200" ]; then
+            echo "HEALTHIA_CLOUD_PROXY_HEALTH_OK"
+          else
+            echo "HEALTHIA_CLOUD_PROXY_HEALTH_FAILED"
+          fi
+
+      - name: Upload sanitized ingress diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-cloud-ingress-diagnostics
+          path: |
+            deployment/cloud-ingress-diagnostics.json
+            deployment/cloud-ingress-http-codes.txt
+            deployment/cloud-proxy-diagnostic.txt
+          if-no-files-found: warn
+          retention-days: 7
