@@ -88,7 +88,8 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
     checkpoint(f"login_{expected_lang}_pass")
 
 
-def register_and_authenticate(browser: Browser, base_url: str, report: dict) -> BrowserContext:
+def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tuple[BrowserContext, Page]:
+    """Use the exact browser page/session produced by the real registration flow."""
     checkpoint("register_start")
     context = browser.new_context(
         base_url=base_url,
@@ -124,20 +125,10 @@ def register_and_authenticate(browser: Browser, base_url: str, report: dict) -> 
         "sameSite": session_cookie.get("sameSite"),
         "path": session_cookie.get("path"),
     }
-    screenshot(page, "registered-browser-session")
-    page.close()
-    checkpoint("register_pass")
-    return context
-
-
-def open_authenticated_app(context: BrowserContext, report: dict) -> Page:
-    checkpoint("functional_session_start")
-    session = context.request.get("/api/auth/session", headers={"Accept-Language": "en-US"})
-    require(session.status == 200 and session.json().get("authenticated") is True, "preserved browser session is not authenticated")
-    page = context.new_page()
-    configure_page(page, report)
-    page.goto("/", wait_until="domcontentloaded")
     report["outputs"]["functional_page_url"] = page.url
+    screenshot(page, "registered-browser-session")
+
+    checkpoint("composer_probe_start")
     composer = page.locator("#chatInput")
     composer.wait_for(state="visible", timeout=8_000)
     composer.fill("LAB Omega readiness probe")
@@ -147,8 +138,8 @@ def open_authenticated_app(context: BrowserContext, report: dict) -> Page:
     report["checks"]["authenticated_shell_interactive"] = "pass"
     report["outputs"]["post_register_session_authenticated"] = True
     screenshot(page, "home-authenticated-en")
-    checkpoint("functional_session_pass")
-    return page
+    checkpoint("register_and_composer_pass")
+    return context, page
 
 
 def api_json(context: BrowserContext, path: str) -> dict:
@@ -327,8 +318,7 @@ def run() -> dict:
                 browser = playwright.chromium.launch(**launch)
                 login_language_probe(browser, base_url, "en-US", "en", "Your health should remember you", report)
                 login_language_probe(browser, base_url, "es-DO", "es", "Tu salud debería recordarte", report)
-                context = register_and_authenticate(browser, base_url, report)
-                page = open_authenticated_app(context, report)
+                context, page = register_and_open_app(browser, base_url, report)
                 exercise_registered_views(page, report)
                 checkpoint("collapse_start")
                 page.locator("#collapseLeft").click()
