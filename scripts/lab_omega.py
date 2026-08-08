@@ -52,6 +52,12 @@ def screenshot(page: Page, name: str) -> str:
 def page_errors(page: Page, report: dict) -> None:
     page.on("console", lambda message: report["console_errors"].append(message.text) if message.type == "error" else None)
     page.on("pageerror", lambda error: report["page_errors"].append(str(error)))
+    page.on(
+        "response",
+        lambda response: report["http_errors"].append({"status": response.status, "url": response.url})
+        if response.status >= 400
+        else None,
+    )
 
 
 def login_language_probe(browser: Browser, base_url: str, locale: str, expected_lang: str, expected_hero: str, report: dict) -> None:
@@ -203,6 +209,7 @@ def run() -> dict:
         "mode": "real_local_browser_zero_ai_spend",
         "console_errors": [],
         "page_errors": [],
+        "http_errors": [],
         "checks": {},
         "windows": {},
         "functions": {},
@@ -263,8 +270,37 @@ def run() -> dict:
                 page.locator("#registerForm [name='display_name']").fill("LAB Omega Patient")
                 page.locator("#registerForm [name='email']").fill("lab.omega@example.test")
                 page.locator("#registerForm [name='password']").fill("LabOmega-2026-safe")
-                page.locator("#registerForm button[type='submit']").click()
+                with page.expect_response("**/api/auth/register") as registration_info:
+                    page.locator("#registerForm button[type='submit']").click()
+                registration_response = registration_info.value
+                set_cookie = registration_response.header_value("set-cookie") or ""
+                report["outputs"]["registration_http_status"] = registration_response.status
+                report["outputs"]["registration_set_cookie_present"] = "healthia_session=" in set_cookie
+                require(registration_response.status == 201, f"registration HTTP status was {registration_response.status}")
+                require("healthia_session=" in set_cookie, "registration response did not emit the session cookie")
+                page.wait_for_timeout(150)
+                cookies = context.cookies(base_url)
+                session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
+                report["outputs"]["browser_session_cookie_after_register"] = (
+                    {
+                        "present": True,
+                        "secure": bool(session_cookie.get("secure")),
+                        "sameSite": session_cookie.get("sameSite"),
+                        "path": session_cookie.get("path"),
+                    }
+                    if session_cookie
+                    else {"present": False}
+                )
+                require(session_cookie is not None, "Chromium did not retain the session cookie emitted by registration")
+                require(session_cookie.get("secure") is False, "local HTTP registration emitted a Secure-only browser cookie")
                 page.wait_for_url(f"{base_url}/")
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(250)
+                report["outputs"]["post_register_url"] = page.url
+                session = page.evaluate("async () => await (await fetch('/api/auth/session', {credentials:'same-origin'})).json()")
+                report["outputs"]["post_register_session_authenticated"] = bool(session.get("authenticated"))
+                report["outputs"]["post_register_session_patient_id"] = str((session.get("account") or {}).get("patient_id") or "")
+                require(session.get("authenticated") is True, f"browser cookie was present but session verification failed at {page.url}")
                 page.wait_for_selector("#chatInput")
                 page.wait_for_function("document.documentElement.lang === 'en'")
                 report["functions"]["register_and_authenticate"] = "pass"
