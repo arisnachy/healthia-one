@@ -18,7 +18,7 @@ HealthIA ONE treats continuity itself as the job.
 
 ### Adaptive patient interview
 
-The patient describes a problem in natural language. Google ADK runs on demand, executes a real aggregate clinical baseline tool containing deterministic interview + safety checks, and Gemini 3.5 Flash generates exactly five context-specific questions under a structured-output contract. Later blocks receive the prior questions/answers so the system can avoid asking known facts again and decide when the interview is sufficiently complete to orient the patient to the next safe step.
+The patient describes a problem in natural language. Google ADK runs on demand, executes a real aggregate clinical baseline tool containing deterministic interview + safety checks, and Gemini 3.5 Flash generates exactly five context-specific questions under a structured-output contract. Later blocks receive prior questions/answers so the system avoids asking known facts again and decides when the interview is sufficiently complete to orient the patient to the next safe step.
 
 ### Evidence-first multimodal results
 
@@ -30,13 +30,11 @@ When the patient uploads a PDF or clinical image:
 4. the clinical twin receives provenance linking the derived result to the original;
 5. if AI interpretation fails, the original remains available and the result stays pending instead of inventing findings.
 
-PDFs use Gemini 3 low visual-media resolution with native PDF text to reduce latency/cost; clinical images retain high visual resolution.
+PDFs use low visual-media resolution with native PDF text to reduce latency/cost; clinical images retain high visual resolution.
 
 ### Closed-loop Taskmaster mission
 
-A later request such as “explain the result I just uploaded” retrieves the **persisted** result and original-document metadata, returns the saved patient explanation/original link and closes a `result_explanation` mission only when the evidence exists. The completed mission retains correlated `result_id`, `document_id` and closure markers.
-
-That closed outcome survives logout/login and a real Cloud Run revision while remaining invisible to another authenticated patient.
+A later request such as “explain the result I just uploaded” retrieves the **persisted** result and original-document metadata, returns the saved patient explanation/original link and closes a `result_explanation` mission only when the evidence exists. The completed mission retains correlated result/document evidence and survives logout/login and a real Cloud Run revision while remaining invisible to another authenticated patient.
 
 ## Why it is agentic
 
@@ -51,7 +49,7 @@ patient/event goal
   → patient-visible state update
 ```
 
-The clinical ADK path executes one real function-tool trajectory (`inspect_clinical_baseline`) that runs mandatory interview + safety checks. Tool execution is audited separately, and the runtime reconstructs specialist evidence from what actually executed instead of trusting the model to claim it did.
+The clinical ADK path executes one real function-tool trajectory (`inspect_clinical_baseline`) that runs mandatory interview + safety checks. Tool execution is audited separately, and the runtime reconstructs specialist evidence from what actually executed instead of trusting model prose.
 
 ## Google technologies
 
@@ -65,13 +63,11 @@ The clinical ADK path executes one real function-tool trajectory (`inspect_clini
 - **Cloud Build**
 - Google GenAI SDK / Interactions transport
 
-No Gemini API key is injected into the Cloud Run proof deployment.
+No Gemini API key is injected into the Cloud Run proof deployment. The Python dependency boundary uses Google ADK core plus explicitly declared Firestore/GCS clients instead of an unused broad GCP extras bundle.
 
 ## Architecture
 
 See `docs/ARCHITECTURE.md` for the Mermaid architecture and evidence-flow diagrams.
-
-High-level path:
 
 ```text
 Patient UI
@@ -102,9 +98,31 @@ The hackathon/demo paths use **synthetic patients and synthetic clinical files o
 - proactive agent work disabled by default;
 - original evidence persisted before model interpretation;
 - fail-closed multimodal behavior;
-- explicit opt-in billable Cloud proof workflows.
+- explicit opt-in billable Cloud proof/recording workflows.
 
 ## What we actually proved
+
+### Continuous final judge demo — PASS
+
+GitHub Actions run **`31265639488`** produced a continuous unmocked WebM after the exact candidate first passed the full repository verification gate.
+
+- candidate SHA: `3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`
+- artifact: `HealthIA-ONE-final-judge-demo` (`9024139098`)
+- artifact digest: `sha256:71ee6e2ce665a9b98e44ca11aae7c7334849b73ac7e756b157afa47b3a249f33`
+- video SHA-256: `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19`
+- duration: `290.16 s`
+- live revision shown: `healthia-one-demo-00016-mct`
+- live model: `gemini-3.5-flash`
+- ADK ready: true
+- store/evidence: Firestore / GCS
+- zero browser console/page errors
+- synthetic data only
+
+The recording visibly covers the problem, value proposition, live Gemini+ADK clinical interaction, multimodal result, original-document evidence, clinical twin, completed Taskmaster mission, relogin continuity and the `.run.app` Cloud runtime/readiness proof.
+
+Permanent sanitized evidence: `hackathon/evidence/final_judge_demo_proof.json`.
+
+**Only publication is still pending:** upload the exact proven video (or an unchanged copy of it) to the final stable judge-facing video host and replace the placeholder below.
 
 ### Exact-candidate Cloud + browser — PASS
 
@@ -152,13 +170,14 @@ Full index: `docs/EVIDENCE.md`.
 
 ## Findings and learnings
 
-1. **Agentic does not mean always-on.** For a patient system, event-driven/demand-driven agents are easier to audit, cheaper and more natural than a permanent swarm.
-2. **Evidence must exist before interpretation.** Persisting original bytes before Gemini creates a safe provenance boundary and makes failure recoverable.
+1. **Agentic does not mean always-on.** Event-driven/demand-driven agents are easier to audit, cheaper and more natural for patient continuity than a permanent swarm.
+2. **Evidence must exist before interpretation.** Persisting original bytes before Gemini creates a recoverable provenance boundary.
 3. **Tool evidence should come from execution, not model prose.** HealthIA reconstructs the ADK specialist trace from tools that actually ran.
-4. **Latency needs architecture, not bigger timeouts.** The clinical path became reliable after collapsing mandatory checks into one ADK tool call, using Gemini minimal thinking, structured output and bounded response size.
-5. **Multimodal latency is media-dependent.** Low PDF visual resolution + native text and a compact schema removed a live Cloud timeout without lowering image fidelity for clinical images.
-6. **Durability must be tested across a process boundary.** Logout/login is useful but not enough; the project now proves persistence across a genuinely new Cloud Run revision.
-7. **Cost control is part of architecture.** A legacy automatic deployment route discovered during testing was retired; billable evidence workflows now require explicit opt-in.
+4. **Latency needs architecture, not bigger timeouts.** One bounded ADK tool call, minimal thinking, structured output and bounded response size made the clinical path reliable.
+5. **Multimodal latency is media-dependent.** Low PDF visual resolution + native text and a compact schema removed the live Cloud timeout while retaining high image resolution for clinical images.
+6. **Durability must be tested across a process boundary.** The project proves persistence across a genuinely new Cloud Run revision, not just refresh/logout.
+7. **Cost control is architecture.** Hidden automatic deployment was removed; billable proofs and the final recorder require explicit opt-in.
+8. **Demo evidence should be reproducible.** The final judge video is itself generated by a gated workflow that first requires the same SHA to pass the full technical regression suite.
 
 ## Spin-up instructions
 
@@ -190,20 +209,21 @@ The project expects required Google Cloud APIs/permissions to be preconfigured a
 
 ## Hosted project
 
-**Final submission choice:** use the proven Cloud Run deployment only if judge access is intentionally enabled/provided. The current proof service is private at the Cloud Run IAM boundary even though the application itself also has patient authentication.
+The proof service is private at the Cloud Run IAM boundary even though the application also has patient authentication. Use the proven deployment only if judge access is intentionally enabled/provided; otherwise omit the optional interactive hosted URL rather than claiming a private endpoint is public.
 
 Proven Cloud URL: `https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app`
 
-If the final Devpost field requires direct interactive judge access, either provide an explicit judge-access mechanism or omit the optional hosted URL rather than claiming that a private endpoint is publicly testable.
-
 ## Demo video
 
-**FINAL VIDEO URL: TODO**
+**FINAL PUBLIC/JUDGE VIDEO URL: TODO — publish the already-proven artifact from run `31265639488`.**
 
-Use `docs/DEMO_SCRIPT.md`. The final recording must be approximately four minutes, unedited, and visibly show the live application plus Google Cloud evidence.
+Artifact source: GitHub Actions artifact `9024139098` (`HealthIA-ONE-final-judge-demo`).  
+Video SHA-256: `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19`.
 
 ## Submission status
 
-Technical hard gates are green. JUDGE Ω currently scores the evidence-backed candidate **98/100** and deliberately withholds the last two Demo & Production Readiness points until the final unedited video/submission package exists.
+All functional, architecture, Cloud, browser, durability, reproducibility and video-content gates are green. JUDGE Ω currently scores the evidence-backed candidate **99/100**.
 
-Do not claim `100/100` or `SUBMISSION_LOCKED` until the video URL/package is present and final CI/JUDGE passes on the exact submission head.
+**Only one point remains withheld:** the proven video must be published at the stable judge-facing URL entered into Devpost. After that URL is inserted, run final CI/JUDGE on that exact head, merge PR #29 and lock the submission if everything remains green.
+
+Do not claim `100/100` or `SUBMISSION_LOCKED` until that publication/locking gate is complete.
