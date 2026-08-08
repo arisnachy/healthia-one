@@ -211,9 +211,16 @@ python scripts/full_system_check.py
 python -m compileall -q app healthia_one healthia_agent tests scripts deployment
 python scripts/smoke_test.py
 python scripts/judge_omega.py
+node --check web/app.js
+node --check web/patient-record.js
+node --check web/family-documents.js
+node --check web/continuity.js
+node --check web/privacy-controls.js
+node --check web/profile-devices.js
+node --check web/icons.js
 ```
 
-The CI gate additionally runs Chromium, JavaScript validation, PowerShell parsing, release ZIP verification, and pytest again from the extracted release.
+The CI gate additionally runs Chromium, semantic JavaScript validation, PowerShell parsing, release ZIP verification, and pytest again from the extracted release.
 
 Cloud proofs are intentionally separate from ordinary CI.
 
