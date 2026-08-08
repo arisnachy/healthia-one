@@ -1,0 +1,5 @@
+HealthIA ONE exact-candidate Cloud proof trigger
+
+Purpose: run the main-branch permission gate and downstream Cloud Run + Vertex strict proof against the current head of kira/event-driven-results-twin-p1.
+Requested by: KIRA / FORJA / JUDGE evidence gate
+Mode: one controlled proof run; no continuous deployment
