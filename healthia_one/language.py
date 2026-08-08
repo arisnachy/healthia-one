@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar, Token
 
 SUPPORTED_LANGUAGES = {"en", "es"}
+_REQUESTED_LOCALE: ContextVar[str | None] = ContextVar("healthia_requested_locale", default=None)
 
 
 def normalize_locale(value: str | None, *, fallback: str = "en") -> str:
@@ -12,6 +14,18 @@ def normalize_locale(value: str | None, *, fallback: str = "en") -> str:
         if language in SUPPORTED_LANGUAGES:
             return language
     return fallback if fallback in SUPPORTED_LANGUAGES else "en"
+
+
+def bind_requested_locale(value: str | None) -> Token:
+    return _REQUESTED_LOCALE.set(normalize_locale(value) if value else None)
+
+
+def reset_requested_locale(token: Token) -> None:
+    _REQUESTED_LOCALE.reset(token)
+
+
+def current_requested_locale() -> str | None:
+    return _REQUESTED_LOCALE.get()
 
 
 def detect_text_language(text: str) -> str | None:
@@ -39,8 +53,6 @@ def detect_text_language(text: str) -> str | None:
 
     es = score(spanish_tokens)
     en = score(english_tokens)
-    # A sentence with clear diacritics/question punctuation is enough; otherwise
-    # require at least two lexical signals to avoid misclassifying short inputs.
     if any(char in sample for char in "¿¡ñáéíóú") and es > en:
         return "es"
     if es >= 2 and es > en:
@@ -48,8 +60,6 @@ def detect_text_language(text: str) -> str | None:
     if en >= 2 and en > es:
         return "en"
 
-    # A final lightweight word-boundary pass helps clear English clinical asks
-    # such as "pain today" without treating a single ambiguous word as proof.
     english_hits = re.findall(r"\b(pain|fever|today|please|results?|pressure|weight|help)\b", sample)
     spanish_hits = re.findall(r"\b(dolor|fiebre|hoy|resultados?|presi[oó]n|peso|ayuda)\b", sample)
     if len(english_hits) >= 2 and len(english_hits) > len(spanish_hits):
