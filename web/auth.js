@@ -1,5 +1,7 @@
 (() => {
   const $ = selector => document.querySelector(selector);
+  const i18n = window.HealthIAI18n;
+  const t = key => i18n?.t(key) || key;
   const loginTab = $("#loginTab");
   const registerTab = $("#registerTab");
   const loginForm = $("#loginForm");
@@ -17,7 +19,7 @@
   async function api(path, payload) {
     const response = await fetch(path, {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {"Content-Type": "application/json", "Accept-Language": i18n?.locale || "en"},
       body: JSON.stringify(payload),
     });
     const data = await response.json().catch(() => ({}));
@@ -34,10 +36,11 @@
       event.preventDefault();
       const error = $(errorSelector);
       const button = form.querySelector("button[type='submit']");
+      const label = button.querySelector("span") || button;
       error.hidden = true;
       button.disabled = true;
-      const original = button.textContent;
-      button.textContent = "Comprobando…";
+      const original = label.textContent;
+      label.textContent = t("auth.checking");
       try {
         await api(path, formPayload(form));
         window.location.replace("/");
@@ -46,7 +49,7 @@
         error.hidden = false;
       } finally {
         button.disabled = false;
-        button.textContent = original;
+        label.textContent = original;
       }
     });
   }
@@ -56,7 +59,7 @@
   submit(loginForm, "/api/auth/login", "#loginError");
   submit(registerForm, "/api/auth/register", "#registerError");
 
-  fetch("/api/auth/session")
+  fetch("/api/auth/session", {headers: {"Accept-Language": i18n?.locale || "en"}})
     .then(response => response.json())
     .then(session => {
       if (session.authenticated) window.location.replace("/");
