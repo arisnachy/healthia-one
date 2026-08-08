@@ -7,10 +7,6 @@ from pathlib import Path
 from typing import Any
 
 
-# Permissions are intentionally checked before provisioning anything. They cover
-# the operations performed by deploy-cloud-demo.ps1: API enablement, creating a
-# dedicated runtime identity, binding its least-privilege roles, provisioning
-# Firestore/GCS/Secret Manager, and source-deploying Cloud Run.
 REQUIRED_PERMISSIONS: tuple[str, ...] = (
     "serviceusage.services.enable",
     "serviceusage.services.use",
@@ -52,16 +48,25 @@ ROLE_HINTS: dict[str, str] = {
 }
 
 
+def _principal(credentials: Any) -> str:
+    for attr in ("service_account_email", "signer_email"):
+        value = str(getattr(credentials, attr, "") or "").strip()
+        if value:
+            return value
+    return "unknown"
+
+
 def test_permissions(project: str) -> dict[str, Any]:
     try:
         import google.auth
         from google.auth.transport.requests import AuthorizedSession
-    except Exception as exc:  # pragma: no cover - environment failure
+    except Exception as exc:  # pragma: no cover
         raise RuntimeError("google-auth is required for the Cloud permission probe") from exc
 
     credentials, detected_project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
+    principal = _principal(credentials)
     session = AuthorizedSession(credentials)
     endpoint = f"https://cloudresourcemanager.googleapis.com/v3/projects/{project}:testIamPermissions"
     response = session.post(
@@ -81,6 +86,7 @@ def test_permissions(project: str) -> dict[str, Any]:
     return {
         "status": "ready" if not missing else "blocked",
         "project": project,
+        "principal": principal,
         "detected_adc_project": detected_project or "",
         "required_permission_count": len(REQUIRED_PERMISSIONS),
         "granted_permission_count": len(granted),
@@ -114,6 +120,7 @@ def main() -> int:
         return 2
 
     output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Authenticated principal: {payload['principal']}")
     if payload["status"] == "ready":
         print(
             "HEALTHIA_CLOUD_PERMISSIONS_READY "
