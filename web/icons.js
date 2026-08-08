@@ -49,21 +49,7 @@ if (!window.__HEALTHIA_ICONS__) {
       const panel=$('#collapseRight'); if(panel) panel.innerHTML=icon('panel');
       const top=$('.topbar-title'); if(top&&!$('.kira-mark',top)) top.insertAdjacentHTML('afterbegin',icon('sparkle','kira-mark'));
     }
-    function loadScript(src, marker){
-      if(document.querySelector(`script[${marker}]`)) return;
-      const script=document.createElement('script');
-      script.src=src;
-      script.async=false;
-      script.setAttribute(marker,'true');
-      document.head.append(script);
-    }
-    function boot(){
-      requestAnimationFrame(decorate);
-      loadScript('/assets/runtime-integrations.js','data-healthia-runtime');
-      loadScript('/assets/provider-integrations.js','data-healthia-providers');
-      loadScript('/assets/clinical-council.js','data-healthia-clinical-council');
-      loadScript('/assets/cost-control.js','data-healthia-cost-control');
-    }
+    function boot(){ requestAnimationFrame(decorate); }
     window.HealthIAIcons={decorate,icon};
     if(document.readyState==='loading') window.addEventListener('DOMContentLoaded',boot,{once:true}); else boot();
     document.addEventListener('healthia:ui-updated',()=>requestAnimationFrame(decorate));
