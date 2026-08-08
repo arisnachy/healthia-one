@@ -94,7 +94,7 @@ def answer_payload(interview: dict) -> str:
     )
 
 
-def backend_fixture() -> tuple[dict, list[dict], int]:
+def backend_fixture() -> tuple[dict, list[dict], int, dict]:
     fake_client = FakeClient()
     service.gemini = GeminiResponder(
         Settings(
@@ -123,7 +123,10 @@ def backend_fixture() -> tuple[dict, list[dict], int]:
             "/api/chat",
             json={"message": answer_payload(second["message"]["metadata"]["clinical_interview"])},
         ).json()
-    return bootstrap, [first, second, final], len(fake_client.interactions.calls)
+        agentic = client.post("/api/demo/agentic-closed-loop").json()
+        require(agentic["final_trace"]["mission"]["status"] == "completed", "backend agentic fixture did not close")
+        agentic_bootstrap = client.get("/api/bootstrap").json()
+    return bootstrap, [first, second, final], len(fake_client.interactions.calls), agentic_bootstrap
 
 
 def mock_script(bootstrap: dict, responses: list[dict]) -> str:
@@ -137,6 +140,7 @@ class MockResponse {{
 }}
 window.fetch = async function(path, options={{}}) {{
   const url=String(path);
+  if(url.includes('/api/auth/config')) return new MockResponse({{enabled:false,mode:'local',providers:[]}});
   if(url.includes('/api/readiness')) return new MockResponse({{ready:true,llm_backend:'gemini_api',model:'gemini-3.6-flash',ai_ready:true,adk_ready:true}});
   if(url.includes('/api/bootstrap')) return new MockResponse(window.__mockSnapshot);
   if(url.includes('/api/cost-control')) return new MockResponse({{mode:'guarded',enabled:true,requests_used:2,requests_remaining:2,request_limit:4,max_output_tokens:900,llm_backend:'gemini_api',model:'gemini-3.6-flash',api_key_configured:true,ui_control_available:true}});
@@ -148,10 +152,10 @@ window.fetch = async function(path, options={{}}) {{
     const patient={{id:'browser_patient_'+Date.now()+'_'+window.__mockChatIndex,patient_id:'patient_demo',role:'patient',author:window.__mockSnapshot.profile.display_name,content:payload.message,created_at:new Date().toISOString(),risk_level:'info',mission_id:null,agent_plan:[],metadata:{{}}}};
     const response=window.__mockChatResponses[window.__mockChatIndex++];
     window.__mockSnapshot.messages.push(patient,response.message);
-    if(response.mission) window.__mockSnapshot.missions.push(response.mission);
-    if(response.message?.metadata?.clinical_interview?.status==='completed') {{
-      const mission=window.__mockSnapshot.missions.find(item=>item.id===response.message.mission_id);
-      if(mission) {{ mission.status='waiting_professional'; mission.next_action='Revisar la síntesis clínica y confirmar el nivel de atención con un profesional'; mission.closure_evidence=['interview_two_blocks_completed']; }}
+    if(response.mission) {{
+      const index=window.__mockSnapshot.missions.findIndex(item=>item.id===response.mission.id);
+      if(index>=0) window.__mockSnapshot.missions[index]=response.mission;
+      else window.__mockSnapshot.missions.push(response.mission);
     }}
     setTimeout(() => window.__mockEventSource?.onmessage?.({{data: JSON.stringify({{type:'state',section:'chat'}})}}), 0);
     return new MockResponse(response);
@@ -168,9 +172,10 @@ def require(condition: bool, message: str) -> None:
 
 
 def run() -> dict:
-    bootstrap, responses, model_calls = backend_fixture()
+    bootstrap, responses, model_calls, agentic_bootstrap = backend_fixture()
     require(model_calls == 2, f"expected two model calls, found {model_calls}")
     require(all(item["message"]["metadata"].get("question_source") == "gemini_dynamic" for item in responses[:2]), "dynamic question source missing")
+    require(responses[-1].get("mission", {}).get("status") == "waiting_professional", "final response did not return updated mission")
 
     html = (WEB / "index.html").read_text(encoding="utf-8")
     html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", html)
@@ -197,6 +202,7 @@ def run() -> dict:
             """() => { for (const name of ['runtime','providers','clinical-council','cost-control']) { const script=document.createElement('script'); script.setAttribute('data-healthia-'+name,'true'); document.head.append(script); } }"""
         )
         for script in (
+            "auth.js",
             "app.js",
             "patient-record.js",
             "family-documents.js",
@@ -246,13 +252,24 @@ def run() -> dict:
         second_block.locator(".clinical-submit").click()
         page.wait_for_function("window.__mockChatIndex >= 3")
         page.wait_for_timeout(350)
-        require(page.get_by_text("Síntesis para la junta clínica").count() > 0, "final clinical summary is missing")
+        require(page.get_by_text("Lo que entendí de tu consulta").count() > 0, "final clinical summary is missing")
         require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final summary lost readable question labels")
         require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient summary")
-        require(page.get_by_text("Revisar la síntesis clínica y confirmar el nivel de atención con un profesional").count() > 0, "mission card remained stale after completion")
+        mission_preview = page.locator("#missionPreview .mission-preview")
+        require(mission_preview.count() == 1, "mission state duplicated in context preview")
+        require(mission_preview.locator("span").inner_text() == "Revisar la síntesis clínica y confirmar el nivel de atención con un profesional", "mission preview did not receive final state")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after completion")
-        require(not report["console_errors"] and not report["page_errors"], "browser emitted errors")
         page.screenshot(path=str(OUTPUT / "04-final.png"), full_page=True)
+
+        page.evaluate("snapshot => { window.__mockSnapshot = snapshot; }", agentic_bootstrap)
+        page.locator("#runCheck").click()
+        page.wait_for_selector("#view-missions.is-active .execution-card", timeout=10_000)
+        require(page.locator(".execution-card").count() >= 2, "agentic execution cards did not render")
+        require(page.get_by_text("Cierre verificado", exact=True).count() >= 1, "judge-visible closure stage missing")
+        require(page.get_by_text("Verificación local", exact=True).count() >= 1, "runtime badge missing")
+        require(page.get_by_text("razonamiento privado", exact=False).count() >= 1, "trace truth boundary missing")
+        require(not report["console_errors"] and not report["page_errors"], "browser emitted errors")
+        page.screenshot(path=str(OUTPUT / "05-agentic-trace.png"), full_page=True)
         browser.close()
 
     report["checks"] = {
@@ -262,9 +279,11 @@ def run() -> dict:
         "dynamic_question_source": "pass",
         "two_five_question_blocks": "pass",
         "pending_race_removed": "pass",
-        "final_summary": "pass",
+        "natural_final_summary": "pass",
         "readable_summary_labels": "pass",
-        "mission_state_refresh": "pass",
+        "mission_state_upsert": "pass",
+        "judge_visible_agentic_trace": "pass",
+        "closed_loop_stage_visible": "pass",
     }
     (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report

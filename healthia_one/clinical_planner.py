@@ -152,7 +152,7 @@ def select_on_demand_agents(
     stage: int,
     requested_roles: Iterable[Any] | None = None,
 ) -> list[AgentStep]:
-    """Select and execute the smallest useful clinical council without extra model calls."""
+    """Select and execute the smallest useful clinical capability set without extra model calls."""
 
     answers = list(previous_answers or [])
     context = _normalize(f"{chief_complaint} {_answer_text(answers)}")
@@ -230,8 +230,8 @@ def normalize_dynamic_question_block(raw: dict[str, Any], stage: int) -> dict[st
     if not isinstance(raw, dict):
         raise ValueError("El plan dinámico no es un objeto JSON")
     source_questions = raw.get("questions")
-    if not isinstance(source_questions, list) or len(source_questions) != 5:
-        raise ValueError("El bloque dinámico debe contener exactamente cinco preguntas")
+    if not isinstance(source_questions, list) or not 1 <= len(source_questions) <= 5:
+        raise ValueError("El bloque dinámico debe contener entre una y cinco preguntas")
 
     questions: list[dict[str, Any]] = []
     seen_prompts: set[str] = set()
@@ -255,8 +255,8 @@ def normalize_dynamic_question_block(raw: dict[str, Any], stage: int) -> dict[st
             if clean and key not in normalized_options:
                 normalized_options.add(key)
                 options.append(clean)
-        if not 3 <= len(options) <= 7:
-            raise ValueError("Cada pregunta debe tener entre tres y siete opciones")
+        if not 2 <= len(options) <= 7:
+            raise ValueError("Cada pregunta debe tener entre dos y siete opciones")
 
         question_id = _slug(str(item.get("id", "")), f"adaptive_{stage}_{index}")
         if question_id in seen_ids:
@@ -288,10 +288,10 @@ def normalize_dynamic_question_block(raw: dict[str, Any], stage: int) -> dict[st
 
     return {
         "stage": stage,
-        "title": f"Entrevista clínica adaptativa · bloque {stage}",
-        "instruction": "Estas preguntas se generaron a partir de lo que contaste y de los datos autorizados que aún falta aclarar.",
+        "title": "Preguntas para entenderte mejor",
+        "instruction": "Estas preguntas se eligieron según lo que contaste y lo que todavía falta aclarar.",
         "questions": questions,
-        "submit_label": "Continuar entrevista" if stage == 1 else "Enviar a la junta clínica",
+        "submit_label": "Continuar" if stage == 1 else "Revisar lo conversado",
     }
 
 
@@ -310,11 +310,11 @@ def judge_dynamic_plan(
     strengths: list[str] = []
     questions = block.get("questions") or []
 
-    if len(questions) != 5:
-        blockers.append("No contiene exactamente cinco preguntas")
+    if not 1 <= len(questions) <= 5:
+        blockers.append("No contiene una cantidad válida de preguntas adaptativas")
         score -= 40
     else:
-        strengths.append("Cinco preguntas compactas")
+        strengths.append(f"{len(questions)} pregunta(s) elegida(s) según la información faltante")
 
     combined = _normalize(
         " ".join(
@@ -341,10 +341,10 @@ def judge_dynamic_plan(
         strengths.append("Evita repetir datos ya recogidos")
 
     if not 2 <= len(agent_plan) <= 4:
-        blockers.append("Activa demasiados o muy pocos especialistas")
+        blockers.append("Activa demasiadas o muy pocas capacidades internas")
         score -= 20
     else:
-        strengths.append(f"Consejo bajo demanda de {len(agent_plan)} áreas con herramientas ejecutadas")
+        strengths.append(f"{len(agent_plan)} capacidades internas activadas bajo demanda")
 
     rationales = model_payload.get("why_these_questions") or []
     if not isinstance(rationales, list) or not any(str(item).strip() for item in rationales):
@@ -368,9 +368,9 @@ def judge_dynamic_plan(
         "strengths": strengths[:4],
         "blockers": blockers[:4],
         "hackathon_alignment": {
-            "innovation_operational_utility": "adaptive questions that pursue the next best information",
+            "innovation_operational_utility": "adaptive questions that pursue only the next useful information",
             "architectural_discipline": "one model call plus demand-selected deterministic tools and a no-token judge gate",
-            "demo_readiness": "question source, selected areas, tool outcomes and judge verdict are auditable",
+            "demo_readiness": "question source, selected capabilities, tool outcomes and judge verdict are auditable",
         },
         "chief_complaint_present": bool(str(chief_complaint).strip()),
     }
@@ -384,7 +384,7 @@ def fallback_judge_review(reason: str, agent_plan: list[AgentStep]) -> dict[str,
         "verdict": "SAFE_FALLBACK_NOT_HACKATHON_EVIDENCE",
         "strengths": [
             "Mantiene seguridad y continuidad sin consumir tokens",
-            f"Activa y ejecuta {len(agent_plan)} áreas bajo demanda",
+            f"Activa y ejecuta {len(agent_plan)} capacidades bajo demanda",
         ],
         "blockers": [reason],
         "hackathon_alignment": {

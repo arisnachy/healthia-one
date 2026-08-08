@@ -30,9 +30,34 @@ jobs:
       - run: python -m pip install -e ".[test]"
       - name: Install Chromium for browser verification
         run: python -m playwright install --with-deps chromium
-      - run: pytest
+      - name: Run pytest
+        shell: bash
+        run: |
+          mkdir -p dist/test-evidence
+          set -o pipefail
+          pytest -q --tb=short 2>&1 | tee dist/test-evidence/pytest.log
+      - name: Upload pytest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-pytest-evidence
+          path: dist/test-evidence/pytest.log
+          if-no-files-found: error
+          retention-days: 30
       - name: Full system verification
-        run: python scripts/full_system_check.py
+        shell: bash
+        run: |
+          mkdir -p dist/test-evidence
+          set -o pipefail
+          python scripts/full_system_check.py 2>&1 | tee dist/test-evidence/full-system.log
+      - name: Upload full-system evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-full-system-evidence
+          path: dist/test-evidence/full-system.log
+          if-no-files-found: error
+          retention-days: 30
       - name: Browser end-to-end verification
         run: python scripts/browser_smoke.py
       - name: Upload browser verification evidence
@@ -49,6 +74,7 @@ jobs:
         run: python scripts/judge_omega.py
       - name: Validate semantic frontend modules
         run: |
+          node --check web/auth.js
           node --check web/app.js
           node --check web/patient-record.js
           node --check web/family-documents.js
@@ -74,6 +100,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-cloud-demo.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/remove-cloud-demo.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/capture-cloud-proof.ps1")) | Out-Null
       - name: Build verified release archive
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
       - name: Verify release archive

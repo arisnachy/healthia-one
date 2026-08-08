@@ -3,34 +3,55 @@ param(
     [string]$Region = "us-central1",
     [string]$ServiceName = "healthia-one-demo",
     [string]$SecretName = "healthia-gemini-api-key",
+    [string]$TopicName = "healthia-agentic-events",
+    [string]$SubscriptionName = "healthia-agentic-events-push",
+    [string]$SchedulerName = "healthia-agentic-tick",
+    [string]$ResultBucketName = "",
+    [switch]$DeleteResultBucket,
     [switch]$DeleteSecret,
+    [switch]$DeleteServiceAccounts,
     [switch]$DeleteProject
 )
 
 $ErrorActionPreference = "Stop"
+if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) { throw "gcloud CLI no esta instalado o no esta en PATH." }
+if ([string]::IsNullOrWhiteSpace($ResultBucketName)) { $ResultBucketName = "$ProjectId-healthia-results" }
+$ResultBucketName = $ResultBucketName.ToLowerInvariant()
 
-if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
-    throw "gcloud CLI no esta instalado o no esta en PATH."
+function Remove-GcloudResource {
+    param([string[]]$Arguments, [string]$Label)
+    & gcloud @Arguments *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Eliminado: $Label" -ForegroundColor Green
+    } else {
+        Write-Host "No se elimino $Label (puede que ya no exista)." -ForegroundColor DarkYellow
+    }
 }
 
-Write-Host "Se eliminara el servicio Cloud Run $ServiceName del proyecto $ProjectId." -ForegroundColor Yellow
-if ($DeleteProject) {
-    Write-Host "Tambien se programara la eliminacion COMPLETA del proyecto." -ForegroundColor Red
-}
+Write-Host "HEALTHIA ONE · LIMPIEZA CLOUD" -ForegroundColor Yellow
+Write-Host "Se eliminaran Cloud Run, Pub/Sub y Scheduler para detener gasto de ejecucion." -ForegroundColor Yellow
+Write-Host "Firestore y el bucket privado de resultados NO se eliminan por defecto para evitar perdida accidental de evidencia." -ForegroundColor Cyan
+if ($DeleteResultBucket) { Write-Host "-DeleteResultBucket eliminara TODOS los archivos originales del bucket $ResultBucketName." -ForegroundColor Red }
+if ($DeleteProject) { Write-Host "-DeleteProject programara la eliminacion COMPLETA del proyecto, incluido Firestore y Storage." -ForegroundColor Red }
 $confirmation = Read-Host "Escribe DELETE para continuar"
-if ($confirmation -ne "DELETE") {
-    throw "Limpieza cancelada."
-}
+if ($confirmation -ne "DELETE") { throw "Limpieza cancelada." }
 
-& gcloud run services delete $ServiceName --project $ProjectId --region $Region --quiet | Out-Host
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Cloud Run no confirmo la eliminacion; revisa si el servicio ya no existe." -ForegroundColor Yellow
-}
+Remove-GcloudResource @("scheduler", "jobs", "delete", $SchedulerName, "--location", $Region, "--project", $ProjectId, "--quiet") "Cloud Scheduler $SchedulerName"
+Remove-GcloudResource @("pubsub", "subscriptions", "delete", $SubscriptionName, "--project", $ProjectId, "--quiet") "Pub/Sub subscription $SubscriptionName"
+Remove-GcloudResource @("pubsub", "topics", "delete", $TopicName, "--project", $ProjectId, "--quiet") "Pub/Sub topic $TopicName"
+Remove-GcloudResource @("run", "services", "delete", $ServiceName, "--project", $ProjectId, "--region", $Region, "--quiet") "Cloud Run $ServiceName"
 
+if ($DeleteResultBucket -and -not $DeleteProject) {
+    $bucketUri = "gs://$ResultBucketName"
+    & gcloud storage rm --recursive "$bucketUri/**" *> $null
+    Remove-GcloudResource @("storage", "buckets", "delete", $bucketUri, "--quiet") "Cloud Storage $ResultBucketName"
+}
 if ($DeleteSecret) {
-    & gcloud secrets delete $SecretName --project $ProjectId --quiet | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "No se pudo eliminar el secreto o ya no existe." -ForegroundColor Yellow
+    Remove-GcloudResource @("secrets", "delete", $SecretName, "--project", $ProjectId, "--quiet") "Secret Manager $SecretName"
+}
+if ($DeleteServiceAccounts) {
+    foreach ($account in @("healthia-runtime@$ProjectId.iam.gserviceaccount.com", "healthia-pubsub-push@$ProjectId.iam.gserviceaccount.com")) {
+        Remove-GcloudResource @("iam", "service-accounts", "delete", $account, "--project", $ProjectId, "--quiet") "service account $account"
     }
 }
 
@@ -39,6 +60,8 @@ if ($DeleteProject) {
     if ($LASTEXITCODE -ne 0) { throw "No se pudo programar la eliminacion del proyecto." }
     Write-Host "Proyecto programado para eliminacion." -ForegroundColor Green
 } else {
-    Write-Host "Servicio Cloud Run eliminado. Firestore, secretos, Artifact Registry y otros recursos pueden seguir existiendo." -ForegroundColor Green
-    Write-Host "Revisa Cloud Billing y Resource Manager. Usa -DeleteProject para la limpieza total del proyecto de demo." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Recursos de ejecucion eliminados. Revisa Cloud Billing para confirmar consumo detenido." -ForegroundColor Green
+    if (-not $DeleteResultBucket) { Write-Host "El bucket privado $ResultBucketName se conserva para que los estudios originales sigan disponibles." -ForegroundColor Cyan }
+    Write-Host "Firestore y Artifact Registry pueden conservar evidencia y almacenamiento; elimina el proyecto solo cuando ya no los necesites." -ForegroundColor Yellow
 }

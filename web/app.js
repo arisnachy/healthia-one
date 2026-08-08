@@ -14,14 +14,14 @@ const refs = {
   latestBp: $("#latestBp"), latestBpMeta: $("#latestBpMeta"), latestWeight: $("#latestWeight"),
   weightTrend: $("#weightTrend"), latestActivity: $("#latestActivity"), missionCount: $("#missionCount"),
   missionPreview: $("#missionPreview"), todayList: $("#todayList"), measurementList: $("#measurementList"),
-  resultList: $("#resultList"), missionList: $("#missionList"), dialog: $("#dataDialog"),
+  resultList: $("#resultList"), missionList: $("#missionList"), missionRunList: $("#missionRunList"), dialog: $("#dataDialog"),
   dataForm: $("#dataForm"), dialogTitle: $("#dialogTitle"), dialogFields: $("#dialogFields"),
   resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast"),
   sendButton: $("#sendButton"), heroPatientName: $("#heroPatientName"), signalSummary: $("#signalSummary"),
   openMissionSummary: $("#openMissionSummary"), newConsultation: $("#newConsultation"), closeContext: $("#closeContext"),
-  expandLeft: $("#expandLeft")
+  expandLeft: $("#expandLeft"), accountPill: $("#accountPill"), accountMenu: $("#accountMenu"),
+  signOutButton: $("#signOutButton"), accountMeta: $("#accountMeta"), accountAvatar: $("#accountAvatar")
 };
-
 
 let refreshPromise = null;
 let refreshQueued = false;
@@ -36,7 +36,6 @@ function safeFocusComposer() {
   refs.chatInput?.focus();
   refs.chatInput?.setSelectionRange(refs.chatInput.value.length, refs.chatInput.value.length);
 }
-
 
 function publicName(value) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -84,14 +83,32 @@ function showToast(message) {
   showToast.timer = setTimeout(() => { refs.toast.hidden = true; }, 3200);
 }
 
+async function healthiaFetch(path, options = {}) {
+  if (window.healthiaAuthReady) await window.healthiaAuthReady;
+  const headers = new Headers(options.headers || {});
+  if (window.healthiaAuth?.enabled) {
+    const token = await window.healthiaAuth.getToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  }
+  return fetch(path, {...options, headers});
+}
+window.healthiaFetch = healthiaFetch;
+
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const response = await healthiaFetch(path, options);
   if (!response.ok) {
     let detail = `Error ${response.status}`;
     try { detail = (await response.json()).detail || detail; } catch {}
     throw new Error(detail);
   }
   return response.json();
+}
+
+function upsertMission(mission) {
+  if (!mission || !state.data) return;
+  const index = state.data.missions.findIndex(item => item.id === mission.id);
+  if (index >= 0) state.data.missions[index] = mission;
+  else state.data.missions.push(mission);
 }
 
 function renderMessage(message) {
@@ -123,6 +140,11 @@ function renderAll() {
   const data = state.data;
   if (!data) return;
   refs.patientName.textContent = data.profile.display_name;
+  if (refs.accountMeta) refs.accountMeta.textContent = data.profile.email || (window.healthiaAuth?.enabled ? "Cuenta protegida" : "Demo local · cero gasto");
+  if (refs.accountAvatar) {
+    const parts = String(data.profile.display_name || "P").trim().split(/\s+/).slice(0,2);
+    refs.accountAvatar.textContent = parts.map(part => part[0] || "").join("").toUpperCase() || "P";
+  }
   if (refs.heroPatientName) refs.heroPatientName.textContent = data.profile.display_name || "—";
   if (refs.signalSummary) refs.signalSummary.textContent = `${(data.profile.authorized_signals || []).length || 0} activas`;
   if (refs.openMissionSummary) refs.openMissionSummary.textContent = data.missions.filter(item => !["completed","cancelled"].includes(item.status)).length;
@@ -160,7 +182,7 @@ function renderContext() {
 function renderToday() {
   const proactive = state.data.messages.filter(message => message.metadata?.proactive);
   refs.todayBadge.textContent = proactive.length;
-  refs.todayList.innerHTML = proactive.slice().reverse().map(message => `<article class="data-card"><header><h3>${escapeHtml(publicName(message.author))}</h3><small>${timeLabel(message.created_at)}</small></header><div>${renderMarkdown(message.content)}</div></article>`).join("") || `<article class="data-card"><h3>Todo tranquilo</h3><p>No hay nuevas intervenciones proactivas.</p></article>`;
+  refs.todayList.innerHTML = proactive.slice().reverse().map(message => `<article class="data-card"><header><h3>${escapeHtml(publicName(message.author))}</h3><small>${timeLabel(message.created_at)}</small></header><div>${renderMarkdown(message.content)}</div></article>`).join("") || `<article class="data-card"><h3>Todo tranquilo</h3><p>HealthIA espera a que inicies la conversación.</p></article>`;
 }
 
 function renderMeasurements() {
@@ -172,11 +194,62 @@ function renderMeasurements() {
 }
 
 function renderResults() {
-  refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => `<article class="data-card"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} valores</p><div>${renderMarkdown(result.explanation)}</div></article>`).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
+  refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => `<article class="data-card" data-result-id="${escapeHtml(result.id)}"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} valores</p><div>${renderMarkdown(result.explanation)}</div><button type="button" class="secondary result-original" data-result-file="${escapeHtml(result.id)}">Ver archivo original</button></article>`).join("") || `<article class="data-card"><p>No has cargado resultados.</p></article>`;
+}
+
+async function openResultFile(resultId) {
+  const preview = window.open("", "_blank");
+  try {
+    const response = await healthiaFetch(`/api/results/${encodeURIComponent(resultId)}/file`);
+    if (!response.ok) throw new Error(`No se pudo abrir el archivo (${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    if (preview) preview.location.href = url;
+    else {
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.target = "_blank"; anchor.rel = "noopener"; anchor.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) {
+    preview?.close();
+    showToast(error.message);
+  }
+}
+
+function publicRuntime(runtime) {
+  if (runtime === "google_adk") return "Google ADK";
+  if (runtime === "deterministic_test") return "Verificación local";
+  return "Respaldo seguro";
+}
+
+function publicTraceStage(stage) {
+  return ({trigger:"Evento", decision:"Decisión", tool:"Acción", persistence:"Persistencia", closure:"Cierre", error:"Incidencia"})[stage] || "Paso";
+}
+
+function publicTraceAction(action) {
+  const labels = {
+    vital_recorded:"Nueva medición recibida", device_sync:"Datos autorizados del dispositivo", scheduled_tick:"Revisión programada", manual_demo:"Prueba controlada",
+    open_repeat_measurement:"Abrir seguimiento de medición", close_repeat_measurement:"Cerrar seguimiento con evidencia",
+    escalate_professional_review:"Preparar revisión profesional", prepare_consultation_packet:"Preparar paquete de consulta",
+    no_action:"Sin acción adicional", persist_patient_state_and_trace:"Guardar estado y traza", verify_mission_closure:"Cierre verificado",
+    reserve_model_call_budget:"Reservar presupuesto de IA", commit_mission_action:"Ejecutar acción acotada"
+  };
+  return labels[action] || String(action || "Paso completado").replaceAll("_", " ");
+}
+
+function renderMissionRuns() {
+  if (!refs.missionRunList) return;
+  const runs = (state.data.mission_runs || []).slice().reverse();
+  refs.missionRunList.innerHTML = runs.map(run => {
+    const events = (run.events || []).map(item => `<li data-stage="${escapeHtml(item.stage)}"><span>${escapeHtml(publicTraceStage(item.stage))}</span><strong>${escapeHtml(publicTraceAction(item.action))}</strong>${item.evidence_ids?.length ? `<small>${item.evidence_ids.length} evidencia${item.evidence_ids.length === 1 ? "" : "s"}</small>` : ""}</li>`).join("");
+    const model = run.runtime === "google_adk" && run.model ? `<span class="execution-model">${escapeHtml(run.model)}</span>` : "";
+    return `<article class="execution-card" data-runtime="${escapeHtml(run.runtime)}"><header><div><span>Ejecución autónoma</span><h3>${escapeHtml(publicRuntime(run.runtime))}</h3></div><div class="execution-badges"><span>${escapeHtml(run.status)}</span>${model}</div></header><p>${escapeHtml(run.public_summary || "Ejecución registrada.")}</p><ol class="execution-trace">${events}</ol><footer><span>Correlación ${escapeHtml(String(run.correlation_id || "").slice(0, 12))}</span><span>${(run.artifact_ids || []).length} artefacto${(run.artifact_ids || []).length === 1 ? "" : "s"}</span></footer></article>`;
+  }).join("") || `<article class="data-card"><p>Aún no hay ejecuciones autónomas registradas. Las trazas aparecerán cuando un evento active una misión.</p></article>`;
 }
 
 function renderMissions() {
-  refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} módulos · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán cuando HealthIA detecte o reciba un asunto de seguimiento.</p></article>`;
+  refs.missionList.innerHTML = state.data.missions.slice().reverse().map(mission => `<article class="data-card"><header><h3>${escapeHtml(mission.title)}</h3><small>${escapeHtml(mission.status)}</small></header><p>${escapeHtml(mission.next_action)}</p><small>${mission.agent_plan.length} módulos · ${mission.evidence_ids.length} evidencias</small></article>`).join("") || `<article class="data-card"><p>Las misiones aparecerán solo cuando exista trabajo real pendiente.</p></article>`;
+  renderMissionRuns();
 }
 
 async function refresh(force = false) {
@@ -213,27 +286,28 @@ async function sendMessage(text) {
   refs.chatInput.value = "";
   refs.chatInput.style.height = "auto";
   setSendState();
-  refs.agentStatus.textContent = "HealthIA organizando el siguiente paso…";
+  refs.agentStatus.textContent = "HealthIA revisando el contexto…";
   const patient = {id:`local_${Date.now()}`, role:"patient", author:state.data.profile.display_name, content:clean, created_at:new Date().toISOString(), risk_level:"info", agent_plan:[]};
   state.data.messages.push(patient); renderMessage(patient); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
   try {
     const response = await api("/api/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:clean})});
-    if (response.mission) state.data.missions.push(response.mission);
+    upsertMission(response.mission);
     state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Equipo en segundo plano";
+  refs.agentStatus.textContent = "Agentes a demanda";
   refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
 }
 
 async function upload(file) {
   if (!file) return;
   const form = new FormData(); form.append("file", file);
-  refs.agentStatus.textContent = "HealthIA revisando el archivo…";
+  refs.agentStatus.textContent = "HealthIA identificando el resultado…";
   try {
     const result = await api("/api/results/upload", {method:"POST", body:form});
-    state.data.results.push(result); renderResults(); renderContext(); setView("results"); showToast("Resultado guardado y procesado.");
+    state.data.results.push(result); renderResults(); renderContext(); setView("results");
+    showToast(result.status === "parsed" ? "Resultado guardado e interpretado con procedencia." : "Resultado guardado; la interpretación quedó pendiente sin inventar datos.");
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = "Equipo en segundo plano";
+  refs.agentStatus.textContent = "Agentes a demanda";
 }
 
 const dialogDefinitions = {
@@ -261,24 +335,39 @@ async function saveDialog() {
   catch (error) { showToast(error.message); }
 }
 
-function connectEvents() {
+function handleEventPayload(payload) {
+  if (payload.type === "message" && !state.data.messages.some(item => item.id === payload.message.id)) {
+    state.data.messages.push(payload.message); renderMessage(payload.message); renderToday();
+    refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+  } else if (payload.type === "state") {
+    clearTimeout(handleEventPayload.refreshTimer);
+    handleEventPayload.refreshTimer = setTimeout(() => refresh(), 120);
+  } else if (payload.type === "runtime_error") showToast("Una ejecución registrada reportó un error.");
+}
+
+async function connectEvents() {
   if (eventStream) return;
-  eventStream = new EventSource("/api/events/stream");
-  let refreshTimer = null;
-  eventStream.onmessage = async event => {
-    const payload = JSON.parse(event.data);
-    if (payload.type === "message" && !state.data.messages.some(item => item.id === payload.message.id)) {
-      state.data.messages.push(payload.message);
-      renderMessage(payload.message);
-      renderToday();
-      refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
-      showToast("HealthIA se adelantó con una nueva observación.");
-    } else if (payload.type === "state") {
-      clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => refresh(), 120);
-    } else if (payload.type === "runtime_error") showToast("El agente reportó un error auditable.");
-  };
-  eventStream.onerror = () => showToast("La conexión de eventos se reconectará automáticamente.");
+  const controller = new AbortController();
+  eventStream = controller;
+  try {
+    const response = await healthiaFetch("/api/events/stream", {signal: controller.signal, headers:{Accept:"text/event-stream"}});
+    if (!response.ok || !response.body) throw new Error(`Eventos ${response.status}`);
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    while (!controller.signal.aborted) {
+      const {value, done} = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, {stream:true});
+      let boundary;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+        const data = frame.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
+        if (data) { try { handleEventPayload(JSON.parse(data)); } catch {} }
+      }
+    }
+  } catch (error) { if (!controller.signal.aborted) showToast("La conexión de eventos se reconectará automáticamente."); }
+  finally {
+    if (eventStream === controller) eventStream = null;
+    if (!controller.signal.aborted) setTimeout(() => connectEvents(), 1800);
+  }
 }
 
 refs.chatForm.addEventListener("submit", event => { event.preventDefault(); sendMessage(refs.chatInput.value); });
@@ -290,7 +379,20 @@ $$('[data-dialog]').forEach(button => button.addEventListener("click", () => ope
 refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
 refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
 refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
-refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = "HealthIA revisando continuidad…"; const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = "Equipo en segundo plano"; showToast(out.created ? `${out.created} observaciones nuevas.` : "No hay nuevas observaciones."); });
+refs.resultList?.addEventListener("click", event => {
+  const button = event.target.closest("[data-result-file]");
+  if (button) openResultFile(button.dataset.resultFile);
+});
+refs.runCheck.addEventListener("click", async () => {
+  refs.agentStatus.textContent = "Actualizando evidencia operacional…";
+  try {
+    await refresh();
+    setView("missions");
+    const latest = (state.data.mission_runs || []).at(-1);
+    showToast(latest ? `Última ejecución: ${publicRuntime(latest.runtime)} · ${latest.status}` : "Aún no hay ejecuciones autónomas registradas.");
+  } catch (error) { showToast(error.message); }
+  refs.agentStatus.textContent = "Agentes a demanda";
+});
 function syncLeftToggle() {
   const collapsed = refs.shell.classList.contains("left-collapsed");
   refs.expandLeft?.setAttribute("aria-hidden", String(!collapsed));
@@ -307,6 +409,23 @@ function syncContextToggle() {
 $("#collapseRight").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); syncContextToggle(); });
 $("#closeContext").addEventListener("click", () => { if (window.innerWidth <= 1080) refs.shell.classList.toggle("context-open"); else refs.shell.classList.toggle("right-collapsed"); syncContextToggle(); });
 $("#mobileMenu").addEventListener("click", () => refs.shell.classList.toggle("menu-open"));
+refs.accountPill?.addEventListener("click", () => { if (window.healthiaAuth?.enabled) refs.accountMenu.hidden = !refs.accountMenu.hidden; });
+refs.signOutButton?.addEventListener("click", async () => { refs.accountMenu.hidden = true; await window.healthiaAuth?.signOut?.(); });
+document.addEventListener("healthia:identity-changed", async () => {
+  if (!state.data) return;
+  if (eventStream?.abort) eventStream.abort();
+  eventStream = null;
+  await refresh(true); connectEvents();
+});
+document.addEventListener("healthia:signed-out", () => {
+  if (eventStream?.abort) eventStream.abort();
+  eventStream = null;
+  state.data = null;
+  refs.messageList?.replaceChildren();
+  refs.missionList?.replaceChildren();
+  refs.missionRunList?.replaceChildren();
+  refs.resultList?.replaceChildren();
+});
 refs.newConsultation?.addEventListener("click", async event => {
   event.preventDefault();
   refs.newConsultation.disabled = true;
@@ -325,6 +444,7 @@ refs.newConsultation?.addEventListener("click", async event => {
 
 (async function boot() {
   try {
+    if (window.healthiaAuthReady) await window.healthiaAuthReady;
     const readiness = await api("/api/readiness");
     refs.runtimeLabel.textContent = readiness.llm_backend === "gemini_api"
       ? (readiness.ai_ready ? `${readiness.model} · Google AI` : "Gemini · falta API key")

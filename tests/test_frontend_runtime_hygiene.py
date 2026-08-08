@@ -11,17 +11,19 @@ def test_identity_cleanup_does_not_use_recursive_dom_observer() -> None:
     assert "MutationObserver(hideInternalNames)" not in profile_devices
 
 
-def test_core_runtime_serializes_refresh_and_owns_one_event_stream() -> None:
+def test_core_runtime_serializes_refresh_and_owns_one_authenticated_event_stream() -> None:
     app = (WEB / "app.js").read_text(encoding="utf-8")
     assert "let refreshPromise = null" in app
     assert "let eventStream = null" in app
     assert "if (eventStream) return" in app
-    assert 'new EventSource("/api/events/stream")' in app
+    assert 'healthiaFetch("/api/events/stream"' in app
+    assert "new EventSource" not in app
 
 
 def test_only_semantic_frontend_modules_are_loaded() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     expected = (
+        "auth.js",
         "app.js",
         "patient-record.js",
         "family-documents.js",
@@ -39,9 +41,23 @@ def test_repository_contains_no_transfer_or_temporary_workflow_artifacts() -> No
     assert not (ROOT / ".cleanup-bundle").exists()
     assert not list(ROOT.glob(".audit-tree-probe*"))
     assert not list((ROOT / ".github" / "workflows").glob("apply-*.yml"))
+    assert not list(ROOT.glob(".github/p1-auth-*.patch"))
+    assert not (ROOT / ".github" / "workflows" / "p1-identity-apply.yml").exists()
     manifest = ROOT / "RELEASE-MANIFEST.json"
     if manifest.exists():
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         assert payload.get("project") == "HealthIA ONE"
         assert payload.get("synthetic_demo_only") is True
         assert payload.get("source_ref")
+
+
+def test_mission_view_exposes_public_agentic_trace_without_private_reasoning() -> None:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert 'id="missionRunList"' in html
+    assert "Ejecuciones autónomas verificables" in html
+    assert "razonamiento privado" in html
+    assert "renderMissionRuns" in app
+    assert "Google ADK" in app
+    assert "Cierre verificado" in app
+    assert "private chain" not in app.lower()

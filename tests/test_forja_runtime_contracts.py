@@ -9,6 +9,7 @@ def test_google_sdk_matches_interactions_api() -> None:
     gemini = (ROOT / "healthia_one/gemini.py").read_text(encoding="utf-8")
     assert '"google-genai>=2.13,<3"' in pyproject
     assert '"google-adk[gcp]>=2.5,<3"' in pyproject
+    assert '"google-cloud-storage>=3.1,<4"' in pyproject
     assert gemini.count(".interactions.create(") >= 2
     assert "def _interaction_text" in gemini
     assert 'genai.Client(api_key=api_key)' in gemini
@@ -62,6 +63,8 @@ def test_ci_validates_semantic_runtime_modules() -> None:
     assert "node --check web/cost-control.js" in workflow
     assert "deployment/deploy-cloud-demo.ps1" in workflow
     assert "deployment/remove-cloud-demo.ps1" in workflow
+    assert "HealthIA-pytest-evidence" in workflow
+    assert "HealthIA-full-system-evidence" in workflow
 
 
 def test_runtime_affordances_are_real_not_decorative() -> None:
@@ -76,7 +79,7 @@ def test_runtime_affordances_are_real_not_decorative() -> None:
     assert "/assets/runtime-integrations.js" in icons
     assert "/assets/provider-integrations.js" in icons
     assert "/assets/cost-control.js" in icons
-    assert 'fetch("/api/devices")' in providers
+    assert '(window.healthiaFetch || fetch)("/api/devices")' in providers
     assert "provider_catalog" in providers
     assert "/api/cost-control" in cost_control
     assert "IA activa" in cost_control
@@ -86,13 +89,41 @@ def test_runtime_affordances_are_real_not_decorative() -> None:
     assert "background: transparent" in interactions
 
 
-def test_cloud_demo_is_scale_to_zero_and_easy_to_destroy() -> None:
+def test_cloud_demo_is_scale_to_zero_private_and_easy_to_destroy() -> None:
     deploy = (ROOT / "deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
     remove = (ROOT / "deployment/remove-cloud-demo.ps1").read_text(encoding="utf-8")
-    assert '"--min", "0"' in deploy
-    assert '"--max", "1"' in deploy
+    assert '"--min-instances", "0"' in deploy
+    assert '"--max-instances", "1"' in deploy
+    assert '"--cpu-throttling"' in deploy
     assert "HEALTHIA_COST_MODE=cloud_demo" in deploy
     assert "HEALTHIA_PROACTIVE_ENABLED=false" in deploy
+    assert "HEALTHIA_MISSION_RUNTIME=adk" in deploy
+    assert "HEALTHIA_EVENT_DISPATCH_BACKEND=pubsub" in deploy
+    assert "pubsub" in deploy.lower()
+    assert "scheduler" in deploy.lower() and '"pause"' in deploy
+    assert "roles/run.invoker" in deploy
+    assert "roles/iam.serviceAccountTokenCreator" in deploy
     assert "--no-allow-unauthenticated" in deploy
-    assert "gcloud run services delete" in remove
-    assert "gcloud projects delete" in remove
+    assert '"run", "services", "delete"' in remove
+    assert '"pubsub", "subscriptions", "delete"' in remove
+    assert "projects delete" in remove or '"projects", "delete"' in remove
+
+
+def test_cloud_demo_preserves_result_originals_in_private_gcs() -> None:
+    deploy = (ROOT / "deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
+    remove = (ROOT / "deployment/remove-cloud-demo.ps1").read_text(encoding="utf-8")
+    blob_store = (ROOT / "healthia_one/blob_store.py").read_text(encoding="utf-8")
+    main = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    assert '"storage.googleapis.com"' in deploy
+    assert "HEALTHIA_BLOB_BACKEND=gcs" in deploy
+    assert "HEALTHIA_RESULT_BUCKET=$ResultBucketName" in deploy
+    assert "roles/storage.objectUser" in deploy
+    assert '"--public-access-prevention=enforced"' in deploy
+    assert '"--uniform-bucket-level-access"' in deploy
+    assert "DeleteResultBucket" in remove
+    assert '"storage", "buckets", "delete"' in remove
+    assert 'f"patients/{patient}/results/{result}/{result}{suffix}"' in blob_store
+    assert "download_as_bytes" in blob_store
+    assert "result_blob_store.put_result" in main
+    assert "result_blob_store.get_result" in main
+    assert '"Cache-Control": "private, no-store"' in main

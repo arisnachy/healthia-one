@@ -12,17 +12,37 @@ class Settings(BaseSettings):
     llm_backend: str = "mock"
     store_backend: str = "json"
     data_path: Path = Path(".healthia-one/state.json")
+    blob_backend: str = "local"
+    result_bucket: str = ""
+    # Event-driven by default: the twin persists, workers wake only for an explicit
+    # patient action or an authorized external event. A periodic loop is opt-in.
     proactive_interval_seconds: int = 20
-    proactive_enabled: bool = True
+    proactive_enabled: bool = False
+    mission_runtime: str = "deterministic"
+    agentic_events_enabled: bool = False
+    event_dispatch_backend: str = "local"
+    pubsub_topic: str = "healthia-agentic-events"
+    pubsub_push_service_account: str = ""
+    cloud_region: str = "us-central1"
     max_upload_bytes: int = 5 * 1024 * 1024
     llm_timeout_seconds: int = 18
 
-    # Cost safety defaults: no billable request unless explicitly enabled.
+    # Identity: local mode is self-contained; cloud mode uses Google Identity Platform.
+    auth_mode: str = "local"
+    firebase_api_key: str = ""
+    firebase_auth_domain: str = ""
+    firebase_project_id: str = ""
+    firebase_app_id: str = ""
+
+    # Cost safety defaults: no billable request unless explicitly enabled locally.
+    # Cloud spend is additionally protected with project/service budgets outside this process.
     cost_mode: str = "local"
     ai_request_limit: int = 0
     cost_guard_start_enabled: bool = False
     cost_control_ui: bool = True
     ai_max_output_tokens: int = 700
+    cloud_budget_absolute_usd: float = 50.0
+    cloud_budget_target_usd: float = 45.0
 
     @property
     def adk_ready(self) -> bool:
@@ -30,6 +50,16 @@ class Settings(BaseSettings):
             return False
         import os
         return bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+
+    @property
+    def auth_required(self) -> bool:
+        return self.auth_mode == "identity_platform"
+
+    @property
+    def durable_result_storage_ready(self) -> bool:
+        if self.blob_backend == "local":
+            return self.env == "local"
+        return self.blob_backend == "gcs" and bool(self.result_bucket.strip())
 
 
 settings = Settings()

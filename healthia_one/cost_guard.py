@@ -63,21 +63,34 @@ class CostGuard:
             self._enabled = desired
             return self._snapshot_unlocked()
 
-    def authorize(self, purpose: str) -> int:
-        """Reserve one request before contacting a billable model endpoint."""
+    def authorize_many(self, purpose: str, count: int) -> tuple[int, int]:
+        """Atomically reserve a worst-case number of model calls before execution.
+
+        Reserving the complete upper bound prevents an agent/tool loop from
+        starting when only part of its model-call budget remains. The reservation
+        is intentionally conservative: unused reserved calls are not returned,
+        which favors the user's hard spend ceiling over utilization.
+        """
+        requested = max(1, int(count))
         with self._lock:
             if not self._enabled:
-                self._blocked += 1
+                self._blocked += requested
                 raise CostGuardBlocked("Google AI está apagado por el control de costos.")
-            if self._used >= self.request_limit:
+            if self._used + requested > self.request_limit:
                 self._enabled = False
-                self._blocked += 1
-                raise CostGuardBlocked("Se alcanzó el límite duro de solicitudes de esta ejecución.")
-            self._used += 1
+                self._blocked += requested
+                raise CostGuardBlocked("No queda presupuesto suficiente para reservar todas las llamadas de esta operación.")
+            first = self._used + 1
+            self._used += requested
             self._last_purpose = str(purpose or "model_request")[:120]
             if self._used >= self.request_limit:
                 self._enabled = False
-            return self._used
+            return first, self._used
+
+    def authorize(self, purpose: str) -> int:
+        """Reserve one request before contacting a billable model endpoint."""
+        _, last = self.authorize_many(purpose, 1)
+        return last
 
     def _snapshot_unlocked(self) -> dict[str, Any]:
         remaining = max(0, self.request_limit - self._used)

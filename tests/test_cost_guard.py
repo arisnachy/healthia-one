@@ -52,3 +52,20 @@ def test_cloud_demo_mode_is_fixed_by_deployment_not_browser() -> None:
     assert guard.snapshot()["mutable"] is False
     with pytest.raises(CostGuardBlocked):
         guard.set_enabled(False)
+
+
+def test_multi_call_reservation_is_atomic_and_never_starts_partial_budget() -> None:
+    guard = CostGuard(mode="cloud_demo", request_limit=6, start_enabled=True)
+    first, last = guard.authorize_many("adk-run-1", 2)
+    assert (first, last) == (1, 2)
+    assert guard.snapshot()["requests_remaining"] == 4
+    guard.authorize_many("adk-run-2", 2)
+    guard.authorize_many("adk-run-3", 2)
+    assert guard.snapshot()["requests_used"] == 6
+    assert guard.snapshot()["enabled"] is False
+
+    blocked = CostGuard(mode="cloud_demo", request_limit=3, start_enabled=True)
+    blocked.authorize_many("first", 2)
+    with pytest.raises(CostGuardBlocked):
+        blocked.authorize_many("would-need-two", 2)
+    assert blocked.snapshot()["requests_used"] == 2

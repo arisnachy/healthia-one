@@ -26,7 +26,7 @@ def answer_payload(interview: dict, stage: int) -> str:
     return ANSWER_PREFIX + json.dumps({"interview_id": interview["id"], "stage": stage, "answers": answers})
 
 
-def test_symptom_message_starts_five_question_interview() -> None:
+def test_symptom_message_starts_five_question_interview_with_minimal_capabilities() -> None:
     state = seed_state()
     response = respond(state, "Desde ayer me arde al orinar y tengo que ir al baño a cada rato")
 
@@ -35,13 +35,15 @@ def test_symptom_message_starts_five_question_interview() -> None:
     assert interview["domain"] == "urinary"
     assert interview["stage"] == 1
     assert len(interview["question_block"]["questions"]) == 5
-    assert len(response.message.agent_plan) >= 6
+    assert 1 <= len(response.message.agent_plan) <= 2
+    assert {step.agent for step in response.message.agent_plan} <= {"INTERVIEWER", "SENTINEL"}
     assert response.mission is not None
     assert response.mission.mission_type == "clinical_interview"
 
 
-def test_interview_preserves_context_and_completes_two_blocks() -> None:
+def test_interview_preserves_context_updates_twin_and_returns_updated_mission() -> None:
     state = seed_state()
+    initial_twin_events = len(state.twin_events)
     first = respond(state, "Desde ayer me arde al orinar y tengo frecuencia urinaria")
     state.messages.append(first.message)
     first_interview = first.message.metadata["clinical_interview"]
@@ -55,18 +57,28 @@ def test_interview_preserves_context_and_completes_two_blocks() -> None:
     assert second_interview["chief_complaint"] == "Desde ayer me arde al orinar y tengo frecuencia urinaria"
     assert len(second_interview["previous_answers"]) == 5
     assert len(second_interview["question_block"]["questions"]) == 5
+    assert second.mission is not None and second.mission.id == first.mission.id
+    assert len(state.twin_events) == initial_twin_events
 
     final = respond(state, answer_payload(second_interview, 2))
 
     assert final.message.metadata["clinical_interview"]["status"] == "completed"
+    assert final.message.metadata["twin_updated"] is True
     assert "Desde ayer me arde al orinar y tengo frecuencia urinaria" in final.message.content
-    assert "Las áreas clínicas necesarias" in final.message.content
+    assert "### Lo que entendí de tu consulta" in final.message.content
+    assert "No confirmaré un diagnóstico" in final.message.content
     assert "¿Cuándo comenzó y cómo ha evolucionado?" in final.message.content
-    assert final.message.metadata["council_status"] == "completed"
-    assert "Síntesis para la junta clínica" in final.message.content
+    assert final.mission is not None and final.mission.id == first.mission.id
+    assert final.mission.next_action == "Revisar la síntesis clínica y confirmar el nivel de atención con un profesional"
     mission = next(item for item in state.missions if item.id == first_interview["mission_id"])
     assert mission.status.value == "waiting_professional"
-    assert mission.closure_evidence == ["interview_two_blocks_completed"]
+    assert mission.closure_evidence == ["adaptive_interview_completed"]
+    twin_event = next(item for item in state.twin_events if item.entity_id == first_interview["id"])
+    assert twin_event.event_type == "clinical_interview_reported"
+    assert twin_event.certainty == "patient_reported"
+    assert twin_event.source.source_type == "patient_report"
+    assert twin_event.verification_status == "unverified"
+    assert len(state.twin_events) == initial_twin_events + 1
 
 
 def test_greeting_and_record_navigation_do_not_start_medical_interview() -> None:

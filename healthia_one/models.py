@@ -65,8 +65,77 @@ class SourceRef(BaseModel):
     verified: bool = False
 
 
+class ClinicalTwinEvent(BaseModel):
+    """Append-only event owned by the patient clinical twin.
+
+    `event_at` is the clinical time; `recorded_at` is when HealthIA learned it.
+    Keeping both prevents an old study uploaded today from appearing as if it
+    happened today.
+    """
+
+    id: str = Field(default_factory=lambda: new_id("twin_event"))
+    patient_id: str = "patient_demo"
+    event_type: str = Field(min_length=2, max_length=100)
+    entity_type: str = Field(default="clinical_event", max_length=100)
+    entity_id: str = Field(default="", max_length=180)
+    event_at: datetime = Field(default_factory=utc_now)
+    recorded_at: datetime = Field(default_factory=utc_now)
+    title: str = Field(default="", max_length=220)
+    summary: str = Field(default="", max_length=2400)
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="unknown", source_id="unknown"))
+    certainty: Literal[
+        "confirmed",
+        "patient_reported",
+        "device_observed",
+        "document_reported",
+        "ai_extraction",
+        "derived",
+        "unknown",
+        "contradictory",
+    ] = "unknown"
+    verification_status: Literal["verified", "unverified", "pending_review", "mixed"] = "unverified"
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class OpenClinicalLoop(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("loop"))
+    patient_id: str = "patient_demo"
+    topic: str = Field(min_length=2, max_length=180)
+    target_field: str = Field(default="", max_length=180)
+    question: str = Field(default="", max_length=500)
+    reason: str = Field(default="", max_length=500)
+    priority: Literal["low", "medium", "high"] = "medium"
+    status: Literal["open", "resolved", "dismissed"] = "open"
+    created_at: datetime = Field(default_factory=utc_now)
+    review_after: datetime | None = None
+    resolved_at: datetime | None = None
+    source_event_ids: list[str] = Field(default_factory=list)
+
+
+class AnatomicalLink(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("anatomy"))
+    patient_id: str = "patient_demo"
+    system: str = Field(default="", max_length=120)
+    region: str = Field(default="", max_length=180)
+    subregion: str = Field(default="", max_length=180)
+    laterality: Literal["left", "right", "bilateral", "midline", "unknown"] = "unknown"
+    entity_type: str = Field(default="result", max_length=100)
+    entity_id: str = Field(default="", max_length=180)
+    status: Literal[
+        "suspected",
+        "patient_reported",
+        "document_reported",
+        "clinician_confirmed",
+        "resolved",
+        "inactive",
+        "unknown",
+    ] = "unknown"
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="unknown", source_id="unknown"))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class CarePlan(BaseModel):
-    conditions: list[str] = Field(default_factory=lambda: ["hypertension", "weight_management"])
+    conditions: list[str] = Field(default_factory=list)
     weight_due_days: int = 7
     blood_pressure_due_days: int = 3
     activity_goal_steps: int = 6000
@@ -124,14 +193,14 @@ class EmergencyContact(BaseModel):
 
 class PatientProfile(BaseModel):
     id: str = "patient_demo"
-    display_name: str = "Ana Martínez"
+    display_name: str = "Paciente"
     legal_name: str = ""
-    birth_date: date = date(1982, 2, 20)
-    sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "female"
+    birth_date: date | None = None
+    sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "unknown"
     gender_identity: str = ""
     preferred_pronouns: str = ""
     blood_type: str = ""
-    height_cm: float | None = Field(default=165.0, ge=50, le=250)
+    height_cm: float | None = Field(default=None, ge=50, le=250)
     email: str = ""
     phone: str = ""
     address: str = ""
@@ -139,8 +208,8 @@ class PatientProfile(BaseModel):
     locale: str = "es-DO"
     timezone: str = "America/Santo_Domingo"
     allergies: list[str] = Field(default_factory=list)
-    medications: list[str] = Field(default_factory=lambda: ["Losartán 50 mg cada 24 horas"])
-    confirmed_conditions: list[str] = Field(default_factory=lambda: ["Hipertensión arterial"])
+    medications: list[str] = Field(default_factory=list)
+    confirmed_conditions: list[str] = Field(default_factory=list)
     lifestyle: LifestyleHistory = Field(default_factory=LifestyleHistory)
     personal_history: PersonalHistory = Field(default_factory=PersonalHistory)
     reproductive_health: ReproductiveHealth = Field(default_factory=ReproductiveHealth)
@@ -150,7 +219,7 @@ class PatientProfile(BaseModel):
 
 
 class PatientConsent(BaseModel):
-    proactive_enabled: bool = True
+    proactive_enabled: bool = False
     signal_types: list[str] = Field(default_factory=lambda: list(DEFAULT_SIGNAL_TYPES))
     quiet_hours_start: str = "22:00"
     quiet_hours_end: str = "07:00"
@@ -395,8 +464,36 @@ class HealthResult(BaseModel):
     patient_id: str = "patient_demo"
     uploaded_at: datetime = Field(default_factory=utc_now)
     filename: str
+    original_mime_type: str = "application/octet-stream"
+    original_storage_uri: str = ""
     panel: str = "Resultado cargado"
+    artifact_type: Literal[
+        "laboratory",
+        "radiology_report",
+        "xray_image",
+        "ct_image",
+        "mri_image",
+        "ultrasound_image",
+        "ecg",
+        "pathology",
+        "other",
+    ] = "other"
+    modality: str = Field(default="", max_length=120)
+    anatomical_region: str = Field(default="", max_length=180)
+    exam_date: date | None = None
     items: list[ResultItem] = Field(default_factory=list)
+    reported_impression: str = Field(default="", max_length=4000)
+    ai_observations: list[str] = Field(default_factory=list)
+    safety_flags: list[str] = Field(default_factory=list)
+    quality_limitations: list[str] = Field(default_factory=list)
+    ai_confidence: Literal["low", "medium", "high", "unknown"] = "unknown"
+    verification_status: Literal[
+        "patient_uploaded",
+        "document_reported",
+        "ai_observed_unverified",
+        "mixed_unverified",
+        "unverified",
+    ] = "patient_uploaded"
     status: Literal["parsed", "pending_multimodal", "invalid"] = "parsed"
     explained: bool = False
     explanation: str = ""
@@ -423,6 +520,56 @@ class HealthMission(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     agent_plan: list[AgentStep] = Field(default_factory=list)
     closure_evidence: list[str] = Field(default_factory=list)
+
+
+class AgenticEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("event"))
+    event_type: Literal["vital_recorded", "device_sync", "scheduled_tick", "manual_demo"]
+    patient_id: str = "patient_demo"
+    source_id: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class MissionTraceEvent(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("trace"))
+    created_at: datetime = Field(default_factory=utc_now)
+    stage: Literal["trigger", "decision", "tool", "persistence", "closure", "error"]
+    actor: str
+    action: str
+    status: Literal["queued", "running", "completed", "blocked", "failed"] = "completed"
+    evidence_ids: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class MissionArtifact(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("artifact"))
+    patient_id: str = "patient_demo"
+    mission_id: str
+    artifact_type: str
+    title: str
+    created_at: datetime = Field(default_factory=utc_now)
+    source_evidence_ids: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    verified: bool = True
+
+
+class MissionRun(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("run"))
+    correlation_id: str = Field(default_factory=lambda: new_id("corr"))
+    patient_id: str = "patient_demo"
+    mission_id: str | None = None
+    trigger_type: str
+    runtime: Literal["google_adk", "deterministic_fallback", "deterministic_test"]
+    status: Literal["queued", "running", "completed", "blocked", "failed"] = "queued"
+    model: str = ""
+    provider_requests_reserved: int = 0
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    events: list[MissionTraceEvent] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    public_summary: str = ""
+    error: str = ""
 
 
 class ChatMessage(BaseModel):
@@ -455,8 +602,13 @@ class PatientState(BaseModel):
     appointments: list[Appointment] = Field(default_factory=list)
     goals: list[HealthGoal] = Field(default_factory=list)
     missions: list[HealthMission] = Field(default_factory=list)
+    mission_runs: list[MissionRun] = Field(default_factory=list)
+    mission_artifacts: list[MissionArtifact] = Field(default_factory=list)
     messages: list[ChatMessage] = Field(default_factory=list)
     audit_events: list[AuditEvent] = Field(default_factory=list)
+    twin_events: list[ClinicalTwinEvent] = Field(default_factory=list)
+    open_clinical_loops: list[OpenClinicalLoop] = Field(default_factory=list)
+    anatomical_links: list[AnatomicalLink] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utc_now)
 

@@ -4,21 +4,27 @@ import asyncio
 import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from healthia_one.blob_store import build_result_blob_store
 from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
+from healthia_one.identity import IdentityError, IdentityVerifier
+from healthia_one.event_dispatch import decode_pubsub_push
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
 from healthia_one.family import family_summary
+from healthia_one.tenant import current_patient_id, patient_scope
 from healthia_one.profile import normalize_medication_text, profile_summary
 from healthia_one.models import (
     ActivityRecord,
+    AgenticEvent,
     Appointment,
     ChatRequest,
     FamilyMember,
@@ -32,18 +38,22 @@ from healthia_one.models import (
     PatientConsent,
     PatientProfile,
     SnoozeRequest,
+    SourceRef,
     VitalRecord,
     WeightRecord,
 )
+from healthia_one.result_intelligence import analyze_uploaded_result, normalized_mime_type
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.pairing import DevicePairingManager, PairingError
 from healthia_one.service import HealthIAService
 
 service = HealthIAService(settings)
 pairing_manager = DevicePairingManager()
+identity_verifier = IdentityVerifier(settings)
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
-UPLOAD_ROOT = ROOT / "uploads" / "patient_demo"
+UPLOAD_ROOT = ROOT / "uploads"
+result_blob_store = build_result_blob_store(settings, ROOT)
 
 
 @asynccontextmanager
@@ -67,6 +77,27 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="HealthIA ONE", version="0.5.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 
+AUTH_EXEMPT_API_PATHS = {
+    "/api/auth/config", "/api/readiness", "/api/devices/pairing/claim",
+    "/api/devices/health-connect/sync", "/api/internal/pubsub/mission",
+}
+
+
+@app.middleware("http")
+async def authenticated_patient_scope(request: Request, call_next):
+    path = request.url.path
+    requires_identity = settings.auth_required and path.startswith("/api/") and path not in AUTH_EXEMPT_API_PATHS
+    if not requires_identity:
+        return await call_next(request)
+    try:
+        principal = await identity_verifier.verify_bearer(request.headers.get("Authorization"))
+    except IdentityError as exc:
+        return JSONResponse(status_code=401, content={"detail": str(exc)})
+    with patient_scope(principal.uid):
+        await service.ensure_identity(principal)
+        request.state.principal = principal
+        return await call_next(request)
+
 
 @app.get("/")
 async def index() -> FileResponse:
@@ -76,6 +107,17 @@ async def index() -> FileResponse:
 @app.get("/healthz")
 async def healthz() -> dict:
     return {"status": "ok", "service": "healthia-one"}
+
+
+@app.get("/api/auth/config")
+async def auth_config() -> dict:
+    return identity_verifier.public_config()
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request) -> dict:
+    principal = request.state.principal
+    return {"uid": principal.uid, "email": principal.email, "display_name": principal.display_name, "provider": principal.provider}
 
 
 @app.get("/api/readiness")
@@ -88,16 +130,29 @@ async def readiness() -> dict:
         "ai_ready": settings.adk_ready,
         "ai_status": service.gemini.last_status,
         "store_backend": settings.store_backend,
+        "result_storage": {
+            "backend": settings.blob_backend,
+            "durable_ready": settings.durable_result_storage_ready,
+            "bucket_configured": bool(settings.result_bucket.strip()) if settings.blob_backend == "gcs" else None,
+        },
         "proactive_interval_seconds": settings.proactive_interval_seconds,
         "proactive_enabled": settings.proactive_enabled,
+        "mission_runtime": settings.mission_runtime,
+        "agentic_events_enabled": settings.agentic_events_enabled,
+        "event_dispatch_backend": settings.event_dispatch_backend,
+        "pubsub_topic": settings.pubsub_topic if settings.event_dispatch_backend == "pubsub" else None,
+        "identity": {"mode": settings.auth_mode, "required": settings.auth_required, "web_ready": identity_verifier.web_ready},
+        "cloud_budget": {"target_usd": settings.cloud_budget_target_usd, "absolute_usd": settings.cloud_budget_absolute_usd},
         "cost_control": service.gemini.cost_status(),
         "capabilities": [
             "chat",
-            "proactive_followup",
+            "contextual_followup",
             "vitals",
             "weight",
             "activity",
             "results",
+            "multimodal_result_ingestion",
+            "private_durable_result_archive",
             "family_genogram",
             "document_archive",
             "unified_timeline",
@@ -117,10 +172,16 @@ async def readiness() -> dict:
             "health_connect_sync",
             "device_medication_cross_check",
             "cloud_cost_guard",
+            "google_adk_event_runtime",
+            "pubsub_durable_events",
+            "mission_execution_trace",
+            "autonomous_closed_loop",
+            "google_identity_platform",
+            "per_user_state_isolation",
         ],
         "truth_boundary": (
-            "Synthetic patient continuity system. It does not diagnose, prescribe, change medication, "
-            "or replace emergency and professional care."
+            "Patient-owned continuity system. AI extraction from uploaded clinical media remains explicitly unverified; "
+            "HealthIA does not diagnose, prescribe, change medication, or replace emergency and professional care."
         ),
     }
 
@@ -200,7 +261,7 @@ async def devices() -> dict:
 
 @app.post("/api/devices/pairing")
 async def create_device_pairing(request: Request) -> dict:
-    payload = pairing_manager.create()
+    payload = pairing_manager.create(current_patient_id())
     payload["backend_url"] = str(request.base_url).rstrip("/")
     return payload
 
@@ -208,7 +269,7 @@ async def create_device_pairing(request: Request) -> dict:
 @app.get("/api/devices/pairing/{code}")
 async def device_pairing_status(code: str) -> dict:
     try:
-        return pairing_manager.status(code)
+        return pairing_manager.status(code, current_patient_id())
     except PairingError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -233,9 +294,11 @@ async def health_connect_sync(
     batch: HealthConnectSyncBatch,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    if not pairing_manager.validate(bearer_token(authorization), batch.device_id):
+    patient_id = pairing_manager.resolve_patient(bearer_token(authorization), batch.device_id)
+    if not patient_id:
         raise HTTPException(status_code=401, detail="Dispositivo no vinculado o token inválido.")
-    return await service.ingest_health_connect(batch)
+    with patient_scope(patient_id):
+        return await service.ingest_health_connect(batch)
 
 
 @app.post("/api/chat")
@@ -403,13 +466,67 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+
+    filename = file.filename or "result"
+    mime_type = normalized_mime_type(filename, file.content_type)
     try:
-        result = parse_result_file(file.filename or "result", content)
+        result = parse_result_file(filename, content)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"No se pudo interpretar el archivo: {exc}") from exc
-    result.explanation = explain_result(result)
-    result.explained = result.status == "parsed"
-    return (await service._append_and_publish("results", result, "results", action="upload_result")).model_dump(mode="json")
+
+    result.original_mime_type = mime_type
+    try:
+        result.original_storage_uri = await result_blob_store.put_result(
+            patient_id=current_patient_id(),
+            result_id=result.id,
+            filename=filename,
+            content=content,
+            mime_type=mime_type,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo conservar el archivo original; el resultado no fue agregado al expediente.",
+        ) from exc
+
+    if result.status == "pending_multimodal":
+        result = await analyze_uploaded_result(
+            service.gemini,
+            await service.snapshot(),
+            result,
+            content=content,
+            mime_type=mime_type,
+        )
+    if not result.explanation:
+        result.explanation = explain_result(result)
+    result.explained = result.status == "parsed" and bool(result.explanation)
+    stored = await service._append_and_publish("results", result, "results", action="upload_result")
+    return stored.model_dump(mode="json")
+
+
+@app.get("/api/results/{result_id}/file")
+async def result_file(result_id: str) -> Response:
+    state = await service.snapshot()
+    result = next((item for item in state.results if item.id == result_id), None)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Resultado no encontrado")
+    try:
+        content = await result_blob_store.get_result(
+            patient_id=state.profile.id,
+            result_id=result.id,
+            filename=result.filename,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Archivo original no disponible") from exc
+    mime_type = result.original_mime_type or normalized_mime_type(result.filename, None)
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(result.filename)}",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @app.post("/api/demo/reset")
@@ -466,11 +583,102 @@ async def demo_tick() -> dict:
     return {"created": len(messages), "messages": [item.model_dump(mode="json") for item in messages]}
 
 
+@app.post("/api/demo/agentic-closed-loop")
+async def demo_agentic_closed_loop() -> dict:
+    """Run a zero-spend synthetic mission from trigger to verified closure."""
+    await service.reset_demo()
+    first = VitalRecord(
+        systolic=165,
+        diastolic=102,
+        pulse=78,
+        source=SourceRef(source_type="synthetic_demo", source_id="agentic_closed_loop"),
+    )
+    await service._append_and_publish("vitals", first, "vitals", action="synthetic_agentic_demo_vital")
+    first_event = AgenticEvent(
+        event_type="vital_recorded",
+        source_id=first.id,
+        payload={"synthetic": True, "step": 1},
+    )
+    first_run = await service.process_agentic_event(first_event, force_test_runtime=True)
+
+    second = VitalRecord(
+        systolic=138,
+        diastolic=88,
+        pulse=74,
+        source=SourceRef(source_type="synthetic_demo", source_id="agentic_closed_loop"),
+    )
+    await service._append_and_publish("vitals", second, "vitals", action="synthetic_agentic_demo_vital")
+    second_event = AgenticEvent(
+        event_type="vital_recorded",
+        source_id=second.id,
+        payload={"synthetic": True, "step": 2},
+    )
+    second_run = await service.process_agentic_event(second_event, force_test_runtime=True)
+    trace = await service.mission_trace(second_run.correlation_id)
+    return {
+        "synthetic": True,
+        "model_calls": 0,
+        "first_run": first_run.model_dump(mode="json"),
+        "second_run": second_run.model_dump(mode="json"),
+        "final_trace": trace,
+        "truth_boundary": "CI/demo proof of workflow semantics; not proof of a live Gemini or Google Cloud execution.",
+    }
+
+
+@app.post("/api/internal/pubsub/mission")
+async def pubsub_mission(request: Request) -> dict:
+    """OIDC-verified Pub/Sub push target, safe even when the judge UI is public."""
+    try:
+        await identity_verifier.verify_google_service_bearer(
+            request.headers.get("Authorization"),
+            audience=str(request.base_url).rstrip("/"),
+            expected_email=settings.pubsub_push_service_account,
+        )
+    except IdentityError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    try:
+        payload = await request.json()
+        event = decode_pubsub_push(payload)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with patient_scope(event.patient_id):
+        run = await service.process_agentic_event(event)
+    return {
+        "acknowledged": True,
+        "event_id": event.id,
+        "correlation_id": run.correlation_id,
+        "runtime": run.runtime,
+        "status": run.status,
+    }
+
+
+@app.get("/api/judge/mission-runs")
+async def judge_mission_runs(limit: int = 20) -> dict:
+    state = await service.snapshot()
+    limit = min(max(limit, 1), 100)
+    runs = list(reversed(state.mission_runs[-limit:]))
+    return {
+        "count": len(state.mission_runs),
+        "runs": [item.model_dump(mode="json") for item in runs],
+        "truth_boundary": "Operational traces only; no hidden reasoning, secrets or raw credentials.",
+    }
+
+
+@app.get("/api/judge/trace/{correlation_id}")
+async def judge_mission_trace(correlation_id: str) -> dict:
+    trace = await service.mission_trace(correlation_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Traza de misión no encontrada")
+    return trace
+
+
 @app.get("/api/events/stream")
 async def events() -> StreamingResponse:
+    patient_id = current_patient_id()
+
     async def generate():
         yield "event: ready\ndata: {}\n\n"
-        async for payload in service.broker.subscribe():
+        async for payload in service.broker.subscribe(patient_id):
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})

@@ -55,39 +55,94 @@ def medication_summary(state: PatientState) -> dict[str, Any]:
 
 
 def build_timeline(state: PatientState) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
+    """Build the patient timeline using clinical event time, not upload time.
 
-    def add(event_id: str, event_type: str, occurred_at: datetime, title: str, detail: str, source: str) -> None:
+    New longitudinal facts flow through `twin_events`. Legacy collections remain as
+    a compatibility source only when the same entity has not already been reduced
+    into the Twin. Timeline rows expose both the append-only event id and the linked
+    clinical entity id so callers can trace an event back to the original result,
+    measurement or interview without collapsing event sourcing semantics.
+    """
+    events: list[dict[str, Any]] = []
+    twin_entity_keys: set[tuple[str, str]] = set()
+
+    def add(
+        event_id: str,
+        event_type: str,
+        occurred_at: datetime,
+        title: str,
+        detail: str,
+        source: str,
+        *,
+        entity_id: str | None = None,
+        recorded_at: datetime | None = None,
+        certainty: str = "unknown",
+        verification_status: str = "unverified",
+    ) -> None:
         events.append(
             {
                 "id": event_id,
+                "entity_id": entity_id or event_id,
                 "type": event_type,
                 "occurred_at": occurred_at.isoformat(),
+                "recorded_at": (recorded_at or occurred_at).isoformat(),
                 "title": title,
                 "detail": detail,
                 "source": source,
+                "certainty": certainty,
+                "verification_status": verification_status,
             }
         )
 
+    for event in state.twin_events:
+        twin_entity_keys.add((event.entity_type, event.entity_id))
+        add(
+            event.id,
+            event.entity_type,
+            event.event_at,
+            event.title or event.entity_type.replace("_", " ").title(),
+            event.summary,
+            event.source.source_type,
+            entity_id=event.entity_id,
+            recorded_at=event.recorded_at,
+            certainty=event.certainty,
+            verification_status=event.verification_status,
+        )
+
     for item in state.vitals:
+        if ("vital", item.id) in twin_entity_keys:
+            continue
         bp = f"{item.systolic or '—'}/{item.diastolic or '—'}"
         add(item.id, "vital", item.measured_at, f"Presión {bp}", f"Pulso {item.pulse or '—'}", item.source.source_type)
     for item in state.weights:
+        if ("weight", item.id) in twin_entity_keys:
+            continue
         add(item.id, "weight", item.measured_at, f"Peso {item.weight_kg:.1f} kg", item.note or "Registro del paciente", item.source.source_type)
     for item in state.activity:
-        add(item.id, "activity", item.measured_at, f"Actividad: {item.steps} pasos", f"{item.active_minutes} minutos activos", "patient_entry")
+        if ("activity", item.id) in twin_entity_keys:
+            continue
+        add(item.id, "activity", item.measured_at, f"Actividad: {item.steps} pasos", f"{item.active_minutes} minutos activos", item.source.source_type)
     for item in state.results:
-        add(item.id, "result", item.uploaded_at, item.panel, f"{item.filename} · {item.status}", item.source.source_type)
+        if ("result", item.id) in twin_entity_keys:
+            continue
+        occurred_at = (
+            datetime.combine(item.exam_date, datetime.min.time(), tzinfo=timezone.utc)
+            if item.exam_date
+            else item.uploaded_at
+        )
+        add(item.id, "result", occurred_at, item.panel, f"{item.filename} · {item.status}", item.source.source_type, recorded_at=item.uploaded_at)
     for item in state.documents:
         add(item.id, "document", item.uploaded_at, item.title, f"{item.category} · {item.status}", item.source.source_type)
     for item in state.medication_checkins:
+        if ("medication_checkin", item.id) in twin_entity_keys:
+            continue
         plan = next((plan for plan in state.medication_plans if plan.id == item.medication_id), None)
         add(item.id, "medication", item.recorded_at, f"Tratamiento: {plan.name if plan else 'medicamento'}", item.status, item.source.source_type)
     for item in state.appointments:
         add(item.id, "appointment", item.scheduled_at, item.title, f"{item.specialty} · {item.status}", item.source.source_type)
     for item in state.missions:
         add(item.id, "mission", item.updated_at, item.title, f"{item.status} · {item.next_action}", "healthia_mission")
-    return sorted(events, key=lambda item: item["occurred_at"], reverse=True)
+    return sorted(events, key=lambda item: (item["occurred_at"], item["recorded_at"]), reverse=True)
 
 
 def consultation_brief(state: PatientState, appointment_id: str | None = None) -> dict[str, Any]:
@@ -102,7 +157,6 @@ def consultation_brief(state: PatientState, appointment_id: str | None = None) -
     latest_weight = state.weights[-1] if state.weights else None
     recent_results = state.results[-3:]
     active_missions = [item for item in state.missions if item.status not in {"completed", "cancelled"}]
-    family_clusters = []
     from healthia_one.family import family_summary
 
     family_clusters = [item["condition"] for item in family_summary(state)["clusters"]]
@@ -132,6 +186,12 @@ def consultation_brief(state: PatientState, appointment_id: str | None = None) -
 
 
 def evaluate_continuity(state: PatientState, now: datetime | None = None) -> list[ProactiveFinding]:
+    """Generate findings only when explicitly requested or a safety channel allows it.
+
+    The default product does not push these into chat: `PatientConsent.proactive_enabled`
+    is false and the runtime polling loop is disabled. The function remains useful
+    for an explicit patient request such as "revisa lo pendiente".
+    """
     now = now or datetime.now(timezone.utc)
     findings: list[ProactiveFinding] = []
     if "appointments" in state.profile.consented_signal_types:
@@ -153,8 +213,6 @@ def evaluate_continuity(state: PatientState, now: datetime | None = None) -> lis
                     agent_plan=[
                         AgentStep(agent="ADVOCATE", action="Preparar resumen del paciente", reason="Consulta próxima"),
                         AgentStep(agent="ARCHIVUM", action="Verificar documentos", reason="Evitar información faltante"),
-                        AgentStep(agent="HISTORIA", action="Resumir cambios recientes", reason="Continuidad longitudinal"),
-                        AgentStep(agent="KIRA", action="Solicitar confirmación", reason="Control del paciente"),
                     ],
                 )
             )
@@ -171,9 +229,8 @@ def evaluate_continuity(state: PatientState, now: datetime | None = None) -> lis
                     next_action="Indica qué ocurrió y consulta las instrucciones de tu profesional o farmacéutico antes de compensar una dosis.",
                     evidence_ids=[item.id for item in skipped],
                     agent_plan=[
-                        AgentStep(agent="MEDSAFE", action="Detectar omisión reportada", reason="Seguridad del tratamiento"),
-                        AgentStep(agent="SENTINEL", action="Bloquear ajuste de dosis", reason="Requiere criterio profesional"),
-                        AgentStep(agent="KIRA", action="Recoger contexto", reason="Próximo paso seguro"),
+                        AgentStep(agent="MEDSAFE", action="Revisar la omisión reportada", reason="Seguridad del tratamiento"),
+                        AgentStep(agent="SENTINEL", action="Mantener el límite de no ajustar dosis", reason="Requiere criterio profesional"),
                     ],
                 )
             )

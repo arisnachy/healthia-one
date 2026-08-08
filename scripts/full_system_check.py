@@ -53,11 +53,13 @@ def run() -> dict:
         readiness = check(client.get("/api/readiness"), "readiness")
         require(readiness["cost_control"]["mode"] == "local", "local cost mode not active")
         require(readiness["cost_control"]["enabled"] is False, "AI should start disabled")
-        checks["startup_and_cost_guard"] = "pass"
+        require(readiness["proactive_enabled"] is False, "continuous polling must be off by default")
+        checks["startup_event_driven_cost_guard"] = "pass"
 
         initial = check(client.get("/api/bootstrap"), "bootstrap")
         require(initial["profile"]["display_name"] == "Ana Martínez", "synthetic identity missing")
         require(initial["vitals"] and initial["weights"] and initial["activity"], "seed continuity missing")
+        require(initial["twin_events"], "clinical twin did not receive synthetic longitudinal events")
         checks["bootstrap_continuity"] = "pass"
 
         first = check(
@@ -67,20 +69,25 @@ def run() -> dict:
         interview1 = first["message"]["metadata"]["clinical_interview"]
         require(len(interview1["question_block"]["questions"]) == 5, "block 1 must have five questions")
         require(first["message"]["metadata"]["question_source"] == "safe_fallback", "local fallback must be explicit")
+        require(len(first["message"]["agent_plan"]) <= 2, "fallback woke unnecessary specialists")
 
         second = check(client.post("/api/chat", json={"message": answers_for(interview1)}), "clinical block 2")
         interview2 = second["message"]["metadata"]["clinical_interview"]
         require(interview2["chief_complaint"].startswith("Desde ayer me arde"), "chief complaint was lost")
         require(len(interview2["question_block"]["questions"]) == 5, "block 2 must have five questions")
+        require(second.get("mission", {}).get("id") == first["mission"]["id"], "updated mission was not returned to browser")
 
         final = check(client.post("/api/chat", json={"message": answers_for(interview2)}), "clinical completion")
         require(final["message"]["metadata"]["clinical_interview"]["status"] == "completed", "interview did not complete")
+        require(final["message"]["metadata"].get("twin_updated") is True, "completed interview did not update twin")
         require("Desde ayer me arde al orinar" in final["message"]["content"], "final summary lost complaint")
-        require("Las áreas clínicas necesarias" in final["message"]["content"], "final summary overclaims council")
+        require("No confirmaré un diagnóstico" in final["message"]["content"], "clinical truth boundary missing")
+        require(final.get("mission", {}).get("next_action") == "Revisar la síntesis clínica y confirmar el nivel de atención con un profesional", "final mission update not returned")
         after_clinical = check(client.get("/api/bootstrap"), "post-clinical bootstrap")
         mission = next(item for item in after_clinical["missions"] if item["id"] == first["mission"]["id"])
         require(mission["status"] == "waiting_professional", "mission state did not advance")
-        require(mission["closure_evidence"] == ["interview_two_blocks_completed"], "closure evidence missing")
+        require(mission["closure_evidence"] == ["adaptive_interview_completed"], "closure evidence missing")
+        require(any(event["entity_id"] == interview1["id"] and event["certainty"] == "patient_reported" for event in after_clinical["twin_events"]), "patient-reported interview never reached twin")
         checks["clinical_closed_loop"] = "pass"
 
         urgent = check(
@@ -108,15 +115,30 @@ def run() -> dict:
             "structured result",
         )
         require(parsed_result["status"] == "parsed" and parsed_result["explained"] is True, "result was not parsed")
+        require(parsed_result["artifact_type"] == "laboratory", "structured lab was not classified deterministically")
+        structured_original = client.get(f"/api/results/{parsed_result['id']}/file")
+        require(structured_original.status_code == 200, "structured result original was not preserved")
+
+        pdf_bytes = b"%PDF synthetic"
         pending_result = check(
             client.post(
                 "/api/results/upload",
-                files={"file": ("scan.pdf", BytesIO(b"%PDF synthetic"), "application/pdf")},
+                files={"file": ("scan.pdf", BytesIO(pdf_bytes), "application/pdf")},
             ),
             "unread pdf",
         )
         require(pending_result["status"] == "pending_multimodal", "PDF truth boundary failed")
-        checks["results_truth_boundary"] = "pass"
+        original = client.get(f"/api/results/{pending_result['id']}/file")
+        require(original.status_code == 200 and original.content == pdf_bytes, "original result artifact was not preserved")
+        checks["results_truth_boundary_and_original_archive"] = "pass"
+
+        result_chat = check(
+            client.post("/api/chat", json={"message": "¿Qué decía el Panel sintético de verificación que subí?"}),
+            "result context retrieval",
+        )
+        require(parsed_result["id"] in result_chat["message"]["metadata"].get("compiled_result_ids", []), "old result was not retrieved into conversational context")
+        require(result_chat["message"]["agent_plan"] == [], "context retrieval should not wake specialist agents in zero-spend mode")
+        checks["twin_result_context_retrieval"] = "pass"
 
         document = check(
             client.post(
@@ -170,7 +192,7 @@ def run() -> dict:
             ),
             "appointment",
         )
-        brief = check(client.get(f"/api/consultation-brief?appointment_id={appointment['id']}"), "consultation brief")
+        brief = check(client.get(f"/api/consultation-brief?appointment_id={appointment['id']}",), "consultation brief")
         require(brief["appointment"]["id"] == appointment["id"], "consultation brief mismatch")
         check(
             client.post(
@@ -206,6 +228,7 @@ def run() -> dict:
                     "background_read": True,
                     "records": [
                         {
+                            "patient_id": "forged-other-patient",
                             "external_id": "full-check-heart-1",
                             "metric": "heart_rate",
                             "observed_at": now.isoformat(),
@@ -219,7 +242,11 @@ def run() -> dict:
             "health connect sync",
         )
         require(sync["accepted"] == 1, "device record not accepted")
-        checks["device_pairing_and_sync"] = "pass"
+        require(sync["patient_id"] == "patient_demo", "device payload escaped paired patient scope")
+        require(sync["twin_events_added"] == 1, "device event did not update twin")
+        device_state = check(client.get("/api/bootstrap"), "device bootstrap")
+        require(device_state["device_observations"][-1]["patient_id"] == "patient_demo", "forged device patient_id persisted")
+        checks["device_pairing_and_identity"] = "pass"
 
         consent = check(client.get("/api/consent"), "consent")
         consent["quiet_hours_start"] = "21:30"
@@ -231,17 +258,26 @@ def run() -> dict:
 
         timeline = check(client.get("/api/timeline"), "timeline")
         require(len(timeline["events"]) >= 8, "timeline did not aggregate created data")
+        require(any(event.get("entity_id") == parsed_result["id"] and event["type"] == "result" for event in timeline["events"]), "result never reached the longitudinal timeline")
         audit = check(client.get("/api/audit"), "audit")
         require(audit["count"] >= 10, "audit evidence too small")
         exported = client.get("/api/export")
         require(exported.status_code == 200 and exported.json()["export"]["contains_binary_files"] is False, "safe export failed")
         checks["timeline_audit_export"] = "pass"
 
-        first_tick = check(client.post("/api/demo/tick"), "proactive tick 1")
-        second_tick = check(client.post("/api/demo/tick"), "proactive tick 2")
-        require(first_tick["created"] >= 1, "proactive check produced no work")
-        require(second_tick["created"] == 0, "proactive check is not idempotent")
-        checks["proactive_idempotency"] = "pass"
+        first_tick = check(client.post("/api/demo/tick"), "manual contextual check 1")
+        second_tick = check(client.post("/api/demo/tick"), "manual contextual check 2")
+        require(first_tick["created"] >= 1, "manual contextual check produced no work")
+        require(second_tick["created"] == 0, "manual contextual check is not idempotent")
+        checks["manual_contextual_check_idempotency"] = "pass"
+
+        agentic = check(client.post("/api/demo/agentic-closed-loop"), "agentic closed loop")
+        require(agentic["model_calls"] == 0, "CI agentic proof must stay zero-spend")
+        require(agentic["final_trace"]["mission"]["status"] == "completed", "agentic mission did not close")
+        require(agentic["final_trace"]["artifacts"], "agentic closure artifact missing")
+        stages = {item["stage"] for item in agentic["final_trace"]["run"]["events"]}
+        require({"trigger", "tool", "persistence", "closure"}.issubset(stages), "agentic trace is incomplete")
+        checks["agentic_closed_loop"] = "pass"
 
     return {"status": "PASS", "check_count": len(checks), "checks": checks}
 

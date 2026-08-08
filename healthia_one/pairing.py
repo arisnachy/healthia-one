@@ -18,6 +18,7 @@ class PairingError(ValueError):
 class PairingSession:
     code: str
     expires_at: datetime
+    patient_id: str = "patient_demo"
     claimed: bool = False
     device_id: str = ""
     display_name: str = ""
@@ -25,12 +26,12 @@ class PairingSession:
 
 
 class DevicePairingManager:
-    """Short-lived local pairing codes and hashed bearer tokens."""
+    """Short-lived pairing codes with device tokens bound to one patient uid."""
 
     def __init__(self, ttl_minutes: int = 10) -> None:
         self.ttl_minutes = ttl_minutes
         self._sessions: dict[str, PairingSession] = {}
-        self._tokens: dict[str, str] = {}
+        self._tokens: dict[str, tuple[str, str]] = {}
 
     @staticmethod
     def _hash(value: str) -> str:
@@ -41,10 +42,10 @@ class DevicePairingManager:
         expired = [code for code, session in self._sessions.items() if session.expires_at <= now]
         for code in expired:
             # Pairing codes expire quickly, but a successfully claimed device token
-            # remains valid for the lifetime of this local server process.
+            # remains valid for the lifetime of this server process.
             self._sessions.pop(code)
 
-    def create(self) -> dict:
+    def create(self, patient_id: str = "patient_demo") -> dict:
         self._cleanup()
         for _ in range(20):
             code = f"{secrets.randbelow(1_000_000):06d}"
@@ -52,15 +53,21 @@ class DevicePairingManager:
                 break
         else:
             raise PairingError("No se pudo generar un código de conexión.")
-        session = PairingSession(code=code, expires_at=utc_now() + timedelta(minutes=self.ttl_minutes))
+        session = PairingSession(
+            code=code,
+            expires_at=utc_now() + timedelta(minutes=self.ttl_minutes),
+            patient_id=patient_id,
+        )
         self._sessions[code] = session
         return self.status(code)
 
-    def status(self, code: str) -> dict:
+    def status(self, code: str, patient_id: str | None = None) -> dict:
         self._cleanup()
         session = self._sessions.get(code)
         if not session:
             raise PairingError("El código no existe o expiró.")
+        if patient_id is not None and session.patient_id != patient_id:
+            raise PairingError("El código no pertenece a esta cuenta.")
         return {
             "code": session.code,
             "expires_at": session.expires_at.isoformat(),
@@ -82,7 +89,7 @@ class DevicePairingManager:
         session.device_id = device_id
         session.display_name = display_name or "Android Health Connect"
         session.token_hash = token_hash
-        self._tokens[token_hash] = device_id
+        self._tokens[token_hash] = (device_id, session.patient_id)
         return {
             "access_token": token,
             "token_type": "bearer",
@@ -91,8 +98,14 @@ class DevicePairingManager:
             "expires_at": session.expires_at.isoformat(),
         }
 
-    def validate(self, token: str, device_id: str) -> bool:
+    def resolve_patient(self, token: str, device_id: str) -> str | None:
         self._cleanup()
         if not token or not device_id:
-            return False
-        return self._tokens.get(self._hash(token)) == device_id
+            return None
+        entry = self._tokens.get(self._hash(token))
+        if not entry or entry[0] != device_id:
+            return None
+        return entry[1]
+
+    def validate(self, token: str, device_id: str) -> bool:
+        return self.resolve_patient(token, device_id) is not None

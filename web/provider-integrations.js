@@ -40,7 +40,7 @@ if (!window.__HEALTHIA_PROVIDER_INTEGRATIONS__) {
 
     async function loadCatalog() {
       if (catalog) return catalog;
-      const response = await fetch("/api/devices");
+      const response = await (window.healthiaFetch || fetch)("/api/devices");
       if (!response.ok) throw new Error(`Error ${response.status}`);
       const payload = await response.json();
       catalog = payload.provider_catalog || null;

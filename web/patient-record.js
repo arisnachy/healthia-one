@@ -9,7 +9,7 @@ if (!window.__HEALTHIA_PATIENT_RECORD__) {
   const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
 
   async function loadSnapshot() {
-    const response = await fetch("/api/bootstrap");
+    const response = await (window.healthiaFetch || fetch)("/api/bootstrap");
     if (!response.ok) throw new Error(`bootstrap ${response.status}`);
     snapshot = await response.json();
     renderPatientOS();

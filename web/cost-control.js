@@ -122,7 +122,7 @@ if (!window.__HEALTHIA_COST_CONTROL__) {
     }
 
     async function requestJson(url, options = {}) {
-      const response = await fetch(url, options);
+      const response = await (window.healthiaFetch || fetch)(url, options);
       let payload = {};
       try { payload = await response.json(); } catch {}
       if (!response.ok) throw new Error(payload.detail || `Error ${response.status}`);
