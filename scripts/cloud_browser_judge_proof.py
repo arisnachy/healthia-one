@@ -71,22 +71,23 @@ def answer_visible_block(page: Page) -> None:
     block.locator(".clinical-submit").click()
 
 
-def latest_llm_status(page: Page) -> str:
+def latest_assistant(page: Page) -> tuple[str, str]:
     state = api_json(page, "/api/bootstrap")
     assistants = [item for item in state.get("messages", []) if item.get("role") == "assistant"]
     if not assistants:
-        return ""
-    return str((assistants[-1].get("metadata") or {}).get("llm_status") or "")
+        return "", ""
+    latest = assistants[-1]
+    return str(latest.get("id") or ""), str((latest.get("metadata") or {}).get("llm_status") or "")
 
 
-def wait_for_dynamic_or_orientation(page: Page, timeout_s: float = 70.0) -> str:
+def wait_for_dynamic_or_orientation(page: Page, previous_id: str = "", timeout_s: float = 70.0) -> tuple[str, str]:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        status = latest_llm_status(page)
-        if status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions", "clinical_ai_orientation_completed"}:
-            return status
+        message_id, status = latest_assistant(page)
+        if message_id and message_id != previous_id and status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions", "clinical_ai_orientation_completed"}:
+            return message_id, status
         page.wait_for_timeout(500)
-    raise RuntimeError("clinical AI did not reach a dynamic block or final orientation in time")
+    raise RuntimeError("clinical AI did not produce a new dynamic block or final orientation in time")
 
 
 def run() -> dict:
@@ -155,7 +156,7 @@ def run() -> dict:
         complaint = "Desde ayer me arde al orinar y tengo que ir al baño a cada rato. Quiero orientación sobre qué información hace falta."
         page.locator("#chatInput").fill(complaint)
         page.locator("#sendButton").click()
-        status = wait_for_dynamic_or_orientation(page)
+        assistant_id, status = wait_for_dynamic_or_orientation(page)
         require(status == "dynamic_clinical_questions", f"first clinical response was not a live dynamic question block: {status}")
         page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
         first_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
@@ -166,7 +167,7 @@ def run() -> dict:
         screenshot(page, "04-live-question-block-1.png")
         answer_visible_block(page)
 
-        status = wait_for_dynamic_or_orientation(page)
+        assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
         require(status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}, f"second response did not preserve live adaptive questioning: {status}")
         page.wait_for_timeout(500)
         second_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
@@ -175,14 +176,14 @@ def run() -> dict:
         screenshot(page, "05-live-question-block-2.png")
         answer_visible_block(page)
 
-        status = wait_for_dynamic_or_orientation(page)
+        assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
         if status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}:
             page.wait_for_timeout(500)
             third_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
             require(third_block.locator(".clinical-question").count() == 5, "AI-requested third block is malformed")
             screenshot(page, "06-live-question-block-3.png")
             answer_visible_block(page)
-            status = wait_for_dynamic_or_orientation(page)
+            assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
         require(status == "clinical_ai_orientation_completed", f"Gemini did not close with clinical orientation: {status}")
         report["checks"].append("live_gemini_selected_clinical_orientation")
         screenshot(page, "07-live-clinical-orientation.png")
