@@ -109,11 +109,16 @@ def test_cloud_demo_is_vertex_native_scale_to_zero_and_easy_to_destroy() -> None
     assert "GOOGLE_CLOUD_LOCATION=$VertexLocation" in deploy
     assert '"aiplatform.googleapis.com"' in deploy
     assert '"roles/aiplatform.user"' in deploy
+    assert '"roles/run.builder"' in deploy
+    assert "healthia-one-build" in deploy
+    assert '"--build-service-account"' in deploy
+    assert "healthia-one-demo" in deploy
     assert "GEMINI_API_KEY=" not in deploy
     assert "healthia-gemini-api-key" not in deploy
     assert "HEALTHIA_DEVICE_TOKEN_SECRET=" in deploy
     assert "HEALTHIA_SESSION_SECRET=" in deploy
     assert "--no-allow-unauthenticated" in deploy
     assert "gcloud run services delete" in remove
+    assert "DeleteBuildServiceAccount" in remove
     assert "healthia-gemini-api-key" not in remove
     assert "gcloud projects delete" in remove
