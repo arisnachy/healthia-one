@@ -1,182 +1,153 @@
-# HealthIA ONE — four-minute judge demo
+# HealthIA ONE — approximately 4-minute unedited judge demo
 
-**Record one continuous take. Use synthetic data only. Do not hide failed steps or splice a successful output into the recording.**
+## Recording rule
 
-The goal of this demo is to prove three things fast:
+Record this as **one continuous take**. Do not splice out loading states or failures. Use synthetic data only. The objective is to prove the Taskmaster workflow and the Google Cloud runtime, not to enumerate every screen.
 
-1. HealthIA is a **Taskmaster workflow**, not a chatbot;
-2. Gemini 3.5 Flash + Google ADK perform real, demand-driven work;
-3. the backend and durable evidence actually run on Google Cloud.
+Before recording:
 
-## Before recording
+- use the proven Cloud-backed application flow;
+- confirm `/api/readiness` reports Gemini 3.5 Flash, ADK ready, Firestore and GCS;
+- start with a clean synthetic demo patient;
+- prepare one tiny synthetic laboratory PDF;
+- keep Google Cloud Console open on the Cloud Run service/revisions page for the closing proof;
+- do not expose secrets, identity tokens or service-account JSON.
 
-Have these tabs ready:
+## 0:00–0:25 — Problem and promise
 
-- HealthIA Cloud Run UI;
-- Google Cloud Console → Cloud Run service/revision;
-- Google Cloud Console → Firestore;
-- Google Cloud Console → Cloud Storage evidence bucket;
-- GitHub Actions evidence run.
+**Show:** HealthIA ONE chat home.
 
-Use a fresh synthetic patient account. Keep the synthetic PDF ready for upload. Do not show service-account JSON, API keys, session secrets or other credentials.
+**Say:**
 
----
+> “Patients do not have one clean health record. They have PDFs, images, devices, medications and pieces of memory. Most AI can discuss those fragments, but the work disappears with the chat. HealthIA ONE turns them into durable patient-owned missions. It asks what is missing, preserves the original evidence, acts with Gemini and Google ADK, and only closes the task when the evidence-backed outcome exists.”
 
-## 0:00–0:25 — Problem + one-sentence promise
+## 0:25–1:20 — Gemini + ADK adaptive interview
 
-Show the HealthIA login/home screen and say:
+**Type a synthetic complaint:**
 
-> Health data is fragmented across conversations, PDFs, devices and memory. A normal chatbot answers and forgets. HealthIA ONE turns patient evidence into durable health missions: it decides what it needs, preserves the source, updates longitudinal state and keeps working until the mission has a verifiable outcome.
+> “Desde ayer me arde al orinar y tengo que ir al baño a cada rato. Quiero orientación sobre qué información hace falta.”
 
-On screen, briefly show **Your health never starts over.**
+**Show:** first five-question block.
 
----
+Point to the UI label that the questions were generated for this case by Gemini + ADK.
 
-## 0:25–0:50 — Prove the backend is Google Cloud
+**Say:**
 
-Switch briefly to Google Cloud Console.
+> “This is not a fixed questionnaire. Google ADK runs on demand. The clinical runtime makes one real `inspect_clinical_baseline` tool call, which executes the mandatory interview and safety checks. Gemini 3.5 Flash then returns exactly five case-specific questions under structured output.”
 
-Show, without lingering:
+Answer a few questions, including one detail that should not be asked again.
 
-- project `healthia-6088a`;
-- Cloud Run service `healthia-one-demo` and its ready revision;
-- the `.run.app` service URL;
-- Vertex AI / Cloud logs for the same deployed service.
+**Show:** second five-question block or the resulting orientation.
 
-Say:
+**Say:**
 
-> The application is running on Cloud Run. Gemini 3.5 Flash is accessed through Vertex AI using the runtime service identity — there is no Gemini API key inside the Cloud Run service.
+> “The next block receives the actual previous questions and answers. The system avoids repeating known facts, and the tool evidence comes from what actually executed — not from the model claiming that a tool ran.”
 
-Return to HealthIA.
+## 1:20–2:30 — Multimodal evidence becomes durable state
 
----
+Navigate to **Resultados** and upload the prepared synthetic PDF.
 
-## 0:50–1:30 — Adaptive Gemini + ADK interview
+The sample can contain simple values such as glucose and hemoglobin; no real patient data.
 
-Log in as the synthetic patient and send:
+**Show:** interpreted result card, `parsed` state, explanation, `Ver archivo original`, and `Gemelo vinculado`/provenance indicator.
 
-```text
-Desde ayer me arde al orinar y tengo que ir al baño a cada rato.
-```
+**Say:**
 
-Show that the interface produces **five case-specific questions** rather than a static questionnaire.
+> “The original bytes are stored first in private Google Cloud Storage. Only then does Gemini 3.5 Flash on Vertex AI extract readable evidence into structured JSON. Firestore stores the patient-scoped result and the clinical twin keeps provenance back to the original. If interpretation fails, HealthIA leaves the original available and marks the analysis pending instead of inventing findings.”
 
-Answer the block. If a second block is generated, point out that it changes based on the previous answers instead of repeating them.
+Open the original-document link briefly to prove the evidence exists.
 
-Open the compact execution/audit evidence and say:
+## 2:30–3:10 — Close the Taskmaster mission
 
-> Google ADK executes the mandatory interview and safety tools and activates additional specialists only when the case needs them. The agent team is demand-driven; there is no permanent swarm spending tokens in the background.
+Return to chat and ask:
 
-Do not claim a diagnosis. Let HealthIA finish with its patient-facing orientation when Gemini decides the available information is sufficient.
+> “Explícame el resultado que acabo de subir y confirma que quedó guardado.”
 
----
+**Show:** the response and the mission becoming completed.
 
-## 1:30–2:35 — The Taskmaster moment: upload → action → durable outcome
+Navigate to **Misiones de salud** if needed and point to the completed result-explanation mission.
 
-Upload the synthetic PDF result.
+**Say:**
 
-While the real request runs, narrate the workflow:
+> “This is the Taskmaster loop. HealthIA retrieves the persisted result and original-document metadata, returns the saved explanation and closes the mission only when the durable evidence exists. It keeps correlated result and document IDs. It does not spend another Gemini request merely to paraphrase the same stored evidence.”
 
-> HealthIA stores the original evidence first. Gemini 3.5 Flash then extracts the readable clinical information under a structured JSON contract. The result is committed to the patient's state and the clinical twin keeps provenance back to the original file.
+## 3:10–3:32 — Persistence that a judge can see
 
-When processing completes, show:
+Logout and log back in with the same synthetic patient.
 
-- identified result/panel;
-- extracted observations;
-- patient explanation and limitations;
-- **Abrir original** / original document link;
-- the relevant clinical-twin/timeline entry.
+Return to **Resultados** or **Misiones** and show that the result/document/completed mission are still present.
 
-Then ask in chat:
+**Say:**
 
-```text
-Explícame el resultado que acabo de subir y confirma que quedó guardado.
-```
+> “This continuity is backed by Firestore and private GCS, not browser memory. Our automated proof also forced a genuinely new Cloud Run revision with the same image and verified that the result, mission, twin provenance and exact GCS object survived while a second patient remained isolated.”
 
-Show the resulting Taskmaster mission as **COMPLETED**.
-
-Point out the correlated evidence IDs / original link and say:
-
-> This second step does not need another Gemini call just to paraphrase the same data. HealthIA retrieves the persisted evidence, returns the saved explanation and closes the mission only because the result actually exists.
-
-This is the central proof: the agent changed durable state and completed a multi-step workflow; it did not merely generate text.
-
----
-
-## 2:35–3:05 — Prove durability and isolation
-
-Log out, then log back into the same synthetic patient.
-
-Show that the uploaded result, original evidence and completed mission are still present.
-
-If the demo environment is prepared with a second synthetic account, switch briefly to patient B and show that patient A's result is absent.
-
-Say:
-
-> Patient state, documents, missions and device identity are scoped by authenticated patient identity. Continuity survives a new session without leaking another patient's data.
-
----
-
-## 3:05–3:35 — Prove Firestore + GCS, not just the UI
+## 3:32–3:58 — Visible Google Cloud proof
 
 Switch to Google Cloud Console.
 
-Show the matching synthetic evidence created during the demo:
+**Show:**
 
-- Firestore patient-state document / update;
-- private Cloud Storage object for the uploaded original;
-- Cloud Run log entries from the mission;
-- Vertex/ADK execution evidence if visible in the logging view.
+- Cloud Run service `healthia-one-demo`;
+- current ready revision;
+- project `healthia-6088a` / region `us-central1`;
+- optionally the revisions list showing the continuity proof changed revisions;
+- do **not** open secret values.
 
-Use the same patient/result identifiers visible in the UI where practical so the judge can correlate the layers.
+**Say:**
 
-Say:
+> “This is running on Google Cloud: Cloud Run for the application, Gemini 3.5 Flash through Vertex AI and service identity, Firestore for canonical patient state, and private Cloud Storage for original evidence. The repository preserves the exact passing run IDs, artifact digests and cross-revision proof.”
 
-> The browser is not the evidence source. The canonical state is in Firestore and the original bytes are in private Cloud Storage. The UI is reading the same durable workflow state.
+## 3:58–4:05 — Close
 
----
+Return to HealthIA.
 
-## 3:35–4:00 — Architecture + close
+**Say:**
 
-Show the README architecture diagram or `docs/ARCHITECTURE.md` for only a few seconds:
+> “HealthIA ONE does not reset the patient's story when the conversation ends. The mission is not complete when the model talks — it is complete when the evidence-backed outcome exists and survives.”
 
-**Patient → Cloud Run → safety/orchestrator → Google ADK + Gemini 3.5 Vertex → Firestore/GCS → clinical twin → patient.**
-
-Then show the green GitHub evidence run and close with:
-
-> A chatbot answers a question. HealthIA ONE takes a patient goal, performs the work, preserves the evidence, updates longitudinal state and proves when the mission is actually complete. Your health never starts over.
+Stop recording.
 
 ---
 
-## Judge evidence to capture in the final take
+## Evidence behind the recording
 
-The video should visibly contain:
+The recording is presentation evidence; it does not replace automated proof.
 
-- Cloud Run service URL and ready revision;
-- Gemini **3.5 Flash** / Vertex AI evidence;
-- live Google ADK adaptive interview behavior;
-- real multimodal result upload;
-- original evidence link;
-- clinical-twin/timeline update;
-- Taskmaster mission `COMPLETED`;
-- Firestore persisted state;
-- private GCS object;
-- logout/login durability;
-- green GitHub verification/proof evidence.
+### Exact-candidate Cloud + Chromium — PASS
 
-## What not to waste four minutes on
+- run `31262429792`
+- candidate `a28955c3641c37a9e5a06f5f0ccf943ccb197bbd`
+- Cloud proof revision `healthia-one-demo-00012-jvl`
+- artifact `healthia-exact-candidate-cloud-proof` / `9023242539`
+- artifact digest `sha256:4760e89b6985fa81b532e4ed2fb094abcb8859f57c92259886c152d4632a55b6`
+- unmocked Chromium journey: PASS
+- browser console/page errors: zero
 
-Genogram, device pairing, medication continuity, permissions, export and the full patient OS are valuable secondary capabilities. Mention them in the write-up or show them only if the core flow finishes early. Do **not** sacrifice the Cloud + Taskmaster evidence to tour every menu.
+### Cross-revision continuity — PASS
 
-## Required honesty
+- run `31262903731`
+- before `healthia-one-demo-00013-2bz`
+- after `healthia-one-demo-00014-ns8`
+- same image across revision: true
+- artifact `healthia-cloud-revision-continuity-proof` / `9023298988`
+- artifact digest `sha256:4a30950483141ce55fa6f1256fa83998f0337a5e873576fa6f8598b111592263`
 
-Do not claim:
+See `docs/EVIDENCE.md` for the permanent sanitized evidence index.
 
-- confirmed diagnosis;
-- prescription authority or treatment modification;
-- genetic prediction;
-- clinical effectiveness;
-- regulatory clearance;
-- production security certification;
-- Cloud deployment until the real Cloud strict proof is green;
-- a result was interpreted by Gemini if the recorded run did not actually execute it.
+## Fail criteria — restart the take if any occurs
+
+- the question block falls back instead of being generated by the live Gemini/ADK path;
+- the result remains `pending_multimodal`;
+- original-document provenance is missing;
+- the mission does not become completed;
+- relogin loses the persisted result/mission;
+- browser shows an obvious application error;
+- Cloud Console proof is not visible;
+- a secret/token/private credential appears on screen;
+- the take materially exceeds the allowed time.
+
+## Final submission placeholder
+
+**VIDEO URL: TODO**
+
+Do not mark the project `100/100` or `SUBMISSION_LOCKED` until this final unedited video is recorded, uploaded, linked in `docs/DEVPOST_SUBMISSION.md`, and the final submission head passes CI + JUDGE Ω.
