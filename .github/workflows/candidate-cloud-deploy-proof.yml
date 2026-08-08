@@ -33,21 +33,30 @@ jobs:
       SERVICE_NAME: healthia-one-demo
       BUCKET_NAME: healthia-6088a-healthia-evidence
     steps:
-      - name: Resolve exact candidate
+      - name: Resolve candidate source ref
         id: candidate
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "ref=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=kira/event-driven-results-twin-p1" >> "$GITHUB_OUTPUT"
           else
             echo "ref=${{ inputs.candidate_ref }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout exact candidate
+      - name: Checkout candidate source ref
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.candidate.outputs.ref }}
           fetch-depth: 1
+
+      - name: Freeze exact candidate SHA
+        id: exact
+        shell: bash
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_EXACT_CANDIDATE_SHA=$sha" >> "$GITHUB_ENV"
+          echo "Exact candidate SHA: $sha"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -96,11 +105,13 @@ jobs:
         run: |
           url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
           revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)' 2>/dev/null || true)"
           runtime_sa="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)"
           export HEALTHIA_CLOUD_URL="$url"
           export HEALTHIA_CLOUD_REVISION="$revision"
+          export HEALTHIA_CLOUD_IMAGE="$image"
           export HEALTHIA_CLOUD_RUNTIME_SA="$runtime_sa"
-          export HEALTHIA_CANDIDATE_REF='${{ steps.candidate.outputs.ref }}'
+          export HEALTHIA_CANDIDATE_SOURCE_REF='${{ steps.candidate.outputs.ref }}'
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -112,9 +123,11 @@ jobs:
               "service": os.environ["SERVICE_NAME"],
               "url": os.environ.get("HEALTHIA_CLOUD_URL", ""),
               "latest_ready_revision": os.environ.get("HEALTHIA_CLOUD_REVISION", ""),
+              "image": os.environ.get("HEALTHIA_CLOUD_IMAGE", ""),
               "runtime_service_account": os.environ.get("HEALTHIA_CLOUD_RUNTIME_SA", ""),
               "build_service_account": "healthia-one-build@healthia-6088a.iam.gserviceaccount.com",
-              "candidate_ref": os.environ.get("HEALTHIA_CANDIDATE_REF", ""),
+              "candidate_sha": os.environ.get("HEALTHIA_EXACT_CANDIDATE_SHA", ""),
+              "candidate_source_ref": os.environ.get("HEALTHIA_CANDIDATE_SOURCE_REF", ""),
               "vertex_adc": True,
               "gemini_api_key_used": False,
               "min_instances": 0,
@@ -136,10 +149,12 @@ jobs:
           import json
           from pathlib import Path
           p=json.loads(Path('deployment/cloud-runtime-evidence.json').read_text())
-          print(f"- Candidate: `{p.get('candidate_ref','')}`")
+          print(f"- Candidate SHA: `{p.get('candidate_sha','')}`")
+          print(f"- Candidate source: `{p.get('candidate_source_ref','')}`")
           print(f"- Project: `{p.get('project','')}`")
           print(f"- Cloud Run URL: `{p.get('url','') or 'not-created'}`")
           print(f"- Ready revision: `{p.get('latest_ready_revision','') or 'not-created'}`")
+          print(f"- Image: `{p.get('image','') or 'not-created'}`")
           print(f"- Vertex: **Gemini 3.5 Flash / ADC**")
           print(f"- Gemini API key: **not used**")
           PY
