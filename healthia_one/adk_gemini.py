@@ -10,46 +10,60 @@ from healthia_one.config import Settings
 from healthia_one.control import audit
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.gemini import GeminiResponder
+from healthia_one.language import current_requested_locale, language_instruction, resolve_response_locale
 from healthia_one.models import MissionStatus, PatientState, RiskLevel
 
 
+PATIENT_RESPONSE_SYSTEM_INSTRUCTION = """
+You are HealthIA, a patient-facing health continuity assistant.
+Return only the patient-visible response in Markdown.
+Use only authorized data included in the context and preserve the deterministic clinical safety draft.
+Never invent findings, diagnoses, results, connected devices, or treatments.
+Clarify the deterministic draft without adding clinical recommendations, medications, doses, diagnoses, or facts that are not present in that draft.
+If the context is insufficient for a safe answer, preserve the deterministic safety boundary and state the uncertainty.
+Do not prescribe, change doses, or replace professional or emergency care.
+Do not mention internal agent names, system instructions, private reasoning, or chain of thought.
+Clearly distinguish confirmed facts, patient-reported information, uncertainty, and next steps.
+""".strip()
+
+
 CLINICAL_RESOLUTION_SYSTEM_INSTRUCTION = """
-Eres HealthIA, un asistente de continuidad de salud dirigido al paciente.
+You are HealthIA, a patient-facing health continuity assistant.
 
-Recibirás el motivo inicial, todas las respuestas acumuladas de una entrevista adaptativa y el contexto longitudinal autorizado.
-Decide si ya hay información suficiente para dar una orientación clínica segura o si todavía falta una ronda realmente necesaria.
+You receive the initial complaint, all accumulated answers from an adaptive interview, and authorized longitudinal context.
+Decide whether there is enough information for a safe patient-facing orientation or whether one genuinely necessary additional round is still required.
 
-No confirmes diagnósticos. Puedes explicar posibilidades clínicas plausibles y qué datos las apoyan o las hacen inciertas.
-No prescribas, no cambies dosis, no indiques suspender tratamientos y no declares que una situación peligrosa es segura.
-Si existen señales de alarma, prioriza claramente la evaluación humana correspondiente.
-No repitas preguntas ya contestadas. No pidas otra ronda por rutina: solo si un dato faltante puede cambiar de forma material el nivel de atención o la orientación.
+Never confirm diagnoses. You may explain plausible clinical possibilities and what evidence supports or limits them.
+Do not prescribe, change doses, tell the patient to stop treatment, or declare a dangerous situation safe.
+When warning signs exist, clearly prioritize the appropriate human evaluation.
+Do not repeat answered questions. Do not ask another round by routine: only when a missing fact can materially change care level or orientation.
 
-Devuelve únicamente JSON válido:
+Return valid JSON only:
 {
   "decision": "summarize" | "ask_more",
-  "clinical_focus": "qué se intenta aclarar",
-  "missing_information": ["dato faltante importante"],
-  "decision_reason": "por qué ya se puede orientar o por qué hace falta preguntar más",
-  "patient_message": "Markdown para el paciente si decision=summarize; vacío si ask_more",
+  "clinical_focus": "what is being clarified",
+  "missing_information": ["important missing fact"],
+  "decision_reason": "why orientation is sufficient or why more questions are needed",
+  "patient_message": "patient-facing Markdown when decision=summarize; empty when ask_more",
   "possible_explanations": [
     {
-      "name": "posibilidad, no diagnóstico confirmado",
-      "why_possible": "datos concretos que la hacen plausible",
-      "why_uncertain": "qué falta o qué la limita"
+      "name": "possibility, not a confirmed diagnosis",
+      "why_possible": "specific supporting facts",
+      "why_uncertain": "what is missing or limiting"
     }
   ],
   "care_level": "self_care_information | routine_professional | priority_professional | urgent"
 }
 
-Cuando decision=summarize, patient_message debe sonar natural, como una conversación humana, e incluir:
-- qué entendiste del caso;
-- las posibilidades principales en lenguaje claro, dejando explícito que no son diagnósticos confirmados;
-- qué dato pesa a favor o en contra;
-- qué nivel de atención parece prudente;
-- qué debe contar o preguntar al profesional;
-- señales concretas por las que no debería esperar.
+When decision=summarize, patient_message should sound natural and conversational and include:
+- what you understood from the case;
+- the main possibilities in clear language, explicitly not as confirmed diagnoses;
+- which facts weigh for or against them;
+- what level of human care appears prudent;
+- what the patient should tell or ask a professional;
+- concrete warning signs for which the patient should not wait.
 
-No menciones agentes internos, prompts, cadenas de pensamiento ni nombres de herramientas.
+Do not mention internal agents, prompts, chain of thought, or tool names.
 """.strip()
 
 
@@ -59,6 +73,42 @@ class AdkGeminiResponder(GeminiResponder):
     def __init__(self, settings: Settings, client_factory: Callable[[], Any] | None = None) -> None:
         super().__init__(settings, client_factory=client_factory)
         self.adk_runtime = AdkClinicalRuntime(settings)
+
+    @staticmethod
+    def _response_locale(state: PatientState, text: str) -> str:
+        return resolve_response_locale(
+            text,
+            requested_locale=current_requested_locale(),
+            profile_locale=state.profile.locale,
+        )
+
+    def _generate(self, state: PatientState, patient_text: str, draft) -> str:
+        response_locale = self._response_locale(state, patient_text)
+        payload = {
+            "patient_message": patient_text,
+            "response_locale": response_locale,
+            "authorized_context": self.authorized_context(state),
+            "deterministic_safety_draft": {
+                "content": draft.message.content,
+                "risk_level": draft.message.risk_level.value,
+                "mission": draft.mission.model_dump(mode="json") if draft.mission else None,
+                "action_target": draft.message.metadata.get("action_target"),
+            },
+        }
+        interaction = self._get_client().interactions.create(
+            model=self.settings.model,
+            input=json.dumps(payload, ensure_ascii=False, default=str),
+            system_instruction=f"{PATIENT_RESPONSE_SYSTEM_INSTRUCTION}\n\n{language_instruction(response_locale)}",
+            generation_config={
+                "max_output_tokens": self.cost_guard.max_output_tokens,
+                "thinking_level": "minimal",
+            },
+            store=False,
+        )
+        text = self._interaction_text(interaction)
+        if not text:
+            raise RuntimeError("Gemini returned an empty patient response")
+        return text
 
     def _generate_clinical_block(
         self,
@@ -101,6 +151,7 @@ class AdkGeminiResponder(GeminiResponder):
             "event_count": plan.event_count,
             "executed_roles": list(plan.executed_roles),
             "tool_outputs": public_tool_outputs,
+            "response_locale": payload.get("response_locale"),
         }
         return payload
 
@@ -111,12 +162,7 @@ class AdkGeminiResponder(GeminiResponder):
             text = str(message.content or "").strip()
             if not text or text.startswith("[ENTREVISTA_CLINICA]"):
                 continue
-            memory.append(
-                {
-                    "role": message.role,
-                    "content": text[:1200],
-                }
-            )
+            memory.append({"role": message.role, "content": text[:1200]})
         return memory
 
     def _generate_clinical_resolution(
@@ -127,6 +173,7 @@ class AdkGeminiResponder(GeminiResponder):
         stage: int,
         answers: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        response_locale = self._response_locale(state, chief_complaint)
         payload = {
             "task": "decide_if_clinical_interview_is_sufficient_and_explain_next_step",
             "stage": stage,
@@ -134,18 +181,20 @@ class AdkGeminiResponder(GeminiResponder):
             "all_interview_answers": answers[-30:],
             "authorized_clinical_context": self.authorized_context(state),
             "recent_conversation_memory": self._conversation_memory(state),
+            "response_locale": response_locale,
             "constraints": {
                 "maximum_interview_stage": 3,
                 "ask_more_only_if_materially_decision_changing": True,
                 "must_not_confirm_diagnosis": True,
                 "must_not_prescribe_or_change_medication": True,
                 "must_explain_uncertainty": True,
+                "patient_visible_language": response_locale,
             },
         }
         interaction = self._get_client().interactions.create(
             model=self.settings.model,
             input=json.dumps(payload, ensure_ascii=False, default=str),
-            system_instruction=CLINICAL_RESOLUTION_SYSTEM_INSTRUCTION,
+            system_instruction=f"{CLINICAL_RESOLUTION_SYSTEM_INSTRUCTION}\n\n{language_instruction(response_locale)}",
             generation_config={
                 "max_output_tokens": min(self.cost_guard.max_output_tokens, 1500),
                 "thinking_level": "minimal",
@@ -154,16 +203,21 @@ class AdkGeminiResponder(GeminiResponder):
         )
         text = self._interaction_text(interaction)
         if not text:
-            raise RuntimeError("Gemini devolvió una resolución clínica vacía")
+            raise RuntimeError("Gemini returned an empty clinical resolution")
         result = self._json_object(text)
         decision = str(result.get("decision", "")).strip().lower()
         if decision not in {"summarize", "ask_more"}:
-            raise ValueError("Gemini no devolvió una decisión clínica válida")
+            raise ValueError("Gemini did not return a valid clinical decision")
+        result["response_locale"] = response_locale
         return result
 
     def _mission_for_interview_id(self, state: PatientState, interview: dict[str, Any]):
         mission_id = interview.get("mission_id")
         return next((item for item in state.missions if item.id == mission_id), None)
+
+    @staticmethod
+    def _localized(locale: str, en: str, es: str) -> str:
+        return es if locale == "es" else en
 
     def _mark_ai_resolution_unavailable(
         self,
@@ -173,13 +227,23 @@ class AdkGeminiResponder(GeminiResponder):
         status: str,
         reason: str,
     ):
+        locale = str(interview.get("response_locale") or current_requested_locale() or "en")
         interview["status"] = "ai_resolution_unavailable"
         interview.pop("question_block", None)
-        draft.message.content = (
-            "No pude generar una orientación clínica adaptativa con la IA en esta ejecución. "
-            "No voy a sustituirla por preguntas precargadas ni fingir una conclusión. "
-            "Tus respuestas quedaron guardadas; activa Google AI o reintenta cuando el servicio esté disponible. "
-            "Si hay síntomas intensos, empeoramiento rápido o una señal de alarma, busca valoración humana sin esperar al chat."
+        draft.message.content = self._localized(
+            locale,
+            (
+                "I could not generate the adaptive AI clinical orientation in this run. "
+                "I will not replace it with preloaded questions or pretend to have reached a conclusion. "
+                "Your answers remain saved; retry when Google AI is available. If symptoms are severe, rapidly worsening, "
+                "or a warning sign appears, seek human evaluation without waiting for the chat."
+            ),
+            (
+                "No pude generar una orientación clínica adaptativa con la IA en esta ejecución. "
+                "No voy a sustituirla por preguntas precargadas ni fingir una conclusión. "
+                "Tus respuestas quedaron guardadas; reintenta cuando Google AI esté disponible. Si hay síntomas intensos, "
+                "empeoramiento rápido o una señal de alarma, busca valoración humana sin esperar al chat."
+            ),
         )
         draft.message.metadata.update(
             {
@@ -187,6 +251,7 @@ class AdkGeminiResponder(GeminiResponder):
                 "llm_status": status,
                 "clinical_synthesis_source": "unavailable_not_faked",
                 "llm_error": reason[:500],
+                "response_locale": locale,
                 "cost_guard": self.cost_guard.snapshot(),
             }
         )
@@ -194,13 +259,10 @@ class AdkGeminiResponder(GeminiResponder):
         self.last_error = reason[:500]
         return draft
 
-    async def _enhance_clinical_resolution(
-        self,
-        state: PatientState,
-        draft,
-        interview: dict[str, Any],
-    ):
-        chief_complaint = str(interview.get("chief_complaint") or "Consulta de salud").strip()
+    async def _enhance_clinical_resolution(self, state: PatientState, draft, interview: dict[str, Any]):
+        chief_complaint = str(interview.get("chief_complaint") or "Health consultation").strip()
+        response_locale = self._response_locale(state, chief_complaint)
+        interview["response_locale"] = response_locale
         answers = interview.get("answers") or interview.get("previous_answers") or []
         if not isinstance(answers, list):
             answers = []
@@ -211,7 +273,7 @@ class AdkGeminiResponder(GeminiResponder):
                 draft,
                 interview,
                 status="clinical_ai_resolution_not_configured",
-                reason="Gemini no está configurado para esta ejecución.",
+                reason="Gemini is not configured for this run.",
             )
 
         if draft.message.risk_level == RiskLevel.URGENT:
@@ -219,7 +281,7 @@ class AdkGeminiResponder(GeminiResponder):
                 draft,
                 interview,
                 status="deterministic_safety",
-                reason="La seguridad determinista interrumpió la resolución rutinaria.",
+                reason="Deterministic safety interrupted routine clinical resolution.",
             )
 
         try:
@@ -251,6 +313,8 @@ class AdkGeminiResponder(GeminiResponder):
                 reason=f"{type(exc).__name__}: {exc}",
             )
 
+        response_locale = str(resolution.get("response_locale") or response_locale)
+        interview["response_locale"] = response_locale
         decision = str(resolution.get("decision", "summarize")).lower()
         if decision == "ask_more" and stage < 3:
             next_stage = stage + 1
@@ -267,7 +331,7 @@ class AdkGeminiResponder(GeminiResponder):
                     timeout=self.settings.llm_timeout_seconds,
                 )
                 if model_payload.get("intent") != "clinical_consultation":
-                    raise ValueError("ADK no confirmó la intención de consulta clínica")
+                    raise ValueError("ADK did not confirm clinical consultation intent")
                 block = normalize_dynamic_question_block(model_payload, next_stage)
                 agent_plan = self._apply_on_demand_plan(
                     state,
@@ -285,7 +349,7 @@ class AdkGeminiResponder(GeminiResponder):
                     model_payload=model_payload,
                 )
                 if not review["approved"]:
-                    raise ValueError("JUDGE Ω rechazó el bloque adicional: " + "; ".join(review["blockers"]))
+                    raise ValueError("JUDGE Ω rejected the additional block: " + "; ".join(review["blockers"]))
             except Exception as exc:
                 return self._mark_ai_resolution_unavailable(
                     draft,
@@ -294,6 +358,7 @@ class AdkGeminiResponder(GeminiResponder):
                     reason=f"{type(exc).__name__}: {exc}",
                 )
 
+            response_locale = str(model_payload.get("response_locale") or response_locale)
             interview.update(
                 {
                     "stage": next_stage,
@@ -301,6 +366,7 @@ class AdkGeminiResponder(GeminiResponder):
                     "previous_answers": answers,
                     "question_block": block,
                     "question_source": "gemini_dynamic",
+                    "response_locale": response_locale,
                     "clinical_focus": str(model_payload.get("clinical_focus", "")).strip(),
                     "why_these_questions": model_payload.get("why_these_questions") or [],
                     "missing_information": model_payload.get("missing_information") or resolution.get("missing_information") or [],
@@ -310,17 +376,23 @@ class AdkGeminiResponder(GeminiResponder):
             mission = self._mission_for_interview_id(state, interview)
             if mission is not None:
                 mission.status = MissionStatus.WAITING_PATIENT
-                mission.next_action = "Responder una última ronda adaptativa porque todavía falta información que puede cambiar la orientación"
+                mission.next_action = self._localized(
+                    response_locale,
+                    "Answer the final adaptive round because one material fact can still change the orientation",
+                    "Responder una última ronda adaptativa porque todavía falta información que puede cambiar la orientación",
+                )
             draft.message.agent_plan = agent_plan
-            draft.message.content = (
-                "Con lo que ya me dijiste todavía falta aclarar un punto que puede cambiar la orientación. "
-                "Preparé una última ronda de cinco preguntas específicas; no voy a repetir lo que ya respondiste."
+            draft.message.content = self._localized(
+                response_locale,
+                "There is still one point that could change the orientation. I prepared one final set of five specific questions without repeating what you already answered.",
+                "Con lo que ya me dijiste todavía falta aclarar un punto que puede cambiar la orientación. Preparé una última ronda de cinco preguntas específicas; no voy a repetir lo que ya respondiste.",
             )
             draft.message.metadata.update(
                 {
                     "llm_backend": "gemini_api",
                     "llm_status": "dynamic_clinical_followup_questions",
                     "question_source": "gemini_dynamic",
+                    "response_locale": response_locale,
                     "clinical_resolution_decision": "ask_more",
                     "clinical_resolution_reason": str(resolution.get("decision_reason", ""))[:500],
                     "request_number": question_request,
@@ -339,12 +411,13 @@ class AdkGeminiResponder(GeminiResponder):
                 draft,
                 interview,
                 status="clinical_ai_resolution_invalid",
-                reason="Gemini decidió resumir pero no devolvió un mensaje para el paciente.",
+                reason="Gemini chose summarize but returned no patient-facing message.",
             )
 
         interview.update(
             {
                 "status": "completed",
+                "response_locale": response_locale,
                 "clinical_focus": str(resolution.get("clinical_focus", "")).strip(),
                 "missing_information": resolution.get("missing_information") or [],
                 "resolution_decision": "summarize",
@@ -355,7 +428,11 @@ class AdkGeminiResponder(GeminiResponder):
         mission = self._mission_for_interview_id(state, interview)
         if mission is not None:
             mission.status = MissionStatus.WAITING_PROFESSIONAL
-            mission.next_action = "Revisar la orientación con un profesional y actualizar HealthIA con el resultado"
+            mission.next_action = self._localized(
+                response_locale,
+                "Review the orientation with a professional and update HealthIA with the outcome",
+                "Revisar la orientación con un profesional y actualizar HealthIA con el resultado",
+            )
             if "ai_clinical_orientation_generated" not in mission.closure_evidence:
                 mission.closure_evidence.append("ai_clinical_orientation_generated")
 
@@ -370,6 +447,7 @@ class AdkGeminiResponder(GeminiResponder):
                 "clinical_resolution_reason": str(resolution.get("decision_reason", ""))[:500],
                 "possible_explanations": resolution.get("possible_explanations") or [],
                 "care_level": resolution.get("care_level") or "",
+                "response_locale": response_locale,
                 "request_number": resolution_request,
                 "cost_guard": self.cost_guard.snapshot(),
             }
@@ -382,4 +460,31 @@ class AdkGeminiResponder(GeminiResponder):
         interview = draft.message.metadata.get("clinical_interview")
         if isinstance(interview, dict) and interview.get("status") == "ready_for_synthesis":
             return await self._enhance_clinical_resolution(state, draft, interview)
-        return await super().enhance(state, patient_text, draft)
+
+        result = await super().enhance(state, patient_text, draft)
+        response_locale = self._response_locale(state, patient_text)
+        result.message.metadata["response_locale"] = response_locale
+
+        # The parent owns the interview state machine. Its visible transition
+        # sentence is deterministic, so localize it here while ADK owns the five
+        # actual questions/options in the same response locale.
+        current_interview = result.message.metadata.get("clinical_interview")
+        if isinstance(current_interview, dict) and result.message.metadata.get("question_source") == "gemini_dynamic":
+            stage = int(current_interview.get("stage", 1))
+            response_locale = str(current_interview.get("response_locale") or response_locale)
+            current_interview["response_locale"] = response_locale
+            result.message.metadata["response_locale"] = response_locale
+            result.message.content = self._localized(
+                response_locale,
+                (
+                    "I reviewed what you shared and prepared five case-specific questions to reduce uncertainty, check warning signs, and guide the safest next step."
+                    if stage == 1
+                    else "I used your previous answers to generate five new questions without repeating what is already known."
+                ),
+                (
+                    "Analicé lo que contaste y preparé cinco preguntas específicas para aclarar las explicaciones posibles, detectar señales de alarma y orientarte al siguiente paso seguro."
+                    if stage == 1
+                    else "Usé tus respuestas anteriores para generar cinco preguntas nuevas sin repetir lo ya aclarado."
+                ),
+            )
+        return result
