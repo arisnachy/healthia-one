@@ -109,6 +109,17 @@ Stop recording.
 
 ---
 
+## Truth boundary for the recording
+
+**Do not claim:**
+
+- **confirmed diagnosis** — HealthIA organizes evidence and safety context but does not establish a diagnosis from insufficient data;
+- **prescription authority** — it does not autonomously start, stop or change medications;
+- **genetic prediction** — the family genogram is provenance-linked family history, not a predictive genetics engine;
+- **regulatory clearance** — this hackathon build is not presented as a cleared or approved medical device.
+
+Also do not claim universal clinical efficacy, universal security, or production regulatory compliance. The evidence proves the tested software behavior and Google Cloud architecture with synthetic data.
+
 ## Evidence behind the recording
 
 The recording is presentation evidence; it does not replace automated proof.
