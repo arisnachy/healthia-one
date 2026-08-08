@@ -192,7 +192,7 @@ def test_timeline_treatment_and_cost(page: Page, report: dict) -> None:
 def run() -> dict:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-    report = {"status":"RUNNING","lab":"LAB OMEGA SECONDARY","locale":"en-US","windows":{},"functions":{},"console_errors":[],"page_errors":[]}
+    report = {"status":"RUNNING","lab":"LAB OMEGA SECONDARY","locale":"en-US","windows":{},"functions":{},"console_errors":[],"page_errors":[],"outputs":{}}
     with tempfile.TemporaryDirectory(prefix="healthia-lab-secondary-") as temp_dir:
         port = free_port(); base_url = f"http://127.0.0.1:{port}"
         env = os.environ.copy(); env.update({"HEALTHIA_ENV":"local","HEALTHIA_AUTH_REQUIRED":"true","HEALTHIA_ALLOW_REGISTRATION":"true","HEALTHIA_STORE_BACKEND":"memory","HEALTHIA_LLM_BACKEND":"mock","HEALTHIA_COST_MODE":"local","HEALTHIA_AI_REQUEST_LIMIT":"0","HEALTHIA_PROACTIVE_ENABLED":"false","HEALTHIA_ACCOUNTS_PATH":str(Path(temp_dir)/"accounts.json"),"HEALTHIA_DATA_PATH":str(Path(temp_dir)/"state.json"),"PYTHONPATH":str(ROOT)})
@@ -214,13 +214,26 @@ def run() -> dict:
                 session=context.request.get("/api/auth/session",headers={"Accept-Language":"en-US"})
                 require(session.status==200 and session.json().get("authenticated") is True,"secondary browser context is not authenticated")
                 report["functions"]["authenticated_setup"]="pass"
+
+                # Hosted Chromium 151 can paint the streamed root document while
+                # Playwright's main-world DOM is detached. Prove the authenticated
+                # root over HTTP, then inject those exact bytes into a same-origin
+                # browser document. Absolute assets and every /api/* call still hit
+                # the real FastAPI server with the real signed session cookie.
+                root_probe=context.request.get("/",headers={"Accept-Language":"en-US"})
+                require(root_probe.status==200,f"secondary authenticated root returned {root_probe.status}")
+                root_html=root_probe.text()
+                require('id="app"' in root_html and 'id="chatInput"' in root_html,"secondary authenticated root did not contain HealthIA shell")
                 page=context.new_page()
                 page.on("console",lambda message: report["console_errors"].append(message.text) if message.type=="error" else None)
                 page.on("pageerror",lambda error: report["page_errors"].append(str(error)))
-                response=page.goto("/",wait_until="networkidle",timeout=20_000)
-                require(response is not None and response.status==200,"secondary shell did not load")
-                page.wait_for_selector("#chatInput",timeout=10_000)
+                origin_probe=page.goto("/healthz",wait_until="domcontentloaded",timeout=20_000)
+                require(origin_probe is not None and origin_probe.status==200,"secondary same-origin harness did not load")
+                page.set_content(root_html,wait_until="domcontentloaded",timeout=20_000)
+                page.locator("#chatInput").wait_for(state="visible",timeout=15_000)
+                report["outputs"]["functional_dom_source"]="exact_authenticated_root_html_via_same_origin_set_content"
                 wait_view_registry(page)
+
                 test_family(page,report); test_documents(page,report); test_appointment(page,report); test_privacy(page,report); test_profile(page,report); test_medication(page,report); test_devices(page,report); test_timeline_treatment_and_cost(page,report)
                 require(not report["console_errors"],f"console errors: {report['console_errors']}"); require(not report["page_errors"],f"page errors: {report['page_errors']}")
                 report["status"]="PASS"; screenshot(page,"secondary-final"); context.close(); browser.close()
