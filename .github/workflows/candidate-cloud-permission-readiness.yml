@@ -70,3 +70,157 @@ jobs:
           path: deployment/cloud-permissions-latest.json
           if-no-files-found: warn
           retention-days: 7
+
+  deploy-and-prove:
+    name: Exact candidate Cloud Run + Vertex + browser proof
+    needs: cloud-permissions
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      VERTEX_LOCATION: global
+      SERVICE_NAME: healthia-one-demo
+      BUCKET_NAME: healthia-6088a-healthia-evidence
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: kira/event-driven-results-twin-p1
+          fetch-depth: 1
+
+      - name: Freeze exact candidate SHA
+        id: exact
+        shell: bash
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_EXACT_CANDIDATE_SHA=$sha" >> "$GITHUB_ENV"
+          echo "Exact candidate SHA: $sha"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install exact candidate
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Recheck provisioning permissions
+        run: python deployment/check_cloud_permissions.py --project "$PROJECT_ID" --json-out deployment/cloud-permissions-latest.json
+
+      - name: Deploy bounded private Cloud stack and run strict API proof
+        shell: pwsh
+        run: |
+          ./deployment/deploy-cloud-demo.ps1 `
+            -ProjectId $env:PROJECT_ID `
+            -Region $env:REGION `
+            -VertexLocation $env:VERTEX_LOCATION `
+            -BucketName $env:BUCKET_NAME `
+            -ServiceName $env:SERVICE_NAME `
+            -RequestLimit 24 `
+            -MaxOutputTokens 1400 `
+            -Confirmed
+
+      - name: Bind browser to deployed revision
+        id: cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          curl -fsS -H "Authorization: Bearer ${token}" "$url/api/readiness" > /tmp/readiness.json
+          python - <<'PY'
+          import json
+          p=json.load(open('/tmp/readiness.json', encoding='utf-8'))
+          assert p.get('ready') is True
+          assert p.get('ai_ready') is True and p.get('adk_ready') is True
+          assert p.get('model') == 'gemini-3.5-flash'
+          assert p.get('store_backend') == 'firestore'
+          assert p.get('evidence_backend') == 'gcs'
+          print('HEALTHIA_CLOUD_BROWSER_TARGET_READY', p.get('model'), (p.get('cost_control') or {}).get('requests_remaining'))
+          PY
+
+      - name: Install Chromium proof harness
+        run: python -m playwright install --with-deps chromium
+
+      - name: Execute full unmocked browser journey
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+        run: python scripts/cloud_browser_judge_proof.py
+
+      - name: Bind all evidence to exact candidate and Cloud revision
+        if: always()
+        env:
+          CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          CLOUD_REVISION: ${{ steps.cloud.outputs.revision }}
+          CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
+        shell: bash
+        run: |
+          mkdir -p dist/cloud-browser-judge-proof
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          runtime_path=Path('dist/cloud-browser-judge-proof/runtime.json')
+          runtime_path.write_text(json.dumps({
+            'application_candidate_sha': os.environ.get('HEALTHIA_EXACT_CANDIDATE_SHA',''),
+            'proof_harness_sha': os.environ.get('HEALTHIA_EXACT_CANDIDATE_SHA',''),
+            'cloud_url': os.environ.get('CLOUD_URL',''),
+            'cloud_revision': os.environ.get('CLOUD_REVISION',''),
+            'image': os.environ.get('CLOUD_IMAGE',''),
+            'project': os.environ['PROJECT_ID'],
+            'region': os.environ['REGION'],
+            'service': os.environ['SERVICE_NAME'],
+            'model': 'gemini-3.5-flash',
+            'transport': 'vertex_ai_adc',
+            'store_backend': 'firestore',
+            'evidence_backend': 'gcs',
+            'mocked': False
+          }, indent=2), encoding='utf-8')
+          cloud_path=Path('deployment/cloud-runtime-evidence.json')
+          payload={}
+          if cloud_path.exists():
+              payload=json.loads(cloud_path.read_text(encoding='utf-8'))
+          payload['candidate_sha']=os.environ.get('HEALTHIA_EXACT_CANDIDATE_SHA','')
+          payload['url']=os.environ.get('CLOUD_URL','') or payload.get('url','')
+          payload['latest_ready_revision']=os.environ.get('CLOUD_REVISION','') or payload.get('latest_ready_revision','')
+          payload['image']=os.environ.get('CLOUD_IMAGE','') or payload.get('image','')
+          cloud_path.parent.mkdir(parents=True, exist_ok=True)
+          cloud_path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          PY
+
+      - name: Upload complete judge-facing Cloud evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-exact-candidate-cloud-proof
+          path: |
+            deployment/cloud-permissions-latest.json
+            deployment/cloud-runtime-evidence.json
+            deployment/cloud-proof-latest.json
+            dist/cloud-browser-judge-proof
+          if-no-files-found: warn
+          retention-days: 14
