@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "judge_omega.py"
 SCORECARD = ROOT / "hackathon" / "judge_omega_scorecard.json"
-CURRENT_EVIDENCE_SCORE = 99
+CURRENT_EVIDENCE_SCORE = 100
 
 
 def test_judge_omega_preserves_official_weights_and_current_baseline() -> None:
@@ -26,12 +26,9 @@ def test_judge_omega_preserves_official_weights_and_current_baseline() -> None:
     assert gates["cloud_runtime_proof"] == "proven"
     assert gates["cross_revision_continuity"] == "proven"
     assert gates["four_minute_demo"] == "proven"
-    assert gates["final_submission_video_url"] == "missing"
-    assert any(status != "proven" for status in gates.values())
-    assert all(
-        item["id"] not in {"adk_live_trace_not_captured", "no_autonomous_outcome_closure"}
-        for item in payload["critical_blockers"]
-    )
+    assert gates["final_submission_video_url"] == "proven"
+    assert all(status == "proven" for status in gates.values())
+    assert payload["critical_blockers"] == []
 
 
 def test_judge_omega_evaluator_validates_repository_evidence() -> None:
@@ -46,17 +43,13 @@ def test_judge_omega_evaluator_validates_repository_evidence() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
     result = json.loads(completed.stdout)
     assert result["score"] == CURRENT_EVIDENCE_SCORE
-    assert result["verdict"] == "HIGH_SCORE_BUT_BLOCKED"
-    assert result["hard_gate_blockers"]
-    assert not any(item["id"] == "cloud_runtime_proof" for item in result["hard_gate_blockers"])
-    assert not any(item["id"] == "cross_revision_continuity" for item in result["hard_gate_blockers"])
-    assert not any(item["id"] == "four_minute_demo" for item in result["hard_gate_blockers"])
-    assert any(item["id"] == "final_submission_video_url" for item in result["hard_gate_blockers"])
-    assert all(item["id"] != "closed_loop_taskmaster" for item in result["hard_gate_blockers"])
+    assert result["verdict"] == "SUBMISSION_LOCKED"
+    assert result["hard_gate_blockers"] == []
+    assert result["critical_blockers"] == []
     assert len(result["next_actions"]) == 3
 
 
-def test_judge_omega_strict_mode_blocks_premature_submission() -> None:
+def test_judge_omega_strict_mode_accepts_fully_proven_submission() -> None:
     completed = subprocess.run(
         [sys.executable, str(SCRIPT), "--strict"],
         cwd=ROOT,
@@ -65,5 +58,6 @@ def test_judge_omega_strict_mode_blocks_premature_submission() -> None:
         text=True,
         encoding="utf-8",
     )
-    assert completed.returncode == 3
-    assert "HIGH_SCORE_BUT_BLOCKED" in completed.stdout
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "100/100" in completed.stdout
+    assert "SUBMISSION_LOCKED" in completed.stdout
