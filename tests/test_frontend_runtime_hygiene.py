@@ -30,11 +30,17 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
         "privacy-controls.js",
         "profile-devices.js",
         "account.js",
+        "runtime-integrations.js",
+        "provider-integrations.js",
+        "cost-control.js",
         "icons.js",
     )
     assert html.count("<script ") == len(expected)
     for script in expected:
         assert html.count(f'/assets/{script}') == 1
+    icons = (WEB / "icons.js").read_text(encoding="utf-8")
+    assert "loadScript(" not in icons
+    assert "document.createElement('script')" not in icons
 
 
 def test_repository_contains_no_transfer_or_temporary_workflow_artifacts() -> None:
