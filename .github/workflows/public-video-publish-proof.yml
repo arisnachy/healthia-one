@@ -1,0 +1,140 @@
+name: Public submission video publish proof
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gate:
+    name: Public video GCP repair opt-in gate
+    runs-on: ubuntu-22.04
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q '^enabled=true$' .github/submission-publish-trigger.txt; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'Public media repair disabled; no Cloud mutation attempted.'
+          fi
+
+  repair-and-prove:
+    name: Repair public media ACL and prove anonymous exact video bytes
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      PROJECT_ID: healthia-6088a
+      PUBLIC_BUCKET: healthia-6088a-public-demo
+      PRIVATE_EVIDENCE_BUCKET: healthia-6088a-healthia-evidence
+      VIDEO_NAME: HealthIA-ONE-final-judge-demo.webm
+      ARTIFACT_ID: '9024139098'
+      EXPECTED_VIDEO_SHA256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Diagnose current public bucket boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PUBLIC_BUCKET" != "$PRIVATE_EVIDENCE_BUCKET"
+          echo '=== BUCKET DESCRIPTION BEFORE ==='
+          gcloud storage buckets describe "gs://${PUBLIC_BUCKET}" --project "$PROJECT_ID" || true
+          echo '=== BUCKET IAM BEFORE ==='
+          gcloud storage buckets get-iam-policy "gs://${PUBLIC_BUCKET}" --project "$PROJECT_ID" || true
+          echo '=== OBJECT BEFORE ==='
+          gcloud storage objects describe "gs://${PUBLIC_BUCKET}/${VIDEO_NAME}" --project "$PROJECT_ID" || true
+
+      - name: Recover exact verified WebM from passing GitHub artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/healthia-public-fix/unpacked
+          curl --fail --location --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o /tmp/healthia-public-fix/artifact.zip
+          unzip -q /tmp/healthia-public-fix/artifact.zip -d /tmp/healthia-public-fix/unpacked
+          video="$(find /tmp/healthia-public-fix/unpacked -type f -name '*.webm' -print -quit)"
+          test -n "$video"
+          actual="$(sha256sum "$video" | awk '{print $1}')"
+          echo "verified_source_sha256=$actual"
+          test "$actual" = "$EXPECTED_VIDEO_SHA256"
+          cp "$video" "/tmp/healthia-public-fix/${VIDEO_NAME}"
+
+      - name: Enforce public access only on dedicated submission-media bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PUBLIC_BUCKET" != "$PRIVATE_EVIDENCE_BUCKET"
+          gcloud storage buckets update "gs://${PUBLIC_BUCKET}" --no-public-access-prevention
+          gcloud storage buckets add-iam-policy-binding "gs://${PUBLIC_BUCKET}" \
+            --member=allUsers \
+            --role=roles/storage.objectViewer
+          echo '=== BUCKET IAM AFTER ==='
+          gcloud storage buckets get-iam-policy "gs://${PUBLIC_BUCKET}" --project "$PROJECT_ID"
+
+      - name: Upload exact verified WebM and prove anonymous access
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud storage cp "/tmp/healthia-public-fix/${VIDEO_NAME}" "gs://${PUBLIC_BUCKET}/${VIDEO_NAME}" \
+            --content-type=video/webm \
+            --cache-control='public,max-age=3600'
+          url="https://storage.googleapis.com/${PUBLIC_BUCKET}/${VIDEO_NAME}"
+          echo "public_url=$url"
+          curl --fail --location --silent --show-error "$url" -o /tmp/healthia-public-fix/public.webm
+          actual="$(sha256sum /tmp/healthia-public-fix/public.webm | awk '{print $1}')"
+          echo "anonymous_download_sha256=$actual"
+          test "$actual" = "$EXPECTED_VIDEO_SHA256"
+          mkdir -p dist/public-video-publish-proof
+          python - <<'PY'
+          import json, pathlib
+          payload={
+            'status':'PASS',
+            'public_url':'https://storage.googleapis.com/healthia-6088a-public-demo/HealthIA-ONE-final-judge-demo.webm',
+            'anonymous_access':True,
+            'video_sha256':'cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19',
+            'source_artifact_id':9024139098,
+            'source_run_id':31265639488,
+            'public_bucket':'healthia-6088a-public-demo',
+            'private_clinical_evidence_bucket_remains_separate':'healthia-6088a-healthia-evidence',
+          }
+          pathlib.Path('dist/public-video-publish-proof/proof.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          print(json.dumps(payload, indent=2))
+          PY
+
+      - name: Upload public publication proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-ONE-public-video-publish-proof
+          path: dist/public-video-publish-proof/proof.json
+          if-no-files-found: error
+          retention-days: 30
