@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from healthia_one.clinical_intake import ANSWER_PREFIX, respond_to_clinical_intake
+from healthia_one.conversation_brain import build_frame
 from healthia_one.deterministic_router import respond as deterministic_respond
 from healthia_one.models import ChatResponse, PatientState
 
@@ -89,13 +90,32 @@ def _restore_original_complaint(response: ChatResponse | None, original: str) ->
     return response
 
 
-def respond(state: PatientState, patient_text: str) -> ChatResponse:
-    """Route patient workflows in English or Spanish through the same verified functions."""
+def _attach_conversation_frame(response: ChatResponse, frame) -> ChatResponse:
+    response.message.metadata["conversation_context"] = {
+        "ambiguous_reference": frame.ambiguous_reference,
+        "correction": frame.correction,
+        "last_action_target": frame.last_action_target,
+        "last_mission_type": frame.last_mission_type,
+    }
+    return response
 
-    clinical_response = respond_to_clinical_intake(state, _clinical_text(patient_text))
+
+def respond(state: PatientState, patient_text: str) -> ChatResponse:
+    """Route through safety and selective conversational memory before keyword fallback.
+
+    Explicit current-turn meaning always wins. When a follow-up is elliptical (for
+    example "¿y eso?" or "the one from yesterday"), Conversation Brain carries
+    forward only the latest verified topic as a private routing hint. The public
+    patient text is never rewritten or stored with that hint.
+    """
+
+    frame = build_frame(state, patient_text)
+    routed_text = frame.routing_text
+
+    clinical_response = respond_to_clinical_intake(state, _clinical_text(routed_text))
     clinical_response = _restore_original_complaint(clinical_response, patient_text)
     if clinical_response is not None:
-        return clinical_response
+        return _attach_conversation_frame(clinical_response, frame)
 
     if _explicit_clinical_request(patient_text):
         clinical_response = respond_to_clinical_intake(
@@ -105,6 +125,7 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
         if clinical_response is not None:
             interview = clinical_response.message.metadata.get("clinical_interview", {})
             interview["chief_complaint"] = patient_text
-            return clinical_response
+            return _attach_conversation_frame(clinical_response, frame)
 
-    return deterministic_respond(state, _router_text(patient_text))
+    response = deterministic_respond(state, _router_text(routed_text))
+    return _attach_conversation_frame(response, frame)
