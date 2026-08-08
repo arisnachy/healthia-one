@@ -110,13 +110,15 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
     response = info.value
     require(response.status == 201, f"registration returned {response.status}")
     require("healthia_session=" in (response.header_value("set-cookie") or ""), "registration did not emit session cookie")
-    page.wait_for_url(re.compile(rf"^{re.escape(base_url)}/?$"), timeout=15_000)
-    # A URL transition is not the same thing as an interactive shell. On a cold
-    # Chromium runner the redirect can complete several seconds before deferred
-    # assets finish constructing the app. Wait for the actual shell first so the
-    # laboratory measures product readiness rather than a navigation race.
+    page.wait_for_url(re.compile(rf"^{re.escape(base_url)}/?$"), timeout=20_000)
+    # URL readiness is weaker than product readiness. Cold GitHub runners can
+    # finish the redirect before Chromium has attached the application shell.
+    # Keep the real #app/#chatInput requirements, but give those render gates a
+    # bounded cold-start window instead of converting runner speed into failure.
     page.wait_for_load_state("domcontentloaded")
-    page.locator("#app").wait_for(state="attached", timeout=15_000)
+    shell_started = time.monotonic()
+    page.locator("#app").wait_for(state="attached", timeout=35_000)
+    shell_ready_ms = int((time.monotonic() - shell_started) * 1000)
     cookies = context.cookies(base_url)
     session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
     require(session_cookie is not None and session_cookie.get("secure") is False, "browser registration cookie invalid for local HTTP")
@@ -132,10 +134,11 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
         "path": session_cookie.get("path"),
     }
     report["outputs"]["functional_page_url"] = page.url
+    report["outputs"]["cold_runner_shell_ready_ms"] = shell_ready_ms
 
     checkpoint("composer_probe_start")
     composer = page.locator("#chatInput")
-    composer.wait_for(state="visible", timeout=20_000)
+    composer.wait_for(state="visible", timeout=35_000)
     composer.fill("LAB Omega readiness probe")
     require(composer.input_value() == "LAB Omega readiness probe", "authenticated composer rejected text")
     composer.fill("")
