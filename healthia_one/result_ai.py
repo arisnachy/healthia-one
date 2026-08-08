@@ -20,6 +20,7 @@ Reglas obligatorias:
 - No declares que un diagnóstico está confirmado por una imagen aislada.
 - Para radiología, ecografía, ECG y otros estudios, incluye limitaciones de calidad y recomienda revisión profesional cuando corresponda.
 - Para laboratorios, conserva valores, unidades, rangos y banderas exactamente cuando sean legibles.
+- Sé conciso: no repitas el mismo hallazgo en observations, findings, impression y patient_explanation.
 - Devuelve únicamente el objeto JSON solicitado por el esquema de salida; no uses Markdown ni texto exterior.
 """.strip()
 
@@ -29,13 +30,9 @@ RESULT_ANALYSIS_JSON_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "required": [
         "document_type",
-        "modality",
         "panel",
-        "anatomical_regions",
         "observations",
         "findings",
-        "impression",
-        "limitations",
         "patient_explanation",
         "requires_professional_review",
     ],
@@ -54,34 +51,52 @@ RESULT_ANALYSIS_JSON_SCHEMA: dict[str, Any] = {
                 "other",
             ],
         },
-        "modality": {"type": "string"},
-        "panel": {"type": "string"},
-        "anatomical_regions": {"type": "array", "items": {"type": "string"}},
+        "modality": {"type": "string", "maxLength": 80},
+        "panel": {"type": "string", "maxLength": 180},
+        "anatomical_regions": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 100},
+            "maxItems": 6,
+        },
         "observations": {
             "type": "array",
+            "maxItems": 20,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["name", "value", "unit", "reference", "flag"],
+                "required": ["name", "value"],
                 "properties": {
-                    "name": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 120},
                     "value": {
                         "anyOf": [
-                            {"type": "string"},
+                            {"type": "string", "maxLength": 180},
                             {"type": "number"},
                             {"type": "null"},
                         ]
                     },
-                    "unit": {"type": "string"},
-                    "reference": {"type": "string"},
-                    "flag": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "unit": {"type": "string", "maxLength": 60},
+                    "reference": {"type": "string", "maxLength": 120},
+                    "flag": {
+                        "anyOf": [
+                            {"type": "string", "maxLength": 60},
+                            {"type": "null"},
+                        ]
+                    },
                 },
             },
         },
-        "findings": {"type": "array", "items": {"type": "string"}},
-        "impression": {"type": "string"},
-        "limitations": {"type": "array", "items": {"type": "string"}},
-        "patient_explanation": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 300},
+            "maxItems": 10,
+        },
+        "impression": {"type": "string", "maxLength": 500},
+        "limitations": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 240},
+            "maxItems": 4,
+        },
+        "patient_explanation": {"type": "string", "maxLength": 700},
         "requires_professional_review": {"type": "boolean"},
     },
 }
@@ -89,6 +104,7 @@ RESULT_ANALYSIS_JSON_SCHEMA: dict[str, Any] = {
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 PDF_SUFFIXES = {".pdf"}
+MULTIMODAL_TIMEOUT_SECONDS = 45
 
 
 def infer_result_kind(filename: str, mime_type: str = "") -> str:
@@ -122,13 +138,23 @@ def multimodal_supported(filename: str, mime_type: str) -> bool:
 
 
 def _media_input(filename: str, mime_type: str, content: bytes) -> dict[str, str]:
+    """Build one Gemini 3 Interactions media item with an explicit resolution policy.
+
+    PDFs use low visual resolution because Gemini 3 also supplies native PDF
+    text at that level; this cuts visual-media tokens and latency for routine
+    reports/labs. Clinical images retain high resolution because small visual
+    details can matter and HealthIA must prefer fidelity over speed there.
+    """
+
     mime = str(mime_type or "").lower()
     suffix = Path(filename).suffix.lower()
     if mime == "application/pdf" or suffix == ".pdf":
         media_type = "document"
         mime = "application/pdf"
+        resolution = "low"
     else:
         media_type = "image"
+        resolution = "high"
         if not mime.startswith("image/"):
             mime = {
                 ".png": "image/png",
@@ -140,6 +166,7 @@ def _media_input(filename: str, mime_type: str, content: bytes) -> dict[str, str
         "type": media_type,
         "data": base64.b64encode(content).decode("utf-8"),
         "mime_type": mime,
+        "resolution": resolution,
     }
 
 
@@ -154,6 +181,10 @@ def _generate_analysis(responder, state: PatientState, filename: str, mime_type:
             "recent_result_panels": [item.panel for item in state.results[-5:]],
         },
         "truth_boundary": "Use only what is visible or legible in this upload. Do not infer missing measurements.",
+        "output_policy": (
+            "Return a compact clinical extraction. Do not repeat facts across fields; omit optional fields "
+            "when they add no new information."
+        ),
     }
     generation_config: dict[str, Any] = {
         "max_output_tokens": min(responder.cost_guard.max_output_tokens, 1400),
@@ -185,6 +216,12 @@ def _generate_analysis(responder, state: PatientState, filename: str, mime_type:
     return responder._json_object(text)
 
 
+def _multimodal_timeout_seconds(responder) -> int:
+    """Use a document-specific ceiling without slowing the interactive chat path."""
+
+    return max(int(responder.settings.llm_timeout_seconds), MULTIMODAL_TIMEOUT_SECONDS)
+
+
 async def analyze_uploaded_result(responder, state: PatientState, filename: str, mime_type: str, content: bytes) -> dict[str, Any]:
     if not multimodal_supported(filename, mime_type):
         return {"status": "unsupported", "detail": "El formato no está habilitado para análisis multimodal."}
@@ -197,7 +234,7 @@ async def analyze_uploaded_result(responder, state: PatientState, filename: str,
     try:
         payload = await asyncio.wait_for(
             asyncio.to_thread(_generate_analysis, responder, state, filename, mime_type, content),
-            timeout=max(responder.settings.llm_timeout_seconds, 18),
+            timeout=_multimodal_timeout_seconds(responder),
         )
     except Exception as exc:
         return {
