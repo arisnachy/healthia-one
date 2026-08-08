@@ -57,7 +57,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
       - name: LAB OMEGA core full-window functional laboratory
-        run: python scripts/lab_omega.py
+        shell: bash
+        run: timeout 180s python scripts/lab_omega.py
       - name: Upload LAB OMEGA core evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -67,7 +68,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
       - name: LAB OMEGA secondary windows and state-changing functions
-        run: python scripts/lab_omega_secondary.py
+        shell: bash
+        run: timeout 240s python scripts/lab_omega_secondary.py
       - name: Upload LAB OMEGA secondary evidence
         if: always()
         uses: actions/upload-artifact@v4
