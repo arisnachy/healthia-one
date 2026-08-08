@@ -87,31 +87,50 @@ def login_language_probe(
 
 
 def wait_for_authenticated_shell(page: Page, report: dict) -> None:
-    # HealthIA deliberately keeps an EventSource open, so network-idle is not a
-    # valid readiness signal. A patient-ready shell means the real composer is
-    # present, editable, and accepts text.
-    page.wait_for_function(
-        "document.querySelector('#app') !== null && document.querySelector('#chatInput') !== null",
-        timeout=30_000,
-    )
-    composer = page.locator("#chatInput")
-    geometry = composer.evaluate(
-        """node => {
-          const rect=node.getBoundingClientRect();
-          const style=getComputedStyle(node);
-          return {width:rect.width,height:rect.height,display:style.display,
-                  visibility:style.visibility,opacity:style.opacity};
-        }"""
-    )
-    editable = composer.is_editable()
-    report["outputs"]["chat_input_geometry"] = geometry
-    report["outputs"]["chat_input_editable"] = editable
-    require(float(geometry["width"]) > 0 and float(geometry["height"]) > 0, f"chat composer has no rendered geometry: {geometry}")
-    require(editable, f"chat composer exists but is not editable: {geometry}")
-    composer.fill("LAB Omega readiness probe", timeout=5_000)
-    require(composer.input_value() == "LAB Omega readiness probe", "patient cannot type into the chat composer")
-    composer.fill("")
-    report["checks"]["authenticated_shell_interactive"] = "pass"
+    # HealthIA deliberately keeps an EventSource open. Avoid network-idle and
+    # browser-side waitForFunction heuristics; observe the real DOM from Python
+    # and prove that the patient can actually type into the composer.
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=15_000)
+    except Exception:
+        pass
+    deadline = time.time() + 20.0
+    last_probe: dict = {}
+    while time.time() < deadline:
+        app = page.locator("#app")
+        composer = page.locator("#chatInput")
+        last_probe = {
+            "url": page.url,
+            "app_count": app.count(),
+            "chat_input_count": composer.count(),
+        }
+        if last_probe["app_count"] and last_probe["chat_input_count"]:
+            try:
+                geometry = composer.evaluate(
+                    """node => {
+                      const rect=node.getBoundingClientRect();
+                      const style=getComputedStyle(node);
+                      return {width:rect.width,height:rect.height,display:style.display,
+                              visibility:style.visibility,opacity:style.opacity};
+                    }"""
+                )
+                editable = composer.is_editable()
+                last_probe["geometry"] = geometry
+                last_probe["editable"] = editable
+                report["outputs"]["chat_input_geometry"] = geometry
+                report["outputs"]["chat_input_editable"] = editable
+                if float(geometry["width"]) > 0 and float(geometry["height"]) > 0 and editable:
+                    composer.fill("LAB Omega readiness probe", timeout=5_000)
+                    if composer.input_value() == "LAB Omega readiness probe":
+                        composer.fill("")
+                        report["checks"]["authenticated_shell_interactive"] = "pass"
+                        report["outputs"]["shell_readiness_probe"] = last_probe
+                        return
+            except Exception as exc:
+                last_probe["interaction_error"] = f"{type(exc).__name__}: {exc}"
+        page.wait_for_timeout(200)
+    report["outputs"]["shell_readiness_probe"] = last_probe
+    raise RuntimeError(f"authenticated shell never became patient-interactive: {last_probe}")
 
 
 def bootstrap(page: Page) -> dict:
