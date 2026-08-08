@@ -100,6 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${VIDEO_NAME}"
+          export PUBLIC_VIDEO_URL="$url"
           echo "PUBLIC_VIDEO_URL=$url" >> "$GITHUB_ENV"
           curl --fail --location --silent --show-error "$url" -o /tmp/healthia-release/public.webm
           actual="$(sha256sum /tmp/healthia-release/public.webm | awk '{print $1}')"
