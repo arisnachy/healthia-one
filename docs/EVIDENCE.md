@@ -1,15 +1,16 @@
 # HealthIA ONE — judge evidence index
 
-This file is the judge-facing source of truth for what has actually been proven. It deliberately separates repository capabilities from live evidence and does not count failed or quota-blocked runs as passes.
+This file is the judge-facing source of truth for what has actually been proven. It deliberately separates repository capabilities, live evidence and final-publication state. Failed or quota-blocked runs are never promoted as passes.
 
 ## Current status
 
 - **Primary track:** The Taskmaster
-- **JUDGE Ω evidence-backed score:** **98/100**
+- **JUDGE Ω evidence-backed score:** **99/100**
 - **Current verdict:** `HIGH_SCORE_BUT_BLOCKED`
-- **Only remaining hard gate:** final approximately four-minute unedited submission video + final Devpost package
+- **Technical/demo gates:** proven
+- **Only remaining hard gate:** publish the already-proven judge video at the final stable judge-facing URL, place that URL in the Devpost package, then run final CI/JUDGE and merge/lock.
 
-The score is computed from `hackathon/judge_omega_scorecard.json` by `scripts/judge_omega.py`. The final two Demo & Production Readiness points remain withheld until the real submission video/package exists.
+The score is computed from `hackathon/judge_omega_scorecard.json` by `scripts/judge_omega.py`. One Demo & Production Readiness point remains withheld until the video publication/submission URL itself exists.
 
 ## 1. Exact-candidate Cloud + unmocked browser proof — PASS
 
@@ -54,11 +55,11 @@ The deployed candidate proved:
 
 Observed clinical evidence included exactly five questions in block 1 and block 2, ADK execution of `interview` + `safety`, and final status `clinical_ai_orientation_completed`.
 
-The strict proof persisted a multimodal result and original document into Firestore/GCS. The exact sanitized details are preserved in `hackathon/evidence/cloud_exact_candidate_proof.json`.
+The strict proof persisted a multimodal result and original document into Firestore/GCS. Exact sanitized details are preserved in `hackathon/evidence/cloud_exact_candidate_proof.json`.
 
 ### Browser proof
 
-The same run then executed a real Chromium journey against the same Cloud service with **no mocks**.
+The same run executed a real Chromium journey against the same Cloud service with **no mocks**.
 
 Browser checks passed:
 
@@ -106,9 +107,49 @@ After the new revision, the verifier independently proved:
 
 The sanitized evidence is preserved in `hackathon/evidence/cloud_revision_continuity_proof.json`. Temporary proof passwords/cookies/tokens were never uploaded.
 
-## 3. Deterministic verification — PASS
+## 3. Continuous final judge demo proof — PASS
 
-The candidate has repeatedly passed the repository verification gate after the ADK latency/structured-output and multimodal fixes. The gate includes:
+**GitHub Actions run:** `31265639488`  
+**Candidate SHA:** `3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`  
+**Artifact:** `HealthIA-ONE-final-judge-demo` (`9024139098`)  
+**Artifact digest:** `sha256:71ee6e2ce665a9b98e44ca11aae7c7334849b73ac7e756b157afa47b3a249f33`  
+**Video SHA-256:** `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19`  
+**Recorded duration:** `290.16 s`  
+**Synthetic data only:** true
+
+The recorder reused the existing private Cloud Run deployment; it did **not** deploy a new revision. Its live runtime was:
+
+- URL: `https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app`
+- project/region: `healthia-6088a` / `us-central1`
+- revision: `healthia-one-demo-00016-mct`
+- model: Gemini 3.5 Flash
+- Google ADK ready: true
+- Firestore: true
+- GCS evidence: true
+- auth required: true
+
+The continuous Playwright recording visibly covers the required judge story and passed these machine checks:
+
+- problem overview visible;
+- value proposition visible;
+- live private Cloud runtime ready;
+- live Gemini + ADK clinical block 1;
+- live memory-aware clinical block 2;
+- safe clinical orientation completed;
+- multimodal PDF persisted with original evidence;
+- Taskmaster result mission completed;
+- logout/relogin continuity;
+- `.run.app` URL + live readiness visible;
+- zero browser console/page errors;
+- duration gate 200–300 seconds.
+
+The full sanitized proof record is `hackathon/evidence/final_judge_demo_proof.json`.
+
+**Publication boundary:** the video file itself is now proven and preserved as a GitHub Actions artifact. It is not yet counted as the final submission URL until the exact file is published at the stable judge-facing link used by Devpost.
+
+## 4. Deterministic verification — PASS
+
+The candidate repeatedly passes the repository verification gate after the ADK latency/structured-output, multimodal and dependency-boundary fixes. The gate includes:
 
 - pytest;
 - 14 full-system workflows;
@@ -121,34 +162,35 @@ The candidate has repeatedly passed the repository verification gate after the A
 - release ZIP build and verification;
 - pytest again from the extracted release archive.
 
-The Cloud proof is intentionally separated from ordinary CI so normal regression work does not silently spend model quota or create revisions.
+The runtime dependency boundary now uses `google-adk` core while declaring Firestore and GCS clients explicitly, avoiding the unused broad ADK GCP extras bundle. Tests lock that boundary.
 
-## 4. Earlier live Taskmaster proof — PASS
+Cloud proofs and the submission recording are explicit opt-in operations so ordinary CI does not silently spend model quota or create revisions.
+
+## 5. Earlier live Taskmaster proof — PASS
 
 **GitHub Actions run:** `31228561751`
 
 This earlier one-request Vertex proof independently demonstrated a useful design property: after one Gemini 3.5 Flash multimodal request persisted the original/result/twin, HealthIA could retrieve the saved result and complete the result-explanation mission without spending a second model request merely to paraphrase the same evidence. It also demonstrated patient isolation and logout/login continuity.
 
-## 5. Explicitly excluded evidence
+## 6. Explicitly excluded evidence
 
-**Run `31203021748` is not a passing proof.** Its live Google AI path ended in HTTP 429 because the available credits/quota were depleted. It must not be cited as a successful Gemini/ADK run.
+**Run `31203021748` is not a passing proof.** Its live Google AI path ended in HTTP 429 because available credits/quota were depleted. It must not be cited as a successful Gemini/ADK run.
 
-Failed Cloud proof iterations are also not counted as passes. They were used to diagnose and repair, in sequence, ADK latency, non-structured output, output truncation and multimodal PDF latency. Only the green exact-candidate runs above are promoted as judge evidence.
+Failed Cloud proof iterations are also not counted as passes. They were used to diagnose and repair, in sequence, ADK latency, non-structured output, output truncation and multimodal PDF latency. Only green evidence is promoted here.
 
-## 6. Cost/deployment safety hardening
+## 7. Cost/deployment safety hardening
 
-Billable Cloud proofs are explicit opt-in operations. Ordinary commits must not deploy Cloud or spend Gemini quota.
+Billable Cloud proofs and the live recording are explicit opt-in operations. Ordinary commits must not deploy Cloud or spend Gemini quota.
 
-During the proof campaign, JUDGE identified a legacy `workflow_run` deployment path that could create a Cloud revision after an otherwise successful permission workflow. That automatic path was removed from `main`; the legacy workflow is now manual-only. The authoritative proof gates require explicit trigger files and freeze an exact candidate SHA before Cloud work.
+During the proof campaign, JUDGE identified a legacy `workflow_run` deployment path that could create a Cloud revision after an otherwise successful permission workflow. That automatic path was removed. The authoritative Cloud gates freeze an exact candidate SHA, and `.github/submission-demo-trigger.txt` was returned to `enabled=false` immediately after the passing recording.
 
-## 7. What is still missing
+## 8. What is still missing
 
-The technical hard gates are green. The remaining submission work is presentation evidence:
+The functional, architecture, Cloud, browser, cross-revision and video-content gates are green. The only remaining submission boundary is publication/locking:
 
-1. record the approximately four-minute **unedited** judge demo using the proven Cloud flow;
-2. publish/upload that final video;
-3. replace the video placeholder in `docs/DEVPOST_SUBMISSION.md`;
-4. run final CI + JUDGE on the exact submission head;
-5. merge/lock the candidate only after those steps.
+1. publish the proven judge video at the final stable judge-facing URL;
+2. place that exact URL in `docs/DEVPOST_SUBMISSION.md`;
+3. run final CI + JUDGE on the exact submission head;
+4. merge PR #29 and lock the submission only if everything remains green.
 
-Until that video/package exists, HealthIA should **not** claim `100/100` or `SUBMISSION_LOCKED`.
+Until the stable video URL is in the final package, HealthIA should **not** claim `100/100` or `SUBMISSION_LOCKED`.
