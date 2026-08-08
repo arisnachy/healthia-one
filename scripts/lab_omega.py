@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -88,8 +89,24 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
     checkpoint(f"login_{expected_lang}_pass")
 
 
+def _portable_cookie(cookie: dict) -> dict:
+    """Preserve the browser cookie exactly enough to prove cross-context continuity."""
+    out = {
+        "name": str(cookie["name"]),
+        "value": str(cookie["value"]),
+        "domain": str(cookie["domain"]),
+        "path": str(cookie.get("path") or "/"),
+        "httpOnly": bool(cookie.get("httpOnly", True)),
+        "secure": bool(cookie.get("secure", False)),
+        "sameSite": str(cookie.get("sameSite") or "Lax"),
+    }
+    expires = cookie.get("expires")
+    if isinstance(expires, (int, float)) and expires > 0:
+        out["expires"] = float(expires)
+    return out
+
+
 def register_and_export_session(browser: Browser, base_url: str, report: dict) -> dict:
-    """Register in the real UI, prove the session, then export its signed cookie."""
     checkpoint("register_start")
     context = browser.new_context(base_url=base_url, locale="en-US", viewport={"width": 1600, "height": 1000})
     page = context.new_page()
@@ -125,22 +142,13 @@ def register_and_export_session(browser: Browser, base_url: str, report: dict) -
     }
     report["outputs"]["post_register_session_authenticated"] = True
     checkpoint("registration_session_pass")
-
-    exported = {
-        "name": str(session_cookie["name"]),
-        "value": str(session_cookie["value"]),
-        "url": base_url,
-        "httpOnly": bool(session_cookie.get("httpOnly", True)),
-        "secure": False,
-        "sameSite": str(session_cookie.get("sameSite") or "Lax"),
-    }
+    exported = _portable_cookie(session_cookie)
     context.close()
     checkpoint("registration_context_closed")
     return exported
 
 
 def open_authenticated_context(browser: Browser, base_url: str, session_cookie: dict, report: dict) -> tuple[BrowserContext, Page]:
-    """Reopen HealthIA from the exact signed session in a clean browser context."""
     checkpoint("continuity_context_start")
     context = browser.new_context(
         base_url=base_url,
@@ -150,6 +158,8 @@ def open_authenticated_context(browser: Browser, base_url: str, session_cookie: 
         record_video_size={"width": 1280, "height": 800},
     )
     context.add_cookies([session_cookie])
+    restored = next((item for item in context.cookies(base_url) if item.get("name") == "healthia_session"), None)
+    require(restored is not None, "clean browser context did not retain restored signed cookie")
     checkpoint("continuity_cookie_restored")
 
     session = context.request.get("/api/auth/session", headers={"Accept-Language": "en-US"})
@@ -161,6 +171,7 @@ def open_authenticated_context(browser: Browser, base_url: str, session_cookie: 
     root_html = root_probe.text()
     require('id="app"' in root_html and 'id="chatInput"' in root_html, "authenticated root did not return HealthIA shell HTML")
     report["checks"]["authenticated_root_returns_real_shell"] = "pass"
+    report["outputs"]["api_root_sha256"] = hashlib.sha256(root_html.encode("utf-8")).hexdigest()
     checkpoint("authenticated_root_probe_pass")
 
     page = context.new_page()
@@ -168,9 +179,29 @@ def open_authenticated_context(browser: Browser, base_url: str, session_cookie: 
     started = time.monotonic()
     response = page.goto("/", wait_until="domcontentloaded", timeout=20_000)
     require(response is not None and response.status == 200, f"browser root navigation failed: {getattr(response, 'status', None)}")
+    browser_body = response.text()
+    request_cookie = response.request.header_value("cookie") or ""
+    report["outputs"]["browser_root_url"] = page.url
+    report["outputs"]["browser_root_status"] = response.status
+    report["outputs"]["browser_root_cookie_sent"] = "healthia_session=" in request_cookie
+    report["outputs"]["browser_root_contains_app_source"] = 'id="app"' in browser_body
+    report["outputs"]["browser_root_contains_chat_source"] = 'id="chatInput"' in browser_body
+    report["outputs"]["browser_root_sha256"] = hashlib.sha256(browser_body.encode("utf-8")).hexdigest()
+    report["outputs"]["browser_root_matches_api_probe"] = browser_body == root_html
+    report["outputs"]["dom_ready_state_after_navigation"] = page.evaluate("document.readyState")
+    report["outputs"]["dom_app_count_after_navigation"] = page.locator("#app").count()
+    report["outputs"]["dom_chat_count_after_navigation"] = page.locator("#chatInput").count()
+    if page.locator("#app").count() == 0:
+        (OUTPUT / "browser-root-source.html").write_text(browser_body, encoding="utf-8")
+        (OUTPUT / "browser-dom-after-navigation.html").write_text(page.content(), encoding="utf-8")
+        screenshot(page, "browser-dom-without-app")
+
+    require(report["outputs"]["browser_root_cookie_sent"] is True, "Chromium main navigation did not send healthia_session")
+    require(report["outputs"]["browser_root_contains_app_source"] is True, "Chromium main response did not contain HealthIA shell source")
+    require(report["outputs"]["browser_root_matches_api_probe"] is True, "Chromium main response differs from authenticated API root probe")
     require(page.url.rstrip("/") == base_url, f"authenticated navigation did not stay on app shell: {page.url}")
-    page.locator("#app").wait_for(state="attached", timeout=10_000)
-    page.locator("#chatInput").wait_for(state="visible", timeout=10_000)
+    page.locator("#app").wait_for(state="attached", timeout=5_000)
+    page.locator("#chatInput").wait_for(state="visible", timeout=5_000)
     report["outputs"]["authenticated_shell_ready_ms"] = int((time.monotonic() - started) * 1000)
     report["outputs"]["functional_page_url"] = page.url
     report["checks"]["authenticated_navigation_from_registered_session"] = "pass"
@@ -217,10 +248,10 @@ def verify_measurements(context: BrowserContext, page: Page, report: dict) -> No
     fill_and_save(page, "vital", {"systolic": "126", "diastolic": "78", "pulse": "72", "oxygen_saturation": "98"}, report)
     fill_and_save(page, "weight", {"weight_kg": "74.2", "note": "LAB Omega synthetic"}, report)
     fill_and_save(page, "activity", {"steps": "6842", "active_minutes": "42", "note": "LAB Omega synthetic"}, report)
-    state = api_json(context, "/api/bootstrap")
-    require(state["vitals"][-1]["systolic"] == 126 and state["vitals"][-1]["diastolic"] == 78, "blood pressure did not persist")
-    require(abs(float(state["weights"][-1]["weight_kg"]) - 74.2) < 0.001, "weight did not persist")
-    require(state["activity"][-1]["steps"] == 6842, "activity did not persist")
+    current = api_json(context, "/api/bootstrap")
+    require(current["vitals"][-1]["systolic"] == 126 and current["vitals"][-1]["diastolic"] == 78, "blood pressure did not persist")
+    require(abs(float(current["weights"][-1]["weight_kg"]) - 74.2) < 0.001, "weight did not persist")
+    require(current["activity"][-1]["steps"] == 6842, "activity did not persist")
     report["outputs"]["measurement_state_roundtrip"] = "pass"
     screenshot(page, "measurements-after-save")
     checkpoint("measurements_pass")
@@ -243,10 +274,10 @@ def verify_structured_result(context: BrowserContext, page: Page, report: dict) 
     require("LAB Omega metabolic panel" in card_text, "structured result panel missing")
     require("educational explanation" in card_text.lower(), "English result explanation missing")
     require("View original file" in card_text, "original-evidence link missing")
-    state = api_json(context, "/api/bootstrap")
-    result = state["results"][-1]
+    current = api_json(context, "/api/bootstrap")
+    result = current["results"][-1]
     require(result["status"] == "parsed" and len(result["items"]) == 2, "structured result did not persist")
-    require(state["documents"][-1]["related_result_id"] == result["id"], "original document not linked to result")
+    require(current["documents"][-1]["related_result_id"] == result["id"], "original document not linked to result")
     report["functions"]["structured_result_upload"] = "pass"
     report["outputs"]["english_result_explanation"] = "pass"
     report["outputs"]["result_original_provenance"] = "pass"
