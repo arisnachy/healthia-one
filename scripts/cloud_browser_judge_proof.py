@@ -231,7 +231,7 @@ def run() -> dict:
         page.wait_for_timeout(700)
         screenshot(page, "08-persisted-result.png")
 
-        page.locator('[data-open="chat"]').click()
+        page.locator('.main-nav [data-open="chat"]').click()
         page.locator("#chatInput").fill(f"Explícame el resultado {filename} que acabo de subir y confirma que quedó guardado.")
         page.locator("#sendButton").click()
         deadline = time.time() + 50

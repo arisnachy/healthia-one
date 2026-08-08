@@ -102,3 +102,9 @@ def test_real_cloud_browser_proof_checks_account_dom_and_vertex_truth() -> None:
     assert 'get_by_text(email, exact=True)' not in proof
     assert 'runtime label contradicts live AI readiness' in proof
     assert 'browser_runtime_label_matches_live_vertex_readiness' in proof
+
+
+def test_real_cloud_browser_navigation_is_unambiguous() -> None:
+    proof = (ROOT / "scripts" / "cloud_browser_judge_proof.py").read_text(encoding="utf-8")
+    assert "page.locator('.main-nav [data-open=\"chat\"]').click()" in proof
+    assert "page.locator('[data-open=\"chat\"]').click()" not in proof
