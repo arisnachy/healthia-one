@@ -1,0 +1,52 @@
+name: Candidate Cloud deployment permission readiness
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "deployment/check_cloud_permissions.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-permissions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloud-permissions:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'kira/event-driven-results-twin-p1' }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install permission-probe dependencies
+        run: python -m pip install --quiet google-auth requests
+
+      - name: Test deploy permissions without mutating Cloud
+        run: python deployment/check_cloud_permissions.py --project healthia-6088a --json-out deployment/cloud-permissions-latest.json
+
+      - name: Upload sanitized permission evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-cloud-permission-readiness
+          path: deployment/cloud-permissions-latest.json
+          if-no-files-found: warn
+          retention-days: 7
