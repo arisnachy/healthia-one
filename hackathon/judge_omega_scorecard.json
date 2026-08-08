@@ -2,7 +2,7 @@
   "schema_version": 1,
   "updated_at": "2026-08-08",
   "primary_track": "The Taskmaster",
-  "target_score": 95,
+  "target_score": 100,
   "official_rubric": {
     "innovation_operational_utility": 40,
     "architectural_discipline_tech_stack": 30,
@@ -42,7 +42,8 @@
         {"kind": "repo_path", "value": "scripts/live_taskmaster_proof.py"},
         {"kind": "repo_path", "value": "healthia_one/result_ai.py"},
         {"kind": "repo_path", "value": "healthia_one/twin.py"},
-        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"}
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
       ]
     },
     {
@@ -108,7 +109,17 @@
     },
     {
       "id": "four_minute_demo",
-      "label": "A tight unedited approximately four-minute demo proves the product and Cloud runtime",
+      "label": "A continuous approximately four-minute demo visibly proves the problem, value, product flow and Cloud runtime",
+      "status": "proven",
+      "blocker_if_not_proven": true,
+      "evidence": [
+        {"kind": "repo_path", "value": "scripts/record_submission_demo.py"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
+      ]
+    },
+    {
+      "id": "final_submission_video_url",
+      "label": "The proven demo is published at a stable judge-facing URL and inserted into the final Devpost package",
       "status": "missing",
       "blocker_if_not_proven": true,
       "evidence": []
@@ -120,14 +131,15 @@
       "label": "Innovation & Operational Utility",
       "max_points": 40,
       "awarded_points": 40,
-      "reason": "HealthIA demonstrates the complete Taskmaster proposition on the real deployed runtime: an adaptive Gemini 3.5 + Google ADK interview, evidence-first multimodal ingestion, durable result/twin state, deterministic retrieval, and a completed result_explanation mission with correlated result/document evidence. The unmocked browser proof shows the workflow end to end rather than only through API tests, and the cross-revision proof shows the outcome remains useful after process replacement.",
+      "reason": "HealthIA demonstrates the complete Taskmaster proposition on the real deployed runtime: adaptive Gemini 3.5 + Google ADK interviewing, evidence-first multimodal ingestion, durable result/twin state, deterministic retrieval, and a completed result_explanation mission with correlated result/document evidence. The unmocked browser and one-take demo proofs show the workflow end to end rather than only through API tests, while cross-revision verification shows the outcome remains useful after process replacement.",
       "evidence": [
         {"kind": "repo_path", "value": "healthia_one/adk_runtime.py"},
         {"kind": "repo_path", "value": "healthia_one/result_ai.py"},
         {"kind": "repo_path", "value": "healthia_one/result_search.py"},
         {"kind": "repo_path", "value": "healthia_one/twin.py"},
         {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
-        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"}
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
       ]
     },
     {
@@ -135,8 +147,10 @@
       "label": "Architectural Discipline & Tech Stack",
       "max_points": 30,
       "awarded_points": 30,
-      "reason": "The exact candidate now has evidence for every architecture boundary that was previously reserved: patient-scoped Firestore state, private GCS original evidence, Vertex AI through ADC, real ADK tool execution, separate build/runtime identities, fail-closed multimodal behavior, explicit billable Cloud opt-in gates, and cross-revision persistence with unchanged container image and unchanged GCS generation/SHA. A legacy automatic deploy path discovered during the proof campaign was retired so ordinary CI cannot silently create Cloud revisions.",
+      "reason": "The candidate has evidence for every core architecture boundary: patient-scoped Firestore state, private GCS original evidence, Vertex AI through ADC, real ADK tool execution, separate build/runtime identities, fail-closed multimodal behavior, explicit billable Cloud opt-in gates, and cross-revision persistence with unchanged evidence. ADK now uses the core package while Firestore/GCS clients are declared explicitly instead of installing an unused broad GCP extras bundle. A legacy automatic deploy path discovered during the proof campaign was retired so ordinary CI cannot silently create Cloud revisions.",
       "evidence": [
+        {"kind": "repo_path", "value": "pyproject.toml"},
+        {"kind": "repo_path", "value": "tests/test_dependency_boundaries.py"},
         {"kind": "repo_path", "value": "healthia_one/auth.py"},
         {"kind": "repo_path", "value": "healthia_one/adk_runtime.py"},
         {"kind": "repo_path", "value": "healthia_one/store.py"},
@@ -151,30 +165,32 @@
       "id": "demo_production_readiness",
       "label": "Demo & Production Readiness",
       "max_points": 30,
-      "awarded_points": 28,
-      "reason": "The repository now contains a reproducible deterministic release gate, strict exact-candidate Cloud Run/Vertex/Firestore/GCS proof, a full unmocked Chromium journey with zero console/page errors, persisted artifact metadata and a successful same-image cross-revision continuity proof. Two points remain deliberately withheld because the required final approximately four-minute unedited submission video and final Devpost URL/package have not yet been produced.",
+      "awarded_points": 29,
+      "reason": "The repository contains a reproducible release gate, strict exact-candidate Cloud proof, full unmocked Chromium verification, cross-revision continuity, and a passing continuous judge-demo artifact that visibly covers problem, value proposition, live Gemini/ADK interaction, multimodal evidence, mission completion, relogin continuity and the Cloud Run .run.app runtime. One point remains deliberately withheld until that proven video is published at the stable judge-facing URL used by the final Devpost submission and the final submission head is locked.",
       "evidence": [
         {"kind": "repo_path", "value": ".github/workflows/ci.yml"},
         {"kind": "repo_path", "value": "scripts/full_system_check.py"},
         {"kind": "repo_path", "value": "scripts/cloud_browser_judge_proof.py"},
+        {"kind": "repo_path", "value": "scripts/record_submission_demo.py"},
         {"kind": "repo_path", "value": "deployment/verify_cloud_demo.py"},
         {"kind": "repo_path", "value": "deployment/verify_cloud_revision_continuity.py"},
         {"kind": "repo_path", "value": "docs/DEMO_SCRIPT.md"},
         {"kind": "repo_path", "value": "hackathon/evidence/cloud_exact_candidate_proof.json"},
-        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"}
+        {"kind": "repo_path", "value": "hackathon/evidence/cloud_revision_continuity_proof.json"},
+        {"kind": "repo_path", "value": "hackathon/evidence/final_judge_demo_proof.json"}
       ]
     }
   ],
   "critical_blockers": [
     {
-      "id": "no_final_demo_package",
-      "statement": "All technical Cloud, browser and cross-revision hard gates are proven, but the final approximately four-minute unedited recording and final Devpost submission package are not yet locked.",
-      "evidence_needed": "Record the proven Cloud-backed Taskmaster flow in one tight take, visibly show the Cloud Run revision and evidence, publish/upload the final video, then replace the remaining final-submission placeholders."
+      "id": "final_video_not_published",
+      "statement": "The continuous judge demo exists and passed its Cloud/runtime/duration gates, but a stable judge-facing/public video URL has not yet been inserted into the final Devpost submission.",
+      "evidence_needed": "Publish the proven WebM (or an equivalent unchanged upload of it) at the final judge-facing video URL, insert that URL into docs/DEVPOST_SUBMISSION.md, then run final CI/JUDGE on the exact submission head and merge/lock the candidate."
     }
   ],
   "next_actions": [
-    "Update README, architecture, Devpost draft and demo script to reference the passing Cloud/browser and cross-revision evidence and remove stale claims.",
-    "Record the approximately four-minute unedited judge demo against the proven Cloud flow.",
-    "Replace the final video/submission placeholders, run final CI/JUDGE on the exact submission head, and only then merge/lock the candidate."
+    "Publish the passing one-take judge video at a stable judge-facing URL.",
+    "Replace the final video placeholder in docs/DEVPOST_SUBMISSION.md and README status with that exact URL.",
+    "Run final CI/JUDGE on the exact submission head, merge PR #29, and lock the submission only if all gates remain green."
   ]
 }
