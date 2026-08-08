@@ -1,0 +1,50 @@
+{
+  "status": "PASS",
+  "evidence_type": "cross_revision_continuity",
+  "captured_at": "2026-08-08",
+  "github_actions": {
+    "run_id": 31262903731,
+    "candidate_sha": "e01aa35b912def31bb4e68b95cb236582090b476",
+    "artifact_id": 9023298988,
+    "artifact_name": "healthia-cloud-revision-continuity-proof",
+    "artifact_digest": "sha256:4a30950483141ce55fa6f1256fa83998f0337a5e873576fa6f8598b111592263"
+  },
+  "runtime": {
+    "project": "healthia-6088a",
+    "service": "healthia-one-demo",
+    "cloud_run_url": "https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app",
+    "before_revision": "healthia-one-demo-00013-2bz",
+    "after_revision": "healthia-one-demo-00014-ns8",
+    "revision_changed": true,
+    "image": "us-central1-docker.pkg.dev/healthia-6088a/cloud-run-source-deploy/healthia-one-demo@sha256:afa770167e37f773634c5ba4b832c2d47067619af3bd6109ba14243c3b1eb88c",
+    "same_image_across_revision": true
+  },
+  "durability": {
+    "patient_ids_distinct": true,
+    "result_id": "result_3285633a7a3c",
+    "document_id": "doc_43a24130e938",
+    "mission_id": "mission_48a66326f4d4",
+    "mission_type": "result_explanation",
+    "mission_status": "completed",
+    "gcs_uri": "gs://healthia-6088a-healthia-evidence/patients/patient_77cf56c53d05465b9230f842116f234b/documents/doc_43a24130e938/revision-continuity-synthetic-lab.pdf",
+    "gcs_generation_before": "1786200596849354",
+    "gcs_generation_after": "1786200596849354",
+    "original_sha256_unchanged": true,
+    "checks": [
+      "new_cloud_run_revision_ready",
+      "patient_a_reauthenticated_after_revision",
+      "patient_a_longitudinal_state_persisted",
+      "multimodal_result_persisted_across_revision",
+      "original_gcs_object_generation_unchanged",
+      "original_evidence_bytes_unchanged",
+      "clinical_twin_provenance_persisted",
+      "completed_taskmaster_mission_persisted",
+      "patient_b_identity_persisted",
+      "two_patient_isolation_persisted_after_revision",
+      "cross_patient_document_denied_after_revision"
+    ]
+  },
+  "proof_harness": "deployment/verify_cloud_revision_continuity.py",
+  "private_state_uploaded": false,
+  "security_note": "The proof used private temporary credentials only inside the workflow. The uploaded/repository evidence contains no password, cookie or identity token."
+}

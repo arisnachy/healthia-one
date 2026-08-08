@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-08",
+  "status": "PASS",
+  "synthetic_only": true,
+  "public_url": "https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm",
+  "release_page": "https://github.com/arisnachy/healthia-one/releases/tag/healthia-one-hackathon-judge-demo-2026",
+  "release_tag": "healthia-one-hackathon-judge-demo-2026",
+  "source_recording_run_id": 31265639488,
+  "source_recording_artifact_id": 9024139098,
+  "source_candidate_sha": "3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e",
+  "video_sha256": "cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19",
+  "release_publication_proof": {
+    "workflow_run_id": 31267268584,
+    "workflow_head_sha": "c58a1ad8230a0bc5c58aa3436420ab4ff55c2efa",
+    "artifact_id": 9024528554,
+    "artifact_name": "HealthIA-ONE-GitHub-release-video-proof",
+    "artifact_digest": "sha256:281703f31d7a5a42bd28fdce18f455cfe46b91263304e1e9b8c2fbfbf62cb7d5",
+    "source_sha_verified": true,
+    "anonymous_download_verified": true,
+    "anonymous_download_sha256_match": true
+  },
+  "independent_public_probe": {
+    "workflow_run_id": 31267268597,
+    "workflow_head_sha": "c58a1ad8230a0bc5c58aa3436420ab4ff55c2efa",
+    "artifact_id": 9024526089,
+    "artifact_name": "HealthIA-ONE-public-video-probe",
+    "artifact_digest": "sha256:ff151da75a8809b4ac493b909f526dd484ef7c6e9248e4c7b11bb0e0569d06d7",
+    "authentication_required": false,
+    "full_video_sha256_match": true
+  },
+  "truth_boundary": "This proof establishes stable anonymous access to the exact synthetic WebM previously captured and validated. It does not change or expose the private clinical-evidence bucket."
+}

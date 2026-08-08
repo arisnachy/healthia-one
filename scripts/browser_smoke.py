@@ -4,7 +4,6 @@ import json
 import os
 import re
 from pathlib import Path
-from types import SimpleNamespace
 
 os.environ["HEALTHIA_STORE_BACKEND"] = "memory"
 os.environ["HEALTHIA_LLM_BACKEND"] = "mock"
@@ -15,9 +14,9 @@ from fastapi.testclient import TestClient
 from playwright.sync_api import sync_playwright
 
 from app.main import app, service
+from healthia_one.adk_gemini import AdkGeminiResponder
 from healthia_one.clinical_intake import ANSWER_PREFIX
 from healthia_one.config import Settings
-from healthia_one.gemini import GeminiResponder
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
@@ -67,20 +66,45 @@ def plan(stage: int) -> dict:
     }
 
 
-class FakeInteractions:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
+class BrowserResponder(AdkGeminiResponder):
+    """Deterministic browser fixture for the current ADK/Gemini patient contract.
 
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        payload = json.loads(kwargs["input"])
-        stage = int(payload.get("stage", 1))
-        return SimpleNamespace(outputs=[SimpleNamespace(text=json.dumps(plan(stage), ensure_ascii=False))])
+    The real provider/ADK trajectory is proven separately by the encrypted live
+    workflow. This fixture only proves that the browser renders the exact runtime
+    states that the current responder produces, without spending tokens in CI.
+    """
 
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        self.simulated_ai_steps = 0
 
-class FakeClient:
-    def __init__(self) -> None:
-        self.interactions = FakeInteractions()
+    def _generate_clinical_block(self, state, *, chief_complaint, stage, previous_answers):
+        self.simulated_ai_steps += 1
+        return plan(stage)
+
+    def _generate_clinical_resolution(self, state, *, chief_complaint, stage, answers):
+        self.simulated_ai_steps += 1
+        return {
+            "decision": "summarize",
+            "clinical_focus": "Orientar un cuadro urinario sin confirmar un diagnóstico",
+            "missing_information": [],
+            "decision_reason": "Los dos bloques ya reúnen suficiente contexto para orientar el siguiente paso sin otra ronda rutinaria.",
+            "patient_message": (
+                "Ya reuní lo necesario para orientarte con esta consulta. Por el patrón que describiste, una causa urinaria baja "
+                "es una posibilidad que un profesional puede valorar, pero esta conversación no confirma un diagnóstico. "
+                "Por ahora no aparecen en tus respuestas las señales de alarma seleccionadas en el formulario. Si surge fiebre alta, "
+                "dolor en el costado, vómitos persistentes, embarazo o un empeoramiento importante, busca valoración presencial con mayor prioridad. "
+                "Cuando hables con el profesional, cuéntale cuándo empezó, la frecuencia urinaria, los cambios visibles y cualquier medicamento usado."
+            ),
+            "possible_explanations": [
+                {
+                    "name": "Irritación o infección urinaria baja como posibilidad",
+                    "why_possible": "Ardor y aumento de frecuencia urinaria",
+                    "why_uncertain": "La conversación no sustituye examen ni pruebas clínicas",
+                }
+            ],
+            "care_level": "routine_professional",
+        }
 
 
 def answer_payload(interview: dict) -> str:
@@ -95,19 +119,18 @@ def answer_payload(interview: dict) -> str:
 
 
 def backend_fixture() -> tuple[dict, list[dict], int]:
-    fake_client = FakeClient()
-    service.gemini = GeminiResponder(
+    responder = BrowserResponder(
         Settings(
             llm_backend="gemini_api",
             store_backend="memory",
             cost_mode="guarded",
             ai_request_limit=4,
             cost_guard_start_enabled=True,
-            ai_max_output_tokens=900,
+            ai_max_output_tokens=1400,
             proactive_enabled=False,
-        ),
-        client_factory=lambda: fake_client,
+        )
     )
+    service.gemini = responder
     with TestClient(app) as client:
         client.post("/api/demo/reset").raise_for_status()
         bootstrap = client.get("/api/bootstrap").json()
@@ -123,7 +146,7 @@ def backend_fixture() -> tuple[dict, list[dict], int]:
             "/api/chat",
             json={"message": answer_payload(second["message"]["metadata"]["clinical_interview"])},
         ).json()
-    return bootstrap, [first, second, final], len(fake_client.interactions.calls)
+    return bootstrap, [first, second, final], responder.simulated_ai_steps
 
 
 def mock_script(bootstrap: dict, responses: list[dict]) -> str:
@@ -139,7 +162,7 @@ window.fetch = async function(path, options={{}}) {{
   const url=String(path);
   if(url.includes('/api/readiness')) return new MockResponse({{ready:true,llm_backend:'gemini_api',model:'gemini-3.6-flash',ai_ready:true,adk_ready:true}});
   if(url.includes('/api/bootstrap')) return new MockResponse(window.__mockSnapshot);
-  if(url.includes('/api/cost-control')) return new MockResponse({{mode:'guarded',enabled:true,requests_used:2,requests_remaining:2,request_limit:4,max_output_tokens:900,llm_backend:'gemini_api',model:'gemini-3.6-flash',api_key_configured:true,ui_control_available:true}});
+  if(url.includes('/api/cost-control')) return new MockResponse({{mode:'guarded',enabled:true,requests_used:3,requests_remaining:1,request_limit:4,max_output_tokens:1400,llm_backend:'gemini_api',model:'gemini-3.6-flash',api_key_configured:true,ui_control_available:true}});
   if(url.includes('/api/integrations/providers')) return new MockResponse({{providers:[]}});
   if(url.includes('/api/demo/tick')) return new MockResponse({{created:0,messages:[]}});
   if(url.includes('/api/demo/reset')) return new MockResponse({{reset:true,patient_id:'patient_demo'}});
@@ -148,10 +171,10 @@ window.fetch = async function(path, options={{}}) {{
     const patient={{id:'browser_patient_'+Date.now()+'_'+window.__mockChatIndex,patient_id:'patient_demo',role:'patient',author:window.__mockSnapshot.profile.display_name,content:payload.message,created_at:new Date().toISOString(),risk_level:'info',mission_id:null,agent_plan:[],metadata:{{}}}};
     const response=window.__mockChatResponses[window.__mockChatIndex++];
     window.__mockSnapshot.messages.push(patient,response.message);
-    if(response.mission) window.__mockSnapshot.missions.push(response.mission);
-    if(response.message?.metadata?.clinical_interview?.status==='completed') {{
-      const mission=window.__mockSnapshot.missions.find(item=>item.id===response.message.mission_id);
-      if(mission) {{ mission.status='waiting_professional'; mission.next_action='Revisar la síntesis clínica y confirmar el nivel de atención con un profesional'; mission.closure_evidence=['interview_two_blocks_completed']; }}
+    if(response.mission) {{
+      const missionIndex=window.__mockSnapshot.missions.findIndex(item=>item.id===response.mission.id);
+      if(missionIndex>=0) window.__mockSnapshot.missions[missionIndex]=response.mission;
+      else window.__mockSnapshot.missions.push(response.mission);
     }}
     setTimeout(() => window.__mockEventSource?.onmessage?.({{data: JSON.stringify({{type:'state',section:'chat'}})}}), 0);
     return new MockResponse(response);
@@ -167,16 +190,38 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def reveal_and_answer(block) -> None:
+    require(block.locator(".clinical-question").count() == 5, "dynamic clinical block is not exactly five questions")
+    require(block.locator(".clinical-question:visible").count() == 2, "progressive block must begin with exactly two visible questions")
+    reveal = block.locator(".clinical-show-all")
+    require(reveal.is_visible(), "progressive 2+3 continuation control is missing")
+    reveal.click()
+    require(block.locator(".clinical-question:visible").count() == 5, "remaining three questions were not revealed")
+    for field in block.locator(".clinical-question").all():
+        field.locator(".clinical-option").first.click()
+    submit = block.locator(".clinical-submit")
+    require(submit.is_visible(), "clinical submit did not become visible after progressive reveal")
+    submit.click()
+
+
 def run() -> dict:
-    bootstrap, responses, model_calls = backend_fixture()
-    require(model_calls == 2, f"expected two model calls, found {model_calls}")
+    bootstrap, responses, simulated_ai_steps = backend_fixture()
+    require(simulated_ai_steps == 3, f"expected two question generations plus one resolution, found {simulated_ai_steps}")
     require(all(item["message"]["metadata"].get("question_source") == "gemini_dynamic" for item in responses[:2]), "dynamic question source missing")
+    require(responses[2]["message"]["metadata"].get("llm_status") == "clinical_ai_orientation_completed", "patient orientation state missing")
+    final_mission = responses[2].get("mission") or {}
+    require(final_mission.get("status") == "waiting_professional", "backend did not return updated existing mission")
+    require(
+        final_mission.get("next_action") == "Revisar la orientación con un profesional y actualizar HealthIA con el resultado",
+        "backend mission response carries stale next action",
+    )
+    require("ai_clinical_orientation_generated" in (final_mission.get("closure_evidence") or []), "backend mission response lost AI orientation evidence")
 
     html = (WEB / "index.html").read_text(encoding="utf-8")
     html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", html)
     html = re.sub(r'<script[^>]+src="/assets/[^"]+"[^>]*></script>', "", html)
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    report: dict = {"status": "PASS", "model_calls": model_calls, "console_errors": [], "page_errors": [], "checks": {}}
+    report: dict = {"status": "PASS", "simulated_ai_steps": simulated_ai_steps, "console_errors": [], "page_errors": [], "checks": {}}
 
     with sync_playwright() as playwright:
         launch: dict = {"headless": True, "args": ["--no-sandbox"]}
@@ -186,7 +231,7 @@ def run() -> dict:
         elif Path("/usr/bin/chromium").exists():
             launch["executable_path"] = "/usr/bin/chromium"
         browser = playwright.chromium.launch(**launch)
-        page = browser.new_page(viewport={"width": 1600, "height": 900})
+        page = browser.new_page(viewport={"width": 1600, "height": 900}, locale="en-US")
         page.on("console", lambda message: report["console_errors"].append(message.text) if message.type == "error" else None)
         page.on("pageerror", lambda error: report["page_errors"].append(str(error)))
         page.set_content(html, wait_until="domcontentloaded")
@@ -215,9 +260,10 @@ def run() -> dict:
 
         require(page.locator("#accountPill strong").inner_text() == "Ana Martínez", "patient identity not consolidated")
         require(page.locator(".patient-chip").count() == 0, "duplicate identity remains")
+        require(page.locator("html").get_attribute("lang") == "en", "en-US browser locale did not render the English shell")
         page.locator("#collapseLeft").click()
         page.wait_for_timeout(150)
-        require(page.locator(".main-nav button:visible").count() == 6, "collapsed navigation lost icons")
+        require(page.locator(".main-nav button:visible").count() == 6, "collapsed navigation lost core destinations")
         require(page.locator("#newConsultation:visible").count() == 1, "collapsed new-consultation control missing")
         page.screenshot(path=str(OUTPUT / "02-collapsed.png"), full_page=True)
         page.locator("#expandLeft").click()
@@ -228,28 +274,23 @@ def run() -> dict:
         first_block = page.locator(".clinical-question-block").last
         require(first_block.locator(".clinical-question").count() == 5, "first dynamic block does not have five questions")
         require(first_block.bounding_box() and first_block.bounding_box()["height"] > 100, "first block is not visible")
-        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Gemini · preguntas adaptativas", "dynamic source badge missing")
+        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Questions created for this case", "patient-natural dynamic source badge missing")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after fast response")
         page.screenshot(path=str(OUTPUT / "03-dynamic-block.png"), full_page=True)
 
-        for field in first_block.locator(".clinical-question").all():
-            field.locator(".clinical-option").first.click()
-        first_block.locator(".clinical-submit").click()
+        reveal_and_answer(first_block)
         page.wait_for_function("window.__mockChatIndex >= 2")
         page.wait_for_timeout(350)
         second_block = page.locator(".clinical-question-block").last
         require(second_block.get_attribute("data-stage") == "2", "second block did not render")
-        require(second_block.locator(".clinical-question").count() == 5, "second dynamic block does not have five questions")
-
-        for field in second_block.locator(".clinical-question").all():
-            field.locator(".clinical-option").first.click()
-        second_block.locator(".clinical-submit").click()
+        reveal_and_answer(second_block)
         page.wait_for_function("window.__mockChatIndex >= 3")
         page.wait_for_timeout(350)
-        require(page.get_by_text("Síntesis para la junta clínica").count() > 0, "final clinical summary is missing")
-        require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final summary lost readable question labels")
-        require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient summary")
-        require(page.get_by_text("Revisar la síntesis clínica y confirmar el nivel de atención con un profesional").count() > 0, "mission card remained stale after completion")
+        require(page.get_by_text("Ya reuní lo necesario para orientarte con esta consulta.", exact=False).count() > 0, "Spanish patient-facing clinical orientation is missing after Spanish input")
+        require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final transcript lost readable question labels")
+        require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient transcript")
+        require(page.get_by_text("Revisar la orientación con un profesional y actualizar HealthIA con el resultado").count() > 0, "mission card remained stale after AI orientation")
+        require(page.locator(".action-receipt").count() > 0, "visible action receipt was not rendered")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after completion")
         require(not report["console_errors"] and not report["page_errors"], "browser emitted errors")
         page.screenshot(path=str(OUTPUT / "04-final.png"), full_page=True)
@@ -257,14 +298,19 @@ def run() -> dict:
 
     report["checks"] = {
         "single_identity": "pass",
+        "english_shell_locale": "pass",
+        "spanish_input_preserves_spanish_clinical_content": "pass",
         "collapsed_navigation": "pass",
         "first_message_visible": "pass",
         "dynamic_question_source": "pass",
         "two_five_question_blocks": "pass",
+        "progressive_two_plus_three_presentation": "pass",
         "pending_race_removed": "pass",
-        "final_summary": "pass",
-        "readable_summary_labels": "pass",
-        "mission_state_refresh": "pass",
+        "canonical_mission_returned": "pass",
+        "mission_upsert_without_sse_race": "pass",
+        "patient_facing_orientation": "pass",
+        "visible_action_receipt": "pass",
+        "readable_transcript_labels": "pass",
     }
     (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report

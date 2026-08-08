@@ -5,8 +5,8 @@ param(
     [switch]$StartEnabled,
     [switch]$LiveProbe,
     [switch]$SkipApiCheck,
-    [ValidateRange(1, 100)][int]$RequestLimit = 10,
-    [ValidateRange(64, 4096)][int]$MaxOutputTokens = 700,
+    [ValidateRange(1, 100)][int]$RequestLimit = 12,
+    [ValidateRange(256, 4096)][int]$MaxOutputTokens = 1400,
     [int]$Port = 8000,
     [string]$Model = "gemini-3.6-flash"
 )
@@ -41,6 +41,19 @@ if ($LiveProbe -and -not $useGuardedAi) {
     throw "-LiveProbe requiere -GuardedAi porque realiza una llamada real y potencialmente facturable."
 }
 
+function Ensure-LocalSecret([string]$Path) {
+    if (-not (Test-Path $Path)) {
+        $parent = Split-Path -Parent $Path
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        $bytes = New-Object byte[] 48
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+        $secret = [Convert]::ToBase64String($bytes)
+        [System.IO.File]::WriteAllText($Path, $secret, $utf8)
+    }
+    return [System.IO.File]::ReadAllText($Path, $utf8).Trim()
+}
+
 $secureKey = $null
 $bstr = [IntPtr]::Zero
 $plainKey = $null
@@ -54,13 +67,19 @@ try {
     $env:HEALTHIA_ENV = "local"
     $env:HEALTHIA_STORE_BACKEND = "json"
     $env:HEALTHIA_DATA_PATH = ".healthia-one/state.json"
+    $env:HEALTHIA_ACCOUNTS_PATH = ".healthia-one/accounts.json"
+    $env:HEALTHIA_AUTH_REQUIRED = "true"
+    $env:HEALTHIA_ALLOW_REGISTRATION = "true"
+    $env:HEALTHIA_SESSION_SECRET = Ensure-LocalSecret (Join-Path $projectRoot ".healthia-one\session-secret")
+    $env:HEALTHIA_DEVICE_TOKEN_SECRET = Ensure-LocalSecret (Join-Path $projectRoot ".healthia-one\device-token-secret")
     $env:HEALTHIA_PROACTIVE_INTERVAL_SECONDS = "20"
+    $env:HEALTHIA_PROACTIVE_ENABLED = "false"
     $env:HEALTHIA_COST_CONTROL_UI = "true"
 
     if ($useGuardedAi) {
         $plainKey = $env:GEMINI_API_KEY
         if ([string]::IsNullOrWhiteSpace($plainKey)) {
-            $secureKey = Read-Host "Gemini API key (entrada protegida)" -AsSecureString
+            $secureKey = Read-Host "Gemini API key (entrada protegida; no se guarda en el repo)" -AsSecureString
             $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
             $plainKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
         }
@@ -73,7 +92,6 @@ try {
         $env:GEMINI_API_KEY = $plainKey
         $env:HEALTHIA_COST_MODE = "guarded"
         $env:HEALTHIA_AI_MAX_OUTPUT_TOKENS = "$MaxOutputTokens"
-        $env:HEALTHIA_PROACTIVE_ENABLED = "false"
         Remove-Item Env:GOOGLE_API_KEY -ErrorAction SilentlyContinue
 
         if ($LiveProbe) {
@@ -90,8 +108,9 @@ try {
 
         $env:HEALTHIA_AI_REQUEST_LIMIT = "$remainingLimit"
         $env:HEALTHIA_COST_GUARD_START_ENABLED = if ($StartEnabled -and $remainingLimit -gt 0) { "true" } else { "false" }
-        Write-Host "HealthIA ONE - Google AI configurado pero protegido" -ForegroundColor Cyan
+        Write-Host "HealthIA ONE - Google AI configurado y protegido" -ForegroundColor Cyan
         Write-Host "Limite duro restante: $remainingLimit solicitudes; salida maxima: $MaxOutputTokens tokens." -ForegroundColor Cyan
+        Write-Host "Preguntas clinicas: Gemini + Google ADK; no se mostraran bloques precargados si la IA falla." -ForegroundColor Cyan
         if (-not $StartEnabled) {
             Write-Host "El interruptor inicia APAGADO. Activalo desde Control de costos cuando quieras probar." -ForegroundColor Green
         }
@@ -102,12 +121,13 @@ try {
         $env:HEALTHIA_AI_REQUEST_LIMIT = "0"
         $env:HEALTHIA_COST_GUARD_START_ENABLED = "false"
         $env:HEALTHIA_AI_MAX_OUTPUT_TOKENS = "$MaxOutputTokens"
-        $env:HEALTHIA_PROACTIVE_ENABLED = "true"
         Remove-Item Env:GEMINI_API_KEY -ErrorAction SilentlyContinue
         Remove-Item Env:GOOGLE_API_KEY -ErrorAction SilentlyContinue
         Write-Host "HealthIA ONE - LOCAL SEGURO - cero llamadas a Google AI" -ForegroundColor Green
+        Write-Host "Los bloques clinicos no fingiran ser IA: si Gemini no esta activo, se mostrara el estado no disponible." -ForegroundColor DarkGreen
     }
 
+    Write-Host "Cuenta del paciente: login/logout ACTIVOS; crea tu cuenta en la primera apertura." -ForegroundColor Green
     Write-Host "Navegador en esta PC: http://127.0.0.1:$Port" -ForegroundColor Green
     try {
         $lanAddresses = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
@@ -139,6 +159,11 @@ finally {
     Remove-Item Env:HEALTHIA_ENV -ErrorAction SilentlyContinue
     Remove-Item Env:HEALTHIA_STORE_BACKEND -ErrorAction SilentlyContinue
     Remove-Item Env:HEALTHIA_DATA_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:HEALTHIA_ACCOUNTS_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:HEALTHIA_AUTH_REQUIRED -ErrorAction SilentlyContinue
+    Remove-Item Env:HEALTHIA_ALLOW_REGISTRATION -ErrorAction SilentlyContinue
+    Remove-Item Env:HEALTHIA_SESSION_SECRET -ErrorAction SilentlyContinue
+    Remove-Item Env:HEALTHIA_DEVICE_TOKEN_SECRET -ErrorAction SilentlyContinue
     Remove-Item Env:HEALTHIA_PROACTIVE_INTERVAL_SECONDS -ErrorAction SilentlyContinue
     Remove-Item Env:HEALTHIA_PROACTIVE_ENABLED -ErrorAction SilentlyContinue
     Remove-Item Env:HEALTHIA_COST_MODE -ErrorAction SilentlyContinue

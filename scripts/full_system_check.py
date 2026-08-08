@@ -14,29 +14,11 @@ os.environ["HEALTHIA_AI_REQUEST_LIMIT"] = "0"
 from fastapi.testclient import TestClient
 
 from app.main import app
-from healthia_one.clinical_intake import ANSWER_PREFIX
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
-
-
-def answers_for(interview: dict) -> str:
-    questions = interview["question_block"]["questions"]
-    answers = [
-        {
-            "question_id": question["id"],
-            "question_prompt": question["prompt"],
-            "selected": [question["options"][0]],
-            "detail": "",
-        }
-        for question in questions
-    ]
-    return ANSWER_PREFIX + json.dumps(
-        {"interview_id": interview["id"], "stage": interview["stage"], "answers": answers},
-        ensure_ascii=False,
-    )
 
 
 def check(response, label: str, expected: int = 200):
@@ -53,6 +35,8 @@ def run() -> dict:
         readiness = check(client.get("/api/readiness"), "readiness")
         require(readiness["cost_control"]["mode"] == "local", "local cost mode not active")
         require(readiness["cost_control"]["enabled"] is False, "AI should start disabled")
+        require(readiness["agent_execution"] == "demand_driven", "runtime is not demand driven")
+        require(readiness["proactive_enabled"] is False, "permanent proactive loop must stay disabled")
         checks["startup_and_cost_guard"] = "pass"
 
         initial = check(client.get("/api/bootstrap"), "bootstrap")
@@ -60,28 +44,25 @@ def run() -> dict:
         require(initial["vitals"] and initial["weights"] and initial["activity"], "seed continuity missing")
         checks["bootstrap_continuity"] = "pass"
 
+        # Mock/local mode must never fabricate the adaptive interview. It may
+        # recognize the consultation and create the interview/memory shell, but
+        # only live Gemini + ADK is allowed to populate the five questions.
         first = check(
             client.post("/api/chat", json={"message": "Desde ayer me arde al orinar y tengo que ir al baño a cada rato"}),
-            "clinical block 1",
+            "clinical AI-required shell",
         )
-        interview1 = first["message"]["metadata"]["clinical_interview"]
-        require(len(interview1["question_block"]["questions"]) == 5, "block 1 must have five questions")
-        require(first["message"]["metadata"]["question_source"] == "safe_fallback", "local fallback must be explicit")
-
-        second = check(client.post("/api/chat", json={"message": answers_for(interview1)}), "clinical block 2")
-        interview2 = second["message"]["metadata"]["clinical_interview"]
-        require(interview2["chief_complaint"].startswith("Desde ayer me arde"), "chief complaint was lost")
-        require(len(interview2["question_block"]["questions"]) == 5, "block 2 must have five questions")
-
-        final = check(client.post("/api/chat", json={"message": answers_for(interview2)}), "clinical completion")
-        require(final["message"]["metadata"]["clinical_interview"]["status"] == "completed", "interview did not complete")
-        require("Desde ayer me arde al orinar" in final["message"]["content"], "final summary lost complaint")
-        require("Las áreas clínicas necesarias" in final["message"]["content"], "final summary overclaims council")
+        interview = first["message"]["metadata"]["clinical_interview"]
+        require(interview["stage"] == 1, "clinical interview did not open at stage 1")
+        require(interview["chief_complaint"].startswith("Desde ayer me arde"), "chief complaint was lost")
+        require(interview["question_block"]["questions"] == [], "mock mode fabricated clinical questions")
+        require(interview["question_block"]["generation_required"] is True, "AI generation requirement missing")
+        require(first["message"]["metadata"]["llm_status"] == "clinical_safe_fallback_not_configured", "mock truth boundary not explicit")
+        require(first["message"]["metadata"]["question_source"] == "safe_fallback", "fallback provenance missing")
+        require(len(first["message"]["agent_plan"]) <= 4, "demand-driven clinical shell activated too many areas")
         after_clinical = check(client.get("/api/bootstrap"), "post-clinical bootstrap")
         mission = next(item for item in after_clinical["missions"] if item["id"] == first["mission"]["id"])
-        require(mission["status"] == "waiting_professional", "mission state did not advance")
-        require(mission["closure_evidence"] == ["interview_two_blocks_completed"], "closure evidence missing")
-        checks["clinical_closed_loop"] = "pass"
+        require(mission["status"] == "waiting_patient", "AI-required mission should remain open for patient/AI interaction")
+        checks["clinical_no_fake_ai_boundary"] = "pass"
 
         urgent = check(
             client.post("/api/chat", json={"message": "Tengo dolor fuerte en el pecho y no puedo respirar"}),
@@ -108,6 +89,7 @@ def run() -> dict:
             "structured result",
         )
         require(parsed_result["status"] == "parsed" and parsed_result["explained"] is True, "result was not parsed")
+        require(parsed_result["original_available"] is True and parsed_result["twin_updated"] is True, "result provenance/twin link missing")
         pending_result = check(
             client.post(
                 "/api/results/upload",
@@ -116,6 +98,7 @@ def run() -> dict:
             "unread pdf",
         )
         require(pending_result["status"] == "pending_multimodal", "PDF truth boundary failed")
+        require(pending_result["original_available"] is True, "unread PDF original was not preserved")
         checks["results_truth_boundary"] = "pass"
 
         document = check(
@@ -219,6 +202,7 @@ def run() -> dict:
             "health connect sync",
         )
         require(sync["accepted"] == 1, "device record not accepted")
+        require(sync["device_identity_verified"] is True, "device identity was not verified")
         checks["device_pairing_and_sync"] = "pass"
 
         consent = check(client.get("/api/consent"), "consent")
@@ -239,9 +223,9 @@ def run() -> dict:
 
         first_tick = check(client.post("/api/demo/tick"), "proactive tick 1")
         second_tick = check(client.post("/api/demo/tick"), "proactive tick 2")
-        require(first_tick["created"] >= 1, "proactive check produced no work")
-        require(second_tick["created"] == 0, "proactive check is not idempotent")
-        checks["proactive_idempotency"] = "pass"
+        require(first_tick["created"] >= 1, "explicit continuity review produced no work")
+        require(second_tick["created"] == 0, "explicit continuity review is not idempotent")
+        checks["explicit_continuity_review_idempotency"] = "pass"
 
     return {"status": "PASS", "check_count": len(checks), "checks": checks}
 

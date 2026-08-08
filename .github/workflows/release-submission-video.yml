@@ -1,0 +1,132 @@
+name: Publish verified judge video as GitHub Release
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  gate:
+    name: GitHub Release video publication opt-in gate
+    runs-on: ubuntu-22.04
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q '^enabled=true$' .github/submission-publish-trigger.txt; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'Release publication disabled; no GitHub Release mutation attempted.'
+          fi
+
+  publish-and-prove:
+    name: Publish exact WebM release asset and prove anonymous SHA
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    env:
+      TAG: healthia-one-hackathon-judge-demo-2026
+      VIDEO_NAME: HealthIA-ONE-final-judge-demo.webm
+      ARTIFACT_ID: '9024139098'
+      SOURCE_RUN_ID: '31265639488'
+      SOURCE_CANDIDATE_SHA: 3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e
+      EXPECTED_VIDEO_SHA256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Recover exact verified WebM from passing artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/healthia-release/unpacked
+          curl --fail --location --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o /tmp/healthia-release/artifact.zip
+          unzip -q /tmp/healthia-release/artifact.zip -d /tmp/healthia-release/unpacked
+          video="$(find /tmp/healthia-release/unpacked -type f -name '*.webm' -print -quit)"
+          test -n "$video"
+          cp "$video" "/tmp/healthia-release/${VIDEO_NAME}"
+          actual="$(sha256sum "/tmp/healthia-release/${VIDEO_NAME}" | awk '{print $1}')"
+          echo "source_video_sha256=$actual"
+          test "$actual" = "$EXPECTED_VIDEO_SHA256"
+          python - <<'PY'
+          import json, pathlib
+          reports=list(pathlib.Path('/tmp/healthia-release/unpacked').rglob('report.json'))
+          assert reports, 'recording report missing'
+          report=json.loads(reports[0].read_text(encoding='utf-8'))
+          assert report.get('status') == 'PASS', report
+          assert report.get('synthetic_only') is True, report
+          assert report.get('video_sha256') == 'cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19', report
+          print('HEALTHIA_RELEASE_SOURCE_VERIFIED')
+          PY
+
+      - name: Create or update public judge-demo release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title 'HealthIA ONE — All Things Agentic Judge Demo' \
+              --notes 'Continuous synthetic-data judge demo proven by GitHub Actions run 31265639488. Gemini 3.5 Flash on Vertex AI, Google ADK, Firestore, private GCS, multimodal result workflow, durable Taskmaster mission and Cloud readiness are shown. Video SHA-256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19.' \
+              --latest=false
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_CANDIDATE_SHA" \
+              --title 'HealthIA ONE — All Things Agentic Judge Demo' \
+              --notes 'Continuous synthetic-data judge demo proven by GitHub Actions run 31265639488. Gemini 3.5 Flash on Vertex AI, Google ADK, Firestore, private GCS, multimodal result workflow, durable Taskmaster mission and Cloud readiness are shown. Video SHA-256: cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19.'
+          fi
+          gh release upload "$TAG" "/tmp/healthia-release/${VIDEO_NAME}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Prove stable release asset is anonymously readable and byte-identical
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${VIDEO_NAME}"
+          export PUBLIC_VIDEO_URL="$url"
+          echo "PUBLIC_VIDEO_URL=$url" >> "$GITHUB_ENV"
+          curl --fail --location --silent --show-error "$url" -o /tmp/healthia-release/public.webm
+          actual="$(sha256sum /tmp/healthia-release/public.webm | awk '{print $1}')"
+          echo "anonymous_release_sha256=$actual"
+          test "$actual" = "$EXPECTED_VIDEO_SHA256"
+          mkdir -p dist/release-video-proof
+          python - <<'PY'
+          import json, os, pathlib
+          payload={
+            'status':'PASS',
+            'public_url':os.environ['PUBLIC_VIDEO_URL'],
+            'anonymous_access':True,
+            'video_sha256':os.environ['EXPECTED_VIDEO_SHA256'],
+            'source_artifact_id':9024139098,
+            'source_run_id':31265639488,
+            'source_candidate_sha':'3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e',
+            'release_tag':'healthia-one-hackathon-judge-demo-2026',
+          }
+          pathlib.Path('dist/release-video-proof/proof.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          print(json.dumps(payload, indent=2))
+          PY
+
+      - name: Upload release publication proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-ONE-GitHub-release-video-proof
+          path: dist/release-video-proof/proof.json
+          if-no-files-found: error
+          retention-days: 30

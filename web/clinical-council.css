@@ -18,6 +18,7 @@
 .clinical-stage { flex: 0 0 auto; border-radius: 999px; padding: 5px 8px; background: var(--slate-soft); color: var(--slate-dark); font-size: 8px; font-weight: 800; }
 .clinical-questions { display: grid; gap: 10px; }
 .clinical-question { margin: 0; min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+.clinical-question[hidden] { display: none !important; }
 .clinical-question legend { width: 100%; padding: 0; color: var(--ink); font-size: 11px; font-weight: 760; line-height: 1.45; }
 .clinical-options { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .clinical-option { position: relative; display: inline-flex; align-items: center; }
@@ -27,15 +28,24 @@
 .clinical-option input:checked + span { border-color: var(--slate); background: var(--slate-soft); color: var(--slate-dark); font-weight: 760; }
 .clinical-detail { width: 100%; margin-top: 9px; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; color: var(--ink); background: #fff; font-size: 10px; outline: 0; }
 .clinical-detail:focus { border-color: #a9b9cc; box-shadow: 0 0 0 3px var(--slate-soft); }
+.clinical-progress-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 11px; padding: 9px 10px; border-radius: 12px; background: var(--surface-soft); }
+.clinical-progress-copy { color: var(--muted); font-size: 9px; }
+.clinical-show-all { border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; background: #fff; color: var(--slate-dark); font-size: 9px; font-weight: 760; cursor: pointer; }
+.clinical-show-all:hover { background: var(--slate-soft); }
 .clinical-form-error { margin: 9px 0 0; color: var(--danger); font-size: 9px; }
 .clinical-submit-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .clinical-submit { border: 0; border-radius: 11px; padding: 9px 13px; background: var(--slate-dark); color: #fff; font-size: 10px; font-weight: 780; }
+.clinical-submit[hidden] { display: none !important; }
 .clinical-submit:disabled { opacity: .55; cursor: wait; }
 .council-summary { margin-top: 10px; border: 1px solid var(--line); border-radius: 13px; overflow: hidden; }
 .council-summary summary { cursor: pointer; padding: 9px 11px; background: var(--surface-soft); color: var(--slate-dark); font-size: 9px; font-weight: 800; }
 .council-member { display: grid; grid-template-columns: 132px minmax(0,1fr); gap: 9px; padding: 8px 11px; border-top: 1px solid var(--line); }
 .council-member strong { color: var(--slate-dark); font-size: 9px; }
 .council-member span { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.action-receipt { display: grid; gap: 4px; margin-top: 10px; padding: 10px 12px; border: 1px solid #dbe4ec; border-radius: 13px; background: #f8fafc; }
+.action-receipt strong { color: var(--slate-dark); font-size: 9px; letter-spacing: .01em; }
+.action-receipt span { color: #46536a; font-size: 9px; line-height: 1.45; }
+.action-receipt small { color: var(--muted); font-size: 8px; line-height: 1.4; }
 .chat-pending .avatar { animation: healthia-pulse 1s infinite alternate; }
 .chat-pending .message-body { color: var(--muted); }
 .chat-pending-dots::after { content: ""; display: inline-block; width: 18px; animation: pending-dots 1.3s steps(4,end) infinite; }
@@ -45,7 +55,8 @@
 .patient-chip { display: none !important; }
 .user-pill { margin-top: auto; }
 
-/* ChatGPT-style collapsed rail: every primary destination remains visible. */
+/* ChatGPT-style collapsed rail: keep the six core destinations immediately
+   reachable while the expanded rail retains every advanced health workspace. */
 @media (min-width: 761px) {
   .left-collapsed .left-rail {
     align-items: center;
@@ -72,6 +83,9 @@
     border-radius: 12px;
     visibility: visible !important;
     opacity: 1 !important;
+  }
+  .left-collapsed .main-nav button:nth-child(n + 7) {
+    display: none !important;
   }
   .left-collapsed .left-rail-scroll {
     display: flex !important;
@@ -142,6 +156,8 @@
   .clinical-question-block { padding: 11px; }
   .clinical-options { display: grid; grid-template-columns: 1fr; }
   .clinical-option span { width: 100%; border-radius: 11px; }
+  .clinical-progress-row { align-items: stretch; flex-direction: column; }
+  .clinical-show-all { width: 100%; }
   .council-member { grid-template-columns: 1fr; }
 }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from healthia_one.continuity import build_timeline, consultation_brief, medication_summary
 from healthia_one.family import describe_genogram, family_summary
 from healthia_one.models import (
@@ -11,11 +13,29 @@ from healthia_one.models import (
     PatientState,
     RiskLevel,
 )
+from healthia_one.result_search import conversational_result_context
 from healthia_one.safety import assess_text
+
+
+_RESULT_PHRASES = (
+    "resultado", "laboratorio", "analítica", "analitica", "análisis", "analisis",
+    "tomografía", "tomografia", "resonancia", "sonografía", "sonografia",
+    "ecografía", "ecografia", "ultrasonido", "electrocardiograma",
+    "radiografía", "radiografia", "biopsia",
+)
+_RESULT_TOKENS = {"tac", "tc", "ct", "mri", "rm", "ecg", "ekg", "rx", "xray"}
 
 
 def _plan(*steps: tuple[str, str, str]) -> list[AgentStep]:
     return [AgentStep(agent=agent, action=action, reason=reason, status="completed") for agent, action, reason in steps]
+
+
+def _mentions_result(text: str) -> bool:
+    lower = text.lower()
+    if any(phrase in lower for phrase in _RESULT_PHRASES):
+        return True
+    tokens = set(re.findall(r"[a-záéíóúñ0-9]+", lower))
+    return bool(tokens & _RESULT_TOKENS)
 
 
 def respond(state: PatientState, patient_text: str) -> ChatResponse:
@@ -142,6 +162,44 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             agent_plan=plan,
         )
         action_target = "family"
+    elif _mentions_result(patient_text):
+        plan = _plan(
+            ("LUMEN", "Recuperar y explicar la evidencia solicitada", "Conversación anclada al resultado persistido"),
+            ("HISTORIA", "Relacionar con la línea de tiempo y el gemelo", "Evitar interpretación aislada"),
+            ("ARCHIVUM", "Conservar vínculo con el archivo original", "Procedencia verificable"),
+            ("KIRA", "Cerrar o mantener abierta la misión según la evidencia", "Continuidad verificable"),
+        )
+        context = conversational_result_context(state, patient_text)
+        if context:
+            content = (
+                f"Encontré **{context['panel']}** (`{context['filename']}`), cargado el **{context['uploaded_at'][:10]}**.\n\n"
+                f"{context['explanation'] or 'El resultado está guardado, pero todavía no tiene una explicación verificable.'}"
+            )
+            if context["document_id"]:
+                content += "\n\nEl archivo original sigue vinculado a este resultado y puede volver a abrirse desde Resultados."
+            evidence = [context["result_id"]]
+            closure_evidence = ["persisted_result_retrieved", "patient_explanation_returned"]
+            if context["document_id"]:
+                evidence.append(context["document_id"])
+                closure_evidence.append("original_evidence_link_resolved")
+            mission_status = MissionStatus.COMPLETED
+            next_action = "Misión cerrada: resultado recuperado, explicado y vinculado a su evidencia persistida"
+        else:
+            content = "No veo resultados cargados todavía. Puedes adjuntar un JSON, CSV, TXT, PDF o imagen."
+            evidence = []
+            closure_evidence = []
+            mission_status = MissionStatus.ACTIVE
+            next_action = "Cargar el resultado que quieres revisar"
+        mission = HealthMission(
+            title="Comprender resultado de salud",
+            mission_type="result_explanation",
+            status=mission_status,
+            next_action=next_action,
+            evidence_ids=evidence,
+            agent_plan=plan,
+            closure_evidence=closure_evidence,
+        )
+        action_target = "results"
     elif any(word in lower for word in ("documento", "archivo", "expediente", "papel", "informe", "receta")):
         plan = _plan(
             ("ARCHIVUM", "Indexar documentación clínica", "Encontrar y organizar"),
@@ -163,27 +221,6 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             agent_plan=plan,
         )
         action_target = "documents"
-    elif any(word in lower for word in ("resultado", "laboratorio", "analítica", "análisis")):
-        plan = _plan(
-            ("LUMEN", "Localizar y explicar resultados", "Lenguaje comprensible"),
-            ("HISTORIA", "Comparar con la línea de tiempo", "Evitar interpretación aislada"),
-            ("KIRA", "Preparar preguntas y seguimiento", "Continuidad"),
-        )
-        latest = state.results[-1] if state.results else None
-        if latest:
-            content = latest.explanation or f"Encontré **{latest.filename}**, pero todavía está pendiente de explicación verificable."
-            evidence = [latest.id]
-        else:
-            content = "No veo resultados cargados todavía. Puedes adjuntar un JSON, CSV, TXT, PDF o imagen."
-            evidence = []
-        mission = HealthMission(
-            title="Comprender resultado de salud",
-            mission_type="result_explanation",
-            next_action="Esperar archivo o confirmar comprensión",
-            evidence_ids=evidence,
-            agent_plan=plan,
-        )
-        action_target = "results"
     elif any(word in lower for word in ("peso", "engord", "adelgaz")):
         plan = _plan(
             ("HISTORIA", "Revisar tendencia de peso", "Contexto longitudinal"),

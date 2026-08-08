@@ -31,20 +31,25 @@ def test_patient_surface_does_not_expose_internal_agent_names() -> None:
         assert name not in public_surface
 
 
-def test_patient_interface_uses_product_and_module_language() -> None:
+def test_patient_interface_uses_clear_patient_language() -> None:
     public_surface = patient_surface()
     for marker in (
         "HealthIA",
-        "RESULTADOS CLAROS",
-        "CONTINUIDAD Y SEGUIMIENTO",
-        "ANTECEDENTES FAMILIARES",
-        "EXPEDIENTE DOCUMENTAL",
-        "CONTINUIDAD DE SALUD",
-        "SEGURIDAD DEL TRATAMIENTO",
-        "PREPARACIÓN DE CONSULTA",
-        "CONTROL DEL PACIENTE",
+        "Tu salud no vuelve a empezar desde cero",
+        "Resultados",
+        "Mi expediente",
+        "Misiones de salud",
+        "Cuenta y configuración",
+        "Permisos y privacidad",
+        "Dispositivos",
+        "Preguntas creadas para este caso",
+        "Continuar con las 3 restantes",
+        "No pude completar las próximas preguntas personalizadas",
+        "Lo que hice",
     ):
         assert marker in public_surface
+    for technical_marker in ("Gemini + ADK", "Google AI está tardando", "Google AI/ADK"):
+        assert technical_marker not in public_surface
 
 
 def test_documentation_does_not_reference_deleted_version_layers() -> None:

@@ -1,0 +1,9 @@
+HealthIA ONE exact-candidate Cloud proof trigger
+
+enabled=false
+Purpose: explicit opt-in only for controlled exact-candidate Cloud proofs.
+Gate: permission readiness -> exact SHA freeze -> private Cloud Run deploy -> Vertex Gemini 3.5 -> Firestore/GCS strict verifier -> real browser proof -> bound artifacts.
+Requested by: KIRA / FORJA / JUDGE evidence gate
+Mode: disabled after unified-gate-4; normal repair/documentation commits must not deploy Cloud.
+Last successful attempt: unified-gate-4
+Evidence: exact candidate a28955c3641c37a9e5a06f5f0ccf943ccb197bbd passed strict Cloud API proof and the full unmocked Chromium browser journey in GitHub Actions run 31262429792.

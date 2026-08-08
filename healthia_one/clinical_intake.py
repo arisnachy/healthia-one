@@ -71,16 +71,6 @@ DOMAIN_SIGNALS: dict[str, tuple[str, ...]] = {
     "skin": ("piel", "erupcion", "erupción", "picor", "comezon", "comezón", "lesion", "lesión"),
 }
 
-DOMAIN_OPTIONS: dict[str, list[str]] = {
-    "respiratory": ["Fiebre", "Tos", "Dolor de garganta", "Congestión o secreción nasal", "Dificultad para respirar", "Dolor de pecho"],
-    "urinary": ["Ardor al orinar", "Orino con más frecuencia", "Urgencia urinaria", "Dolor bajo del abdomen", "Dolor lumbar o en el flanco", "Sangre visible en la orina"],
-    "gastrointestinal": ["Dolor abdominal", "Náuseas", "Vómitos", "Diarrea", "Estreñimiento", "Sangre en vómito o heces"],
-    "neurologic": ["Dolor de cabeza", "Mareo", "Visión alterada", "Debilidad o adormecimiento", "Dificultad para hablar", "Desmayo o confusión"],
-    "musculoskeletal": ["Dolor localizado", "Rigidez", "Inflamación", "Traumatismo", "Limitación de movimiento", "Debilidad"],
-    "skin": ["Erupción", "Picazón", "Dolor", "Ampollas", "Secreción", "Fiebre asociada"],
-    "general": ["Dolor", "Fiebre", "Cansancio", "Mareo", "Náuseas o vómitos", "Otro síntoma"],
-}
-
 
 def _normalize(value: str) -> str:
     text = unicodedata.normalize("NFKD", value.lower())
@@ -88,13 +78,26 @@ def _normalize(value: str) -> str:
 
 
 def _plan() -> list[AgentStep]:
+    """Initial safe shell only.
+
+    The real Gemini/ADK path replaces this with the minimum set of tools actually
+    executed for the current request. Keeping only the two mandatory areas here
+    prevents a static six-agent council from masquerading as demand-driven work.
+    """
+
     return [
-        AgentStep(agent="INTERVIEWER", action="Recoger motivo, evolución, gravedad y síntomas", reason="Historia de la enfermedad actual", status="completed"),
-        AgentStep(agent="SENTINEL", action="Buscar señales de alarma y nivel de atención", reason="Seguridad clínica", status="completed"),
-        AgentStep(agent="HISTORIA", action="Cruzar la entrevista con el expediente longitudinal", reason="Evitar empezar desde cero", status="completed"),
-        AgentStep(agent="MEDSAFE", action="Revisar medicamentos, alergias y riesgos", reason="Seguridad farmacológica", status="completed"),
-        AgentStep(agent="ARCHIVUM", action="Reunir notas, resultados y documentos relacionados", reason="Procedencia y continuidad", status="completed"),
-        AgentStep(agent="NAVIGATOR", action="Definir el siguiente paso y la condición de cierre", reason="Seguimiento verificable", status="completed"),
+        AgentStep(
+            agent="INTERVIEWER",
+            action="Identificar qué información falta para entender el motivo actual",
+            reason="Entrevista clínica",
+            status="completed",
+        ),
+        AgentStep(
+            agent="SENTINEL",
+            action="Comprobar señales de alarma antes de continuar",
+            reason="Seguridad clínica",
+            status="completed",
+        ),
     ]
 
 
@@ -122,47 +125,16 @@ def detect_clinical_consultation(text: str) -> tuple[bool, str]:
     return True, domain
 
 
-def _question(question_id: str, prompt: str, options: list[str], *, multiple: bool = False, detail: str = "Puedes agregar un detalle") -> dict[str, Any]:
-    return {
-        "id": question_id,
-        "prompt": prompt,
-        "options": options,
-        "multiple": multiple,
-        "allow_detail": True,
-        "detail_placeholder": detail,
-    }
+def question_scaffold(stage: int) -> dict[str, Any]:
+    """State marker only; it deliberately contains no prefabricated questions."""
 
-
-def question_block(stage: int, domain: str) -> dict[str, Any]:
-    if stage == 1:
-        questions = [
-            _question("onset", "¿Cuándo comenzó y cómo ha evolucionado?", ["Hoy", "1 a 3 días", "4 a 7 días", "Más de una semana", "No estoy seguro"], detail="Describe el inicio o algún cambio importante"),
-            _question("symptoms", "¿Qué síntomas están presentes?", DOMAIN_OPTIONS.get(domain, DOMAIN_OPTIONS["general"]), multiple=True, detail="Agrega cualquier síntoma que no aparezca en la lista"),
-            _question("severity", "¿Qué intensidad tiene y cuánto limita tus actividades?", ["Leve", "Moderada", "Intensa", "Me impide actividades habituales", "No puedo valorarlo"], detail="Indica una escala de 0 a 10 si la conoces"),
-            _question("red_flags", "En las últimas horas, ¿cuál de estas señales ha ocurrido?", ["Ninguna de las anteriores", "Dificultad marcada para respirar", "Dolor fuerte en el pecho", "Desmayo o confusión", "Debilidad de un lado o dificultad para hablar", "Sangrado importante", "Empeoramiento rápido"], multiple=True, detail="Describe la señal y cuándo ocurrió"),
-            _question("medications_allergies", "¿Qué has tomado y qué alergias debemos considerar?", ["No he tomado nada", "Medicamento sin receta", "Medicamento recetado", "Tengo alergias conocidas", "No tengo alergias conocidas", "No estoy seguro"], multiple=True, detail="Escribe nombres, dosis conocidas y alergias"),
-        ]
-    else:
-        associated = {
-            "respiratory": ["Placas o pus en garganta", "Ronquera", "Dolor al tragar", "Oídos tapados o dolor", "Contacto con personas enfermas", "Ninguno"],
-            "urinary": ["Fiebre o escalofríos", "Dolor en flanco", "Náuseas o vómitos", "Flujo o irritación genital", "Embarazo posible", "Ninguno"],
-            "gastrointestinal": ["Fiebre", "Pérdida de apetito", "Distensión", "Dolor localizado", "Alimentos sospechosos", "Ninguno"],
-            "neurologic": ["Alteración visual", "Debilidad", "Dificultad para hablar", "Fiebre o rigidez de cuello", "Traumatismo reciente", "Ninguno"],
-            "general": ["Fiebre", "Pérdida de apetito", "Cambios urinarios", "Cambios intestinales", "Erupción", "Ninguno"],
-        }.get(domain, ["Fiebre", "Cansancio", "Inflamación", "Traumatismo", "Otro síntoma", "Ninguno"])
-        questions = [
-            _question("modifiers", "¿Qué lo desencadena, empeora o alivia?", ["Actividad", "Alimentos", "Posición o movimiento", "Medicamentos", "Reposo", "No identifico un patrón"], multiple=True, detail="Explica qué ocurre antes o después"),
-            _question("associated", "¿Qué otros datos acompañan el problema?", associated, multiple=True, detail="Agrega otros síntomas o exposiciones"),
-            _question("history", "¿Qué antecedentes podrían ser relevantes?", ["Ninguno conocido", "Enfermedad crónica", "Cirugía u hospitalización", "Embarazo o puerperio", "Episodio parecido anterior", "Antecedente familiar importante"], multiple=True, detail="Describe el antecedente y cuándo ocurrió"),
-            _question("vitals", "¿Qué signos vitales o mediciones están disponibles?", ["No disponibles", "Temperatura", "Presión arterial", "Frecuencia cardiaca", "Oxígeno", "Glucosa"], multiple=True, detail="Escribe los valores y la hora si los tienes"),
-            _question("goal", "¿Qué necesitas resolver primero?", ["Saber si es urgente", "Entender posibles explicaciones", "Preparar una consulta", "Organizar tratamiento actual", "Revisar resultados o documentos", "Planificar seguimiento"], multiple=True, detail="Cuéntame qué te preocupa más"),
-        ]
     return {
         "stage": stage,
-        "title": f"Entrevista clínica · bloque {stage} de 2",
-        "instruction": "Selecciona las opciones que correspondan. Puedes ampliar cada respuesta.",
-        "questions": questions,
-        "submit_label": "Continuar entrevista" if stage == 1 else "Enviar a la junta clínica",
+        "title": f"Entrevista clínica adaptativa · bloque {stage}",
+        "instruction": "HealthIA está preparando preguntas específicas con la información ya disponible.",
+        "questions": [],
+        "submit_label": "Continuar entrevista",
+        "generation_required": True,
     }
 
 
@@ -204,8 +176,22 @@ def _answer_lines(payload: dict[str, Any]) -> list[str]:
 
 def _has_alarm(payload: dict[str, Any]) -> bool:
     values = " ".join(_answer_lines(payload)).lower()
-    alarms = ("dificultad marcada", "dolor fuerte en el pecho", "desmayo", "confusión", "debilidad de un lado", "sangrado importante", "empeoramiento rápido")
+    alarms = (
+        "dificultad marcada",
+        "dolor fuerte en el pecho",
+        "desmayo",
+        "confusión",
+        "debilidad de un lado",
+        "sangrado importante",
+        "empeoramiento rápido",
+    )
     return any(alarm in values for alarm in alarms)
+
+
+def _clean_answers(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    return [item for item in values if isinstance(item, dict)]
 
 
 def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatResponse | None:
@@ -218,15 +204,22 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
     if answer is not None and active is not None:
         if answer.get("interview_id") != active.get("id"):
             return None
+
         stage = int(active.get("stage", 1))
         domain = str(active.get("domain", "general"))
+        prior_answers = _clean_answers(active.get("previous_answers"))
+        current_answers = _clean_answers(answer.get("answers"))
+        accumulated = [*prior_answers, *current_answers]
         mission = next((item for item in state.missions if item.id == active.get("mission_id")), None)
+
         if stage == 1:
-            block = question_block(2, domain)
             message = ChatMessage(
                 role="assistant",
                 author="HealthIA",
-                content="Gracias. Ya organicé la primera parte. Ahora haré preguntas nuevas sobre lo que todavía falta aclarar y activaré únicamente las áreas clínicas necesarias.",
+                content=(
+                    "Gracias. Ya tengo esa parte. Voy a usar tus respuestas junto con lo que contaste al inicio "
+                    "para preguntarte únicamente lo que todavía haga falta aclarar."
+                ),
                 mission_id=mission.id if mission else None,
                 agent_plan=_plan(),
                 metadata={
@@ -238,35 +231,35 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
                         "domain": domain,
                         "stage": 2,
                         "status": "awaiting_answers",
-                        "previous_answers": answer.get("answers", []),
-                        "question_block": block,
+                        "previous_answers": accumulated,
+                        "question_block": question_scaffold(2),
                     },
                 },
             )
             return ChatResponse(message=message)
 
-        previous = active.get("previous_answers", [])
-        all_payload = {"answers": [*previous, *answer.get("answers", [])]}
+        all_payload = {"answers": accumulated}
         lines = _answer_lines(all_payload)
         alarm = _has_alarm(all_payload)
         risk = RiskLevel.PRIORITY if alarm else RiskLevel.INFO
         if mission:
             mission.status = MissionStatus.WAITING_PROFESSIONAL
             mission.risk_level = risk
-            mission.next_action = "Revisar la síntesis clínica y confirmar el nivel de atención con un profesional"
-            mission.closure_evidence = ["interview_two_blocks_completed"]
+            mission.next_action = "Completar la orientación clínica y confirmar el nivel de atención"
+            mission.closure_evidence = ["adaptive_interview_answers_collected"]
+
         urgency = (
-            "Aparece al menos una señal que requiere valoración humana prioritaria. No esperes una conclusión del chat si el síntoma está activo o empeora."
+            "Aparece al menos una respuesta que puede requerir valoración humana prioritaria."
             if alarm
-            else "No se seleccionó una señal de alarma mayor en el formulario, pero eso no descarta un problema importante."
+            else "No se marcó una señal de alarma mayor, aunque el formulario por sí solo no descarta un problema importante."
         )
+        evidence_summary = "\n".join(lines) if lines else "- Respuestas clínicas recibidas y guardadas."
         content = (
-            "### Síntesis para la junta clínica\n\n"
-            f"**Motivo inicial:** {active.get('chief_complaint', 'Consulta de salud')}\n\n"
-            + "\n".join(lines)
-            + "\n\n"
-            f"**Dirección de seguridad:** {urgency}\n\n"
-            "Las áreas clínicas necesarias fueron coordinadas como una sola misión según lo que contaste y los datos autorizados. HealthIA puede preparar posibles explicaciones y preguntas para el profesional, pero no confirma un diagnóstico ni modifica tratamiento."
+            "Ya reuní la información de esta parte de la entrevista. "
+            "Ahora HealthIA debe decidir con IA si todavía falta una ronda específica de preguntas "
+            "o si ya puede darte una orientación clara.\n\n"
+            f"**Seguridad hasta ahora:** {urgency}\n\n"
+            f"{evidence_summary}"
         )
         message = ChatMessage(
             role="assistant",
@@ -282,12 +275,13 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
                     "mission_id": active.get("mission_id"),
                     "chief_complaint": active.get("chief_complaint", "Consulta de salud"),
                     "domain": domain,
-                    "stage": 2,
-                    "status": "completed",
-                    "answers": all_payload["answers"],
+                    "stage": stage,
+                    "status": "ready_for_synthesis",
+                    "answers": accumulated,
+                    "previous_answers": accumulated,
                 },
-                "council_status": "completed",
-                "action_target": "missions",
+                "council_status": "awaiting_ai_resolution",
+                "action_target": "clinical_interview",
             },
         )
         return ChatResponse(message=message)
@@ -299,20 +293,19 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
     interview_id = f"interview_{uuid4().hex[:12]}"
     plan = _plan()
     mission = HealthMission(
-        title="Completar entrevista clínica orientada al paciente",
+        title="Comprender el problema actual y orientar el siguiente paso",
         mission_type="clinical_interview",
         status=MissionStatus.WAITING_PATIENT,
-        next_action="Responder el primer bloque de cinco preguntas",
+        next_action="Responder las preguntas adaptativas generadas para este caso",
         agent_plan=plan,
     )
     state.missions.append(mission)
-    block = question_block(1, domain)
     message = ChatMessage(
         role="assistant",
         author="HealthIA",
         content=(
-            "Entendí que quieres iniciar una **consulta por síntomas**. Haré una entrevista adaptativa en bloques de cinco preguntas "
-            "y activaré únicamente las áreas clínicas necesarias para orientar el siguiente paso de forma segura."
+            "Entendí lo que te está pasando. Voy a usar lo que acabas de contar y tu información autorizada "
+            "para preguntarte solo lo que realmente haga falta antes de orientarte."
         ),
         mission_id=mission.id,
         agent_plan=plan,
@@ -326,7 +319,8 @@ def respond_to_clinical_intake(state: PatientState, patient_text: str) -> ChatRe
                 "domain": domain,
                 "stage": 1,
                 "status": "awaiting_answers",
-                "question_block": block,
+                "previous_answers": [],
+                "question_block": question_scaffold(1),
             },
         },
     )

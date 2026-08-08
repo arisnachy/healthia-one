@@ -17,10 +17,16 @@ def test_collapsed_rail_keeps_primary_navigation_visible() -> None:
 
 def test_collapsed_icons_keep_accessible_labels() -> None:
     icons = (ROOT / "web/icons.js").read_text(encoding="utf-8")
+    i18n = (ROOT / "web/i18n.js").read_text(encoding="utf-8")
+    index = (ROOT / "web/index.html").read_text(encoding="utf-8")
     assert "button.dataset.tooltip=label" in icons
     assert "button.setAttribute('aria-label',label)" in icons
     assert "button.title=label" in icons
-    assert "button.setAttribute('aria-label','Nueva consulta')" in icons
+    assert "const label=i18n?.t('nav.new')" in icons
+    assert '"nav.new": "New consultation"' in i18n
+    assert '"nav.new": "Nueva consulta"' in i18n
+    assert 'id="newConsultation"' in index
+    assert 'data-i18n="nav.new"' in index
 
 
 def test_one_click_windows_launcher_runs_from_its_own_folder() -> None:

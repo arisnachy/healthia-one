@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="HealthIA ONE — patient-first agentic health continuity system">
+  <title>HealthIA ONE · Sign in</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%232a4165'/%3E%3Cpath d='M32 14c1.2 9 8 15.8 17 17-9 1.2-15.8 8-17 17-1.2-9-8-15.8-17-17 9-1.2 15.8-8 17-17Z' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/assets/auth.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-brand" aria-label="HealthIA ONE">
+      <div class="auth-brand-top">
+        <div class="auth-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="4" width="40" height="40" rx="14" fill="url(#loginBrandGradient)"/>
+            <path d="M24 12.5C24.9 18.2 29.4 22.7 35.1 23.6C29.4 24.5 24.9 29 24 34.7C23.1 29 18.6 24.5 12.9 23.6C18.6 22.7 23.1 18.2 24 12.5Z" stroke="white" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs><linearGradient id="loginBrandGradient" x1="8" y1="8" x2="40" y2="40" gradientUnits="userSpaceOnUse"><stop stop-color="#637CAA"/><stop offset="1" stop-color="#253958"/></linearGradient></defs>
+          </svg>
+        </div>
+        <div class="auth-wordmark"><strong>HealthIA ONE</strong><span>Patient continuity intelligence</span></div>
+      </div>
+      <p class="eyebrow" data-i18n="auth.eyebrow">HEALTHIA ONE · PATIENT CONTINUITY</p>
+      <h1 data-i18n="auth.hero">Your health should remember you.</h1>
+      <p class="auth-lead" data-i18n="auth.hero.body">One private patient space for your conversations, results, devices, health missions and longitudinal evidence.</p>
+      <div class="auth-points">
+        <span><i>✓</i><b data-i18n="auth.point.private">Patient-scoped data</b></span>
+        <span><i>✓</i><b data-i18n="auth.point.signed">Signed session</b></span>
+        <span><i>✓</i><b data-i18n="auth.point.ondemand">AI on demand</b></span>
+      </div>
+
+      <div class="auth-continuity-preview" aria-label="HealthIA continuity preview">
+        <div class="preview-head"><div><span class="preview-pulse"></span><strong data-i18n="auth.live">Continuity that survives the chat</strong></div><small>LIVE MODEL</small></div>
+        <p data-i18n="auth.live.body">Original evidence → clinical twin → health mission → follow-up</p>
+        <div class="preview-flow">
+          <div><span>01</span><strong>Evidence</strong><small>Original preserved</small></div>
+          <i>→</i>
+          <div><span>02</span><strong>Twin</strong><small>Context linked</small></div>
+          <i>→</i>
+          <div><span>03</span><strong>Mission</strong><small>Outcome tracked</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="auth-card" aria-label="Patient account access">
+      <div class="auth-card-orb" aria-hidden="true"></div>
+      <div class="auth-tabs" role="tablist" aria-label="Authentication mode">
+        <button id="loginTab" class="is-active" type="button" data-i18n="auth.login_tab">Sign in</button>
+        <button id="registerTab" type="button" data-i18n="auth.register_tab">Create account</button>
+      </div>
+
+      <form id="loginForm" class="auth-form">
+        <header><span class="form-kicker">SECURE PATIENT ACCESS</span><h2 data-i18n="auth.welcome">Welcome back</h2><p data-i18n="auth.welcome.body">Continue your private HealthIA timeline.</p></header>
+        <label><span data-i18n="auth.email">Email</span><input name="email" type="email" autocomplete="email" required></label>
+        <label><span data-i18n="auth.password">Password</span><input name="password" type="password" autocomplete="current-password" required></label>
+        <p id="loginError" class="auth-error" hidden></p>
+        <button class="auth-primary" type="submit"><span data-i18n="auth.login">Enter HealthIA</span><b aria-hidden="true">→</b></button>
+      </form>
+
+      <form id="registerForm" class="auth-form" hidden>
+        <header><span class="form-kicker">NEW PATIENT SPACE</span><h2 data-i18n="auth.create">Create your account</h2><p data-i18n="auth.create.body">Start with an empty record and build your own continuity.</p></header>
+        <label><span data-i18n="auth.name">Patient name</span><input name="display_name" autocomplete="name" required maxlength="120"></label>
+        <label><span data-i18n="auth.email">Email</span><input name="email" type="email" autocomplete="email" required></label>
+        <label><span data-i18n="auth.password">Password</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+        <small data-i18n="auth.password_hint">Use at least 10 characters. Passwords are stored only as salted scrypt hashes.</small>
+        <p id="registerError" class="auth-error" hidden></p>
+        <button class="auth-primary" type="submit"><span data-i18n="auth.create_button">Create my account</span><b aria-hidden="true">→</b></button>
+      </form>
+
+      <footer><span class="shield-dot" aria-hidden="true"></span><span data-i18n="auth.boundary">HealthIA does not replace professional evaluation or emergency services.</span></footer>
+    </section>
+  </main>
+  <script src="/assets/i18n.js" defer></script>
+  <script src="/assets/auth.js" defer></script>
+</body>
+</html>

@@ -6,13 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_readme_matches_current_patient_os():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for marker in [
-        "Pathological genogram",
-        "Patient document operating system",
-        "Treatment and consultation continuity",
-        "Patient control, audit and spending safety",
+        "pathological family genogram with provenance",
+        "multimodal result ingestion with original evidence retention",
+        "treatment and medication check-ins without autonomous prescribing",
+        "patient-controlled consent, snooze, audit and JSON export",
         "scripts/smoke_test.py",
         "deployment\\run-local-secure.ps1",
-        "Local · 0 llamadas",
+        "zero Google AI calls",
+        "Gemini 3.5 Flash on Vertex AI",
+        "Closed-loop Taskmaster result mission",
     ]:
         assert marker in readme
 
@@ -26,7 +28,10 @@ def test_release_evidence_files_exist():
         "deployment/run-local-secure.ps1",
         "deployment/deploy-cloud-demo.ps1",
         "deployment/remove-cloud-demo.ps1",
+        "deployment/check_cloud_permissions.py",
+        "deployment/verify_cloud_demo.py",
         "scripts/smoke_test.py",
+        "scripts/live_taskmaster_proof.py",
     ]
     for relative in required:
         assert (ROOT / relative).is_file(), relative
