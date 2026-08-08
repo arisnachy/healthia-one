@@ -8,7 +8,7 @@ HealthIA ONE is a patient-owned continuity agent that turns scattered health evi
 **Google AI:** Gemini 3.5 Flash on Vertex AI  
 **Agent framework:** Google ADK  
 **Cloud:** Cloud Run + Firestore + private Cloud Storage + Vertex AI + Secret Manager  
-**JUDGE Ω:** **99/100 evidence-backed; only final video publication/Devpost URL remains**
+**JUDGE Ω:** **100/100 evidence-backed; final exact-head CI/merge gate in progress**
 
 The public/demo flows use synthetic patients and synthetic clinical files only.
 
@@ -60,7 +60,17 @@ The one-take browser recording visibly covers the problem, value proposition, li
 
 Sanitized evidence: [`hackathon/evidence/final_judge_demo_proof.json`](hackathon/evidence/final_judge_demo_proof.json).
 
-**Boundary:** the video content is now proven. The final stable judge-facing/public video URL still has to be published and placed into the Devpost package before `100/100` / `SUBMISSION_LOCKED` is claimed.
+### Stable public judge video — PASS
+
+**Public video URL:**  
+`https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm`
+
+**Release page:**  
+`https://github.com/arisnachy/healthia-one/releases/tag/healthia-one-hackathon-judge-demo-2026`
+
+Release publication run **`31267268584`** recovered the original passing artifact, revalidated the source video SHA, created/updated the public GitHub Release, downloaded the asset without credentials and matched the exact SHA-256. Artifact `9024528554` preserves that proof. Independent public probe run **`31267268597`** repeated an unauthenticated full download and SHA match; artifact `9024526089` preserves the independent check.
+
+Sanitized evidence: [`hackathon/evidence/public_judge_video_proof.json`](hackathon/evidence/public_judge_video_proof.json).
 
 ### Exact-candidate Cloud + browser proof — PASS
 
@@ -122,6 +132,7 @@ Key boundaries:
 - **Cloud Run** proof deployment uses min `0`, max `1`.
 - **Clinical ADK** uses one aggregate tool call for mandatory interview/safety, with the executed roles audited separately.
 - **Dependency boundary:** the application installs Google ADK core and declares Firestore/GCS clients explicitly; it does not pull the broad unused `google-adk[gcp]` extras bundle.
+- **Public submission media is separate from clinical evidence:** the judge WebM is a GitHub Release asset; the clinical GCS bucket remains private.
 - **PDF multimodal input** uses low visual media resolution with native PDF text to reduce latency; clinical images retain high visual resolution.
 - Multimodal failure is fail-closed: original evidence remains stored and the result stays pending rather than fabricating an interpretation.
 
@@ -188,7 +199,7 @@ The proof path expects the required Google Cloud APIs to be **pre-enabled**. It 
 
 The deployment uses Cloud Run min `0`/max `1`, Gemini 3.5 Flash through Vertex AI, Firestore Native state, private GCS evidence, dedicated build/runtime service accounts, Secret Manager for signing secrets, an explicit model request ceiling, proactive execution disabled, and a strict post-deploy verifier.
 
-Billable proof/recording workflows are explicit opt-in. A legacy automatic deployment path discovered during hardening was retired; ordinary CI must not create Cloud revisions or spend model quota. The one-take demo trigger is also returned to `enabled=false` immediately after a controlled recording.
+Billable proof/recording/publication workflows are explicit opt-in. A legacy automatic deployment path discovered during hardening was retired; ordinary CI must not create Cloud revisions or spend model quota. The one-take demo and publication triggers are returned to `enabled=false` after controlled use.
 
 Cleanup without deleting persistent proof data:
 
@@ -215,7 +226,7 @@ node --check web/profile-devices.js
 node --check web/icons.js
 ```
 
-The CI gate additionally runs Chromium, semantic JavaScript validation, PowerShell parsing, release ZIP verification, and pytest again from the extracted release.
+The CI gate additionally runs Chromium, semantic JavaScript validation, PowerShell parsing, release ZIP verification, pytest again from the extracted release, and an independent no-credential probe of the public judge-video URL.
 
 ## Core patient capabilities
 
@@ -248,8 +259,8 @@ tests/               regression, isolation and runtime contracts
 
 ## Submission status
 
-**Proven:** Gemini 3.5 Flash on Vertex AI; real Google ADK tool execution; Cloud Run; Firestore; private GCS; multimodal extraction; closed-loop Taskmaster mission; patient isolation; unmocked browser journey; original-evidence provenance; logout/login continuity; cross-revision durability; reproducible release; and a continuous judge-demo artifact covering problem → value → live app → Cloud proof.
+**Proven:** Gemini 3.5 Flash on Vertex AI; real Google ADK tool execution; Cloud Run; Firestore; private GCS; multimodal extraction; closed-loop Taskmaster mission; patient isolation; unmocked browser journey; original-evidence provenance; logout/login continuity; cross-revision durability; reproducible release; continuous judge demo; stable public video URL; and anonymous byte-identical publication proof.
 
-**Sole remaining gate before 100/100:** publish that proven video at the stable judge-facing URL used by Devpost, insert the exact URL into the submission package, run final CI/JUDGE on that exact head, then merge/lock PR #29.
+**Evidence score:** **100/100**. All hard gates are proven. The only remaining operational action is to pass final CI/JUDGE on the exact head, merge PR #29, and use the preserved evidence package in Devpost.
 
 See [`docs/EVIDENCE.md`](docs/EVIDENCE.md), [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md), and [`docs/DEVPOST_SUBMISSION.md`](docs/DEVPOST_SUBMISSION.md).
