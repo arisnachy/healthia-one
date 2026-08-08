@@ -74,6 +74,19 @@ def screenshot(page: Page, name: str) -> None:
         print(f"LAB_OMEGA_SCREENSHOT_WARNING:{name}:{type(exc).__name__}:{exc}", flush=True)
 
 
+def capture_post_registration_diagnostics(page: Page, report: dict) -> None:
+    """Persist synthetic-only browser facts so a failed gate is diagnosable."""
+    try:
+        report["outputs"]["post_register_page_url"] = page.url
+        report["outputs"]["post_register_ready_state"] = page.evaluate("document.readyState")
+        report["outputs"]["post_register_app_count"] = page.locator("#app").count()
+        report["outputs"]["post_register_composer_count"] = page.locator("#chatInput").count()
+        (OUTPUT / "post-register.html").write_text(page.content(), encoding="utf-8")
+        screenshot(page, "post-register-diagnostic")
+    except Exception as exc:
+        report["outputs"]["post_register_diagnostic_error"] = f"{type(exc).__name__}: {exc}"[:500]
+
+
 def login_language_probe(browser: Browser, base_url: str, locale: str, expected_lang: str, hero_fragment: str, report: dict) -> None:
     checkpoint(f"login_{expected_lang}_start")
     context = browser.new_context(locale=locale, viewport={"width": 1440, "height": 900})
@@ -89,7 +102,7 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
 
 
 def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tuple[BrowserContext, Page]:
-    """Use the exact browser page/session produced by the real registration flow."""
+    """Prove real browser registration, session continuity, then the authenticated shell."""
     checkpoint("register_start")
     context = browser.new_context(
         base_url=base_url,
@@ -110,15 +123,10 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
     response = info.value
     require(response.status == 201, f"registration returned {response.status}")
     require("healthia_session=" in (response.header_value("set-cookie") or ""), "registration did not emit session cookie")
-    page.wait_for_url(re.compile(rf"^{re.escape(base_url)}/?$"), timeout=20_000)
-    # URL readiness is weaker than product readiness. Cold GitHub runners can
-    # finish the redirect before Chromium has attached the application shell.
-    # Keep the real #app/#chatInput requirements, but give those render gates a
-    # bounded cold-start window instead of converting runner speed into failure.
-    page.wait_for_load_state("domcontentloaded")
-    shell_started = time.monotonic()
-    page.locator("#app").wait_for(state="attached", timeout=35_000)
-    shell_ready_ms = int((time.monotonic() - shell_started) * 1000)
+
+    # Registration proof and shell proof are deliberately separate. Validate
+    # the cookie/session first, then perform a fresh authenticated navigation.
+    # This removes a redirect-vs-render race without bypassing any product gate.
     cookies = context.cookies(base_url)
     session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
     require(session_cookie is not None and session_cookie.get("secure") is False, "browser registration cookie invalid for local HTTP")
@@ -133,18 +141,30 @@ def register_and_open_app(browser: Browser, base_url: str, report: dict) -> tupl
         "sameSite": session_cookie.get("sameSite"),
         "path": session_cookie.get("path"),
     }
+    report["outputs"]["post_register_session_authenticated"] = True
+
+    checkpoint("authenticated_navigation_start")
+    navigation_started = time.monotonic()
+    page.goto(f"{base_url}/", wait_until="domcontentloaded", timeout=20_000)
+    require(page.url.rstrip("/") == base_url, f"authenticated navigation did not stay on app shell: {page.url}")
+    try:
+        page.locator("#app").wait_for(state="attached", timeout=20_000)
+        composer = page.locator("#chatInput")
+        composer.wait_for(state="visible", timeout=20_000)
+    except Exception:
+        capture_post_registration_diagnostics(page, report)
+        raise
+    shell_ready_ms = int((time.monotonic() - navigation_started) * 1000)
+    report["outputs"]["authenticated_shell_ready_ms"] = shell_ready_ms
     report["outputs"]["functional_page_url"] = page.url
-    report["outputs"]["cold_runner_shell_ready_ms"] = shell_ready_ms
+    report["checks"]["authenticated_navigation_from_registered_session"] = "pass"
 
     checkpoint("composer_probe_start")
-    composer = page.locator("#chatInput")
-    composer.wait_for(state="visible", timeout=35_000)
     composer.fill("LAB Omega readiness probe")
     require(composer.input_value() == "LAB Omega readiness probe", "authenticated composer rejected text")
     composer.fill("")
     require(page.locator("html").get_attribute("lang") == "en", "authenticated shell did not follow en-US")
     report["checks"]["authenticated_shell_interactive"] = "pass"
-    report["outputs"]["post_register_session_authenticated"] = True
     screenshot(page, "registered-browser-session")
     screenshot(page, "home-authenticated-en")
     checkpoint("register_and_composer_pass")
