@@ -79,12 +79,18 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
     checkpoint(f"login_{expected_lang}_pass")
 
 
-def register_and_authenticate(browser: Browser, base_url: str, report: dict) -> None:
+def register_and_authenticate(browser: Browser, base_url: str, report: dict) -> BrowserContext:
     checkpoint("register_start")
-    context = browser.new_context(locale="en-US", viewport={"width": 1440, "height": 900})
+    context = browser.new_context(
+        base_url=base_url,
+        locale="en-US",
+        viewport={"width": 1600, "height": 1000},
+        record_video_dir=str(VIDEO_DIR),
+        record_video_size={"width": 1280, "height": 800},
+    )
     page = context.new_page()
     configure_page(page, report)
-    page.goto(f"{base_url}/login", wait_until="networkidle")
+    page.goto("/login", wait_until="networkidle")
     page.locator("#registerTab").click()
     page.locator("#registerForm [name='display_name']").fill("LAB Omega Patient")
     page.locator("#registerForm [name='email']").fill("lab.omega@example.test")
@@ -98,33 +104,31 @@ def register_and_authenticate(browser: Browser, base_url: str, report: dict) -> 
     cookies = context.cookies(base_url)
     session_cookie = next((item for item in cookies if item.get("name") == "healthia_session"), None)
     require(session_cookie is not None and session_cookie.get("secure") is False, "browser registration cookie invalid for local HTTP")
+    session = context.request.get("/api/auth/session", headers={"Accept-Language": "en-US"})
+    require(session.status == 200 and session.json().get("authenticated") is True, "registered browser session failed verification")
     report["functions"]["register_and_authenticate"] = "pass"
     report["outputs"]["registration_http_status"] = 201
     report["outputs"]["registration_set_cookie_present"] = True
-    context.close()
+    report["outputs"]["browser_session_cookie_after_register"] = {
+        "present": True,
+        "secure": False,
+        "sameSite": session_cookie.get("sameSite"),
+        "path": session_cookie.get("path"),
+    }
+    screenshot(page, "registered-browser-session")
+    page.close()
     checkpoint("register_pass")
+    return context
 
 
-def open_authenticated_app(browser: Browser, base_url: str, report: dict) -> tuple[BrowserContext, Page]:
-    checkpoint("functional_login_start")
-    context = browser.new_context(
-        base_url=base_url,
-        locale="en-US",
-        viewport={"width": 1600, "height": 1000},
-        record_video_dir=str(VIDEO_DIR),
-        record_video_size={"width": 1280, "height": 800},
-    )
-    login = context.request.post(
-        "/api/auth/login",
-        data={"email": "lab.omega@example.test", "password": "LabOmega-2026-safe"},
-        headers={"Accept-Language": "en-US"},
-    )
-    require(login.status == 200, f"context login returned {login.status}")
+def open_authenticated_app(context: BrowserContext, report: dict) -> Page:
+    checkpoint("functional_session_start")
     session = context.request.get("/api/auth/session", headers={"Accept-Language": "en-US"})
-    require(session.status == 200 and session.json().get("authenticated") is True, "context cookie jar did not authenticate")
+    require(session.status == 200 and session.json().get("authenticated") is True, "preserved browser session is not authenticated")
     page = context.new_page()
     configure_page(page, report)
     page.goto("/", wait_until="domcontentloaded")
+    report["outputs"]["functional_page_url"] = page.url
     composer = page.locator("#chatInput")
     composer.wait_for(state="visible", timeout=8_000)
     composer.fill("LAB Omega readiness probe")
@@ -134,8 +138,8 @@ def open_authenticated_app(browser: Browser, base_url: str, report: dict) -> tup
     report["checks"]["authenticated_shell_interactive"] = "pass"
     report["outputs"]["post_register_session_authenticated"] = True
     screenshot(page, "home-authenticated-en")
-    checkpoint("functional_login_pass")
-    return context, page
+    checkpoint("functional_session_pass")
+    return page
 
 
 def api_json(context: BrowserContext, path: str) -> dict:
@@ -147,10 +151,12 @@ def api_json(context: BrowserContext, path: str) -> dict:
 def exercise_registered_views(page: Page, report: dict) -> None:
     checkpoint("views_start")
     for index, view in enumerate(MAIN_VIEWS, start=1):
+        checkpoint(f"view_{view}_start")
         page.locator(f".main-nav [data-open='{view}']").click()
         page.locator(f"#view-{view}").wait_for(state="visible")
         report["windows"][view] = "pass"
         screenshot(page, f"view-{index:02d}-{view}")
+        checkpoint(f"view_{view}_pass")
     checkpoint("views_pass")
 
 
@@ -167,6 +173,7 @@ def fill_and_save(page: Page, dialog_type: str, values: dict[str, str], report: 
 
 
 def verify_measurements(context: BrowserContext, page: Page, report: dict) -> None:
+    checkpoint("measurements_start")
     page.locator(".main-nav [data-open='measurements']").click()
     fill_and_save(page, "vital", {"systolic": "126", "diastolic": "78", "pulse": "72", "oxygen_saturation": "98"}, report)
     fill_and_save(page, "weight", {"weight_kg": "74.2", "note": "LAB Omega synthetic"}, report)
@@ -177,6 +184,7 @@ def verify_measurements(context: BrowserContext, page: Page, report: dict) -> No
     require(state["activity"][-1]["steps"] == 6842, "activity did not persist")
     report["outputs"]["measurement_state_roundtrip"] = "pass"
     screenshot(page, "measurements-after-save")
+    checkpoint("measurements_pass")
 
 
 def verify_structured_result(context: BrowserContext, page: Page, report: dict) -> None:
@@ -201,6 +209,7 @@ def verify_structured_result(context: BrowserContext, page: Page, report: dict) 
     require(result["status"] == "parsed" and len(result["items"]) == 2, "structured result did not persist")
     require(state["documents"][-1]["related_result_id"] == result["id"], "original document not linked to result")
     report["functions"]["structured_result_upload"] = "pass"
+    report["outputs"]["english_result_explanation"] = "pass"
     report["outputs"]["result_original_provenance"] = "pass"
     screenshot(page, "results-structured-upload")
     checkpoint("result_pass")
@@ -238,6 +247,7 @@ def verify_account_views_and_logout(page: Page, report: dict) -> None:
     report["windows"]["account_dialog"] = "pass"
     screenshot(page, "account-dialog")
     for target in ACCOUNT_VIEWS:
+        checkpoint(f"account_{target}_start")
         if not dialog.is_visible():
             page.locator("#accountPill").click()
             dialog.wait_for(state="visible")
@@ -245,6 +255,7 @@ def verify_account_views_and_logout(page: Page, report: dict) -> None:
         page.locator(f"#view-{target}").wait_for(state="visible")
         report["windows"][f"account_{target}"] = "pass"
         screenshot(page, f"account-view-{target}")
+        checkpoint(f"account_{target}_pass")
     if not dialog.is_visible():
         page.locator("#accountPill").click()
         dialog.wait_for(state="visible")
@@ -307,9 +318,10 @@ def run() -> dict:
                 browser = playwright.chromium.launch(**launch)
                 login_language_probe(browser, base_url, "en-US", "en", "Your health should remember you", report)
                 login_language_probe(browser, base_url, "es-DO", "es", "Tu salud debería recordarte", report)
-                register_and_authenticate(browser, base_url, report)
-                context, page = open_authenticated_app(browser, base_url, report)
+                context = register_and_authenticate(browser, base_url, report)
+                page = open_authenticated_app(context, report)
                 exercise_registered_views(page, report)
+                checkpoint("collapse_start")
                 page.locator("#collapseLeft").click()
                 page.locator("#expandLeft").wait_for(state="visible")
                 page.locator("#expandLeft").click()
@@ -318,6 +330,7 @@ def run() -> dict:
                 page.locator("#collapseRight").click()
                 page.locator("#collapseRight").click()
                 report["functions"]["context_collapse_expand"] = "pass"
+                checkpoint("collapse_pass")
                 verify_measurements(context, page, report)
                 verify_structured_result(context, page, report)
                 verify_input_language_headers(page, report)
