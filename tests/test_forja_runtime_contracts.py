@@ -100,7 +100,9 @@ def test_runtime_affordances_are_real_not_decorative() -> None:
     assert "Vertex AI activo" in cost_control
     assert "Local · 0 llamadas" in cost_control
     assert ".provider-grid" in interactions
-    assert 'content: "Abrir menú"' in interactions
+    assert 'id="expandLeft"' in index
+    assert 'data-i18n-aria="nav.expand"' in index
+    assert 'content: "Abrir menú"' not in interactions
     assert "background: transparent" in interactions
 
 
