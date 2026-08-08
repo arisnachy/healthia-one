@@ -21,7 +21,7 @@ jobs:
       REGION: us-central1
       SERVICE_NAME: healthia-one-judge
       APP_CANDIDATE_SHA: 1df8237212ca79d4df46acb56fb8a1c344239fd3
-      HARNESS_SHA: d8e83b5
+      HARNESS_SHA: d8e83b50686cd675fcc969d879294370468ba8a1
       EXPECTED_REVISION: healthia-one-judge-00005-xh8
     steps:
       - name: Checkout corrected browser harness
