@@ -86,6 +86,15 @@ def test_cost_control_runtime_is_vertex_aware_and_has_no_permanent_polling() -> 
     assert "window.addEventListener('focus', loadStatus)" in cost_js
 
 
+def test_icon_decoration_preserves_composer_file_input() -> None:
+    icons = (WEB / "icons.js").read_text(encoding="utf-8")
+    index_html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert 'id="resultFile"' in index_html
+    assert "attach.innerHTML" not in icons
+    assert "insertAdjacentHTML('afterbegin', icon('plus'))" in icons
+    assert "!$('.v6-icon', attach)" in icons
+
+
 def test_real_cloud_browser_proof_checks_account_dom_and_vertex_truth() -> None:
     proof = (ROOT / "scripts" / "cloud_browser_judge_proof.py").read_text(encoding="utf-8")
     assert 'account_identity = page.locator("#accountIdentity").inner_text()' in proof
