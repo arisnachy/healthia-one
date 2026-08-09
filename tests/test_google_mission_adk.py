@@ -35,18 +35,58 @@ def test_google_mission_adk_uses_same_gemini_json_generation_contract_as_clinica
     assert "output_schema=MISSION_PLAN_SCHEMA" not in ADK_SOURCE
 
 
-def test_navigation_tool_refuses_to_invent_coordinates(monkeypatch):
+def test_navigation_tool_refuses_to_invent_coordinates_or_location(monkeypatch):
     monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
     service = build_google_constellation_service(Settings(store_backend="memory", llm_backend="mock"))
     facade = GoogleMissionToolFacade(
         constellation=service,
         patient_id="patient_demo",
         authorized_location=None,
+        patient_text="Búscame un centro de apoyo",
     )
-    result = facade.start_navigation_mission("autism support", "autism support center")
+    result = facade.start_navigation_mission("autism support", "autism support center", location_text="Santiago")
     assert result["ok"] is False
     assert result["state"] == "location_required"
-    assert "must not invent latitude/longitude" in result["public_summary"]
+    assert "must not invent latitude/longitude or a place" in result["public_summary"]
+
+
+def test_navigation_tool_uses_patient_explicit_text_without_claiming_residence(monkeypatch):
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+    service = build_google_constellation_service(Settings(store_backend="memory", llm_backend="mock"))
+    facade = GoogleMissionToolFacade(
+        constellation=service,
+        patient_id="patient_demo",
+        authorized_location=None,
+        patient_text="Búscame un centro de autismo en Santiago",
+    )
+    result = facade.start_navigation_mission(
+        "autism support",
+        "autism support center",
+        location_text="Santiago",
+    )
+    assert result["ok"] is True
+    mission = service.load_mission("patient_demo", result["mission_id"])
+    assert mission.location["text"] == "Santiago"
+    assert mission.location["source"] == "patient_explicit_search_text"
+    assert mission.location["is_residence"] is False
+
+
+def test_navigation_tool_does_not_expand_patient_location_text(monkeypatch):
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+    service = build_google_constellation_service(Settings(store_backend="memory", llm_backend="mock"))
+    facade = GoogleMissionToolFacade(
+        constellation=service,
+        patient_id="patient_demo",
+        authorized_location=None,
+        patient_text="Busca una clínica en Santiago",
+    )
+    result = facade.start_navigation_mission(
+        "therapy",
+        "therapy clinic",
+        location_text="Santiago, Dominican Republic",
+    )
+    assert result["ok"] is False
+    assert result["state"] == "location_required"
 
 
 def test_navigation_tool_uses_only_pre_authorized_location(monkeypatch):
@@ -56,11 +96,20 @@ def test_navigation_tool_uses_only_pre_authorized_location(monkeypatch):
         constellation=service,
         patient_id="patient_demo",
         authorized_location={"lat": 19.4517, "lng": -70.6970},
+        patient_text="Búscame un centro en Santiago",
     )
-    result = facade.start_navigation_mission("autism support", "autism support center")
+    result = facade.start_navigation_mission(
+        "autism support",
+        "autism support center",
+        location_text="Santiago",
+    )
     assert result["ok"] is True
     mission = service.load_mission("patient_demo", result["mission_id"])
-    assert mission.location == {"lat": 19.4517, "lng": -70.697}
+    assert mission.location["lat"] == 19.4517
+    assert mission.location["lng"] == -70.697
+    assert mission.location["source"] == "patient_authorized_coordinates"
+    assert mission.location["is_residence"] is False
+    assert "text" not in mission.location
 
 
 def test_contact_tool_without_verified_provider_email_cannot_fabricate_destination(monkeypatch):
