@@ -1,6 +1,5 @@
 import base64
 import json
-from types import SimpleNamespace
 from typing import Any
 
 from healthia_one.gmail_mission_events import (
@@ -231,6 +230,10 @@ def test_guarded_mega_loop_maps_gmail_push_calendar_tasks_has_receipts_and_no_du
         subject=subject,
         body=body,
     )
+    # A real API/ADK continuation is a new request and reloads durable mission
+    # state. Prove that the authorization persisted rather than relying on a
+    # mutated Python object from the previous turn.
+    mission = service.load_mission(patient_id, mission.id)
     mission = service.coordinator.contact_selected_provider(
         mission,
         service.grants(patient_id),
@@ -287,6 +290,8 @@ def test_guarded_mega_loop_maps_gmail_push_calendar_tasks_has_receipts_and_no_du
         time_zone="America/Santo_Domingo",
         include_followup_task=True,
     )
+    # Same process-boundary proof for Calendar + Tasks authorizations.
+    mission = service.load_mission(patient_id, mission.id)
     mission = service.coordinator.finalize_appointment(
         mission,
         service.grants(patient_id),
