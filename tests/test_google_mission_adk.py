@@ -1,6 +1,11 @@
+from pathlib import Path
+
 from healthia_one.config import Settings
 from healthia_one.google_constellation_runtime import build_google_constellation_service
 from healthia_one.google_mission_adk import AdkGoogleMissionRuntime, GoogleMissionToolFacade
+
+
+ADK_SOURCE = Path("healthia_one/google_mission_adk.py").read_text(encoding="utf-8")
 
 
 def test_adk_tool_surface_contains_no_authorize_grant_oauth_or_raw_google_mutation_tool(monkeypatch):
@@ -18,6 +23,16 @@ def test_adk_tool_surface_contains_no_authorize_grant_oauth_or_raw_google_mutati
     assert "tasks_create" not in joined
     assert "contact_selected_provider" in names
     assert "finalize_selected_appointment" in names
+
+
+def test_google_mission_adk_uses_same_gemini_json_generation_contract_as_clinical_runtime():
+    assert "from google.adk.models.google_llm import Gemini" in ADK_SOURCE
+    assert "model=Gemini(" in ADK_SOURCE
+    assert "types.HttpRetryOptions(attempts=2)" in ADK_SOURCE
+    assert "generate_content_config=types.GenerateContentConfig(" in ADK_SOURCE
+    assert 'response_mime_type="application/json"' in ADK_SOURCE
+    assert "response_json_schema=MISSION_PLAN_SCHEMA" in ADK_SOURCE
+    assert "output_schema=MISSION_PLAN_SCHEMA" not in ADK_SOURCE
 
 
 def test_navigation_tool_refuses_to_invent_coordinates(monkeypatch):
