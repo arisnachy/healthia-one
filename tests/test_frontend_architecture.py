@@ -58,7 +58,7 @@ def test_chat_shell_logo_scroll_avatar_and_new_consultation_contract() -> None:
         assert marker in html
     assert ".left-rail-scroll" in css and "overflow-y: auto" in css
     assert ".user-pill" in css
-    assert 'api("/api/demo/reset", {method:"POST"})' in app
+    assert 'api("/api/consultations/new", {method:"POST"})' in app
     assert "setSendState" in app
     assert "function publicName(value)" in app
     assert 'tr("app.module")' in app
@@ -73,15 +73,18 @@ def test_secondary_modules_are_locale_aware_and_keep_real_endpoints() -> None:
         "continuity": (WEB / "continuity.js").read_text(encoding="utf-8"),
         "privacy": (WEB / "privacy-controls.js").read_text(encoding="utf-8"),
         "devices": (WEB / "profile-devices.js").read_text(encoding="utf-8"),
+        "runtime": (WEB / "runtime-integrations.js").read_text(encoding="utf-8"),
     }
     for name, source in scripts.items():
         assert "window.HealthIAI18n" in source, f"{name} is not bound to the shared i18n runtime"
         assert "Accept-Language" in source, f"{name} does not propagate the visible locale to API calls"
-    for marker in ("renderPatientOS", "setupVoice", "data-health-action", "localeTag"):
+    for marker in ("renderPatientOS", "data-health-action", "localeTag"):
         assert marker in scripts["patient"]
-    assert "recognition.lang" in scripts["patient"]
-    assert 'recognition.lang = "es-DO"' not in scripts["patient"]
-    assert "recognition.lang='es-DO'" not in scripts["patient"]
+    assert "setupVoice" not in scripts["patient"]
+    assert "setupVoiceInput" in scripts["runtime"]
+    assert "recognition.lang" in scripts["runtime"]
+    assert 'recognition.lang = "es-DO"' not in scripts["runtime"]
+    assert "recognition.lang='es-DO'" not in scripts["runtime"]
     for marker in ('text("Family genogram"', 'text("Documents"', "/api/family", "/api/documents/upload"):
         assert marker in scripts["family"]
     for marker in ('text("Health timeline"', 'text("Treatment"', 'text("Appointments & visit"', "/api/appointments"):

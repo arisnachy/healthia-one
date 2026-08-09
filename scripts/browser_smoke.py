@@ -154,13 +154,25 @@ def mock_script(bootstrap: dict, responses: list[dict]) -> str:
 window.__mockSnapshot = {json.dumps(bootstrap, ensure_ascii=False)};
 window.__mockChatResponses = {json.dumps(responses, ensure_ascii=False)};
 window.__mockChatIndex = 0;
+window.__recognitionInstances = 0;
+window.SpeechRecognition = class {{
+  constructor() {{ window.__recognitionInstances += 1; }}
+  start() {{ this.onstart?.(); }}
+  stop() {{ this.onend?.(); }}
+}};
 class MockResponse {{
   constructor(body,status=200) {{ this._body=body; this.status=status; this.ok=status>=200&&status<300; }}
   async json() {{ return JSON.parse(JSON.stringify(this._body)); }}
 }}
 window.fetch = async function(path, options={{}}) {{
   const url=String(path);
+  if((options.method||'GET').toUpperCase()==='DELETE' && url.includes('/api/devices/')) {{
+    const connection=window.__mockSnapshot.device_summary.connections.find(item=>url.endsWith(item.id));
+    if(connection) connection.status='disconnected';
+    return new MockResponse({{disconnected:true}});
+  }}
   if(url.includes('/api/readiness')) return new MockResponse({{ready:true,llm_backend:'gemini_api',model:'gemini-3.6-flash',ai_ready:true,adk_ready:true}});
+  if(url.includes('/api/devices')) return new MockResponse(window.__mockSnapshot.device_summary);
   if(url.includes('/api/bootstrap')) return new MockResponse(window.__mockSnapshot);
   if(url.includes('/api/cost-control')) return new MockResponse({{mode:'guarded',enabled:true,requests_used:3,requests_remaining:1,request_limit:4,max_output_tokens:1400,llm_backend:'gemini_api',model:'gemini-3.6-flash',api_key_configured:true,ui_control_available:true}});
   if(url.includes('/api/integrations/providers')) return new MockResponse({{providers:[]}});
@@ -217,6 +229,19 @@ def run() -> dict:
     )
     require("ai_clinical_orientation_generated" in (final_mission.get("closure_evidence") or []), "backend mission response lost AI orientation evidence")
 
+    bootstrap["device_summary"]["connections"] = [
+        {
+            "id": "hc_browser_verified",
+            "provider": "health_connect",
+            "device_id": "browser-phone",
+            "display_name": "Browser Health Connect",
+            "status": "connected",
+            "permissions": ["steps", "heart_rate"],
+            "background_read": False,
+            "last_sync_at": bootstrap["updated_at"],
+            "last_error": "",
+        }
+    ]
     html = (WEB / "index.html").read_text(encoding="utf-8")
     html = re.sub(r'<link[^>]+href="/assets/[^"]+"[^>]*>', "", html)
     html = re.sub(r'<script[^>]+src="/assets/[^"]+"[^>]*></script>', "", html)
@@ -268,6 +293,26 @@ def run() -> dict:
         page.screenshot(path=str(OUTPUT / "02-collapsed.png"), full_page=True)
         page.locator("#expandLeft").click()
 
+        page.locator('.main-nav [data-open="devices"]').click()
+        page.wait_for_selector('#view-devices.is-active [data-disconnect-device="hc_browser_verified"]')
+        require(page.get_by_text("Authorized: steps, heart rate", exact=False).count() > 0, "device permissions are not visible")
+        require(page.get_by_text("The bridge credential authenticates the phone", exact=False).count() > 0, "device truth boundary is missing")
+        page.screenshot(path=str(OUTPUT / "03-devices.png"), full_page=True)
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.locator('[data-disconnect-device="hc_browser_verified"]').click()
+        page.wait_for_function("window.__mockSnapshot.device_summary.connections[0].status === 'disconnected'")
+        page.locator('.main-nav [data-open="chat"]').click()
+
+        input_box = page.locator("#chatInput")
+        input_box.click()
+        input_box.press_sequentially("abc++def", delay=25)
+        page.wait_for_timeout(500)
+        require(input_box.input_value() == "abc++def", "chat input duplicated characters or lost typed text")
+        page.locator("#voiceButton").click()
+        require(page.evaluate("window.__recognitionInstances") == 1, "voice input created duplicate recognition handlers")
+        page.locator("#voiceButton").click(force=True)
+        input_box.fill("")
+
         page.locator("#chatInput").fill("Desde ayer me arde al orinar y tengo que ir al baño a cada rato")
         page.locator("#sendButton").click()
         page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
@@ -301,6 +346,10 @@ def run() -> dict:
         "english_shell_locale": "pass",
         "spanish_input_preserves_spanish_clinical_content": "pass",
         "collapsed_navigation": "pass",
+        "device_permissions_and_truth_boundary": "pass",
+        "device_disconnect_action": "pass",
+        "chat_input_exact_typing": "pass",
+        "single_voice_handler": "pass",
         "first_message_visible": "pass",
         "dynamic_question_source": "pass",
         "two_five_question_blocks": "pass",

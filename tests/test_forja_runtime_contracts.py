@@ -48,7 +48,9 @@ def test_secure_launcher_defaults_to_zero_spend_and_requires_explicit_ai() -> No
     assert "$env:PYTHONUTF8 = \"1\"" in launcher
     assert "Get-NetIPAddress" in launcher
     assert "Telefono en la misma Wi-Fi" in launcher
-    assert "--host 0.0.0.0" in launcher
+    assert '[switch]$AllowLan' in launcher
+    assert 'if ($AllowLan) { "0.0.0.0" } else { "127.0.0.1" }' in launcher
+    assert 'if ($Reload) { $uvicornArgs += "--reload" }' in launcher
     assert "HEALTHIA_GOOGLE_AI_READY" in verifier
     assert "HEALTHIA_GOOGLE_AI_ERROR" in verifier
     assert "genai.Client(vertexai=True" in verifier
@@ -60,10 +62,13 @@ def test_android_bridge_uses_supported_compose_toolchain() -> None:
     root_gradle = (ROOT / "android-health-bridge/build.gradle.kts").read_text(encoding="utf-8")
     app_gradle = (ROOT / "android-health-bridge/app/build.gradle.kts").read_text(encoding="utf-8")
     assert 'id("org.jetbrains.kotlin.plugin.compose") version "2.1.0"' in root_gradle
+    assert 'id("com.android.application") version "8.9.1"' in root_gradle
     assert 'id("org.jetbrains.kotlin.plugin.compose")' in app_gradle
-    assert "compileSdk = 35" in app_gradle
-    assert "targetSdk = 35" in app_gradle
+    assert "compileSdk = 36" in app_gradle
+    assert "targetSdk = 36" in app_gradle
     assert "minSdk = 28" in app_gradle
+    assert "JavaVersion.VERSION_17" in app_gradle
+    assert "jvmToolchain(17)" in app_gradle
     assert "composeOptions" not in app_gradle
 
 

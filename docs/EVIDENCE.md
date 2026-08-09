@@ -130,7 +130,8 @@ Run `31203021748` ended in HTTP 429 due depleted quota/credits and is **not** co
 All rubric hard gates are now proven. The remaining step is operational rather than evidentiary:
 
 1. let the **exact final branch HEAD** finish CI + JUDGE + public-video probe with all mutation triggers disabled;
-2. merge PR #29 only if that exact head stays green;
-3. use `docs/DEVPOST_SUBMISSION.md`, the architecture diagram, repository and verified public video URL in Devpost.
+2. PR #29 was merged as `a1525ec` after its candidate head stayed green;
+3. rerun the exact-head gate for any later change before replacing the preserved submission candidate;
+4. use `docs/DEVPOST_SUBMISSION.md`, the architecture diagram, repository and verified public video URL in Devpost.
 
 A 100/100 JUDGE score is an evidence-backed internal rubric result; it is **not a guarantee of winning the hackathon**.

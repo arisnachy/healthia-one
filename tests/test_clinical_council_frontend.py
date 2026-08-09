@@ -42,11 +42,12 @@ def test_question_blocks_keep_compact_readable_typography_and_progressive_disclo
 
 def test_chat_feedback_is_immediate_patient_natural_and_never_fakes_ai_fallback() -> None:
     script = (ROOT / "web/clinical-council.js").read_text(encoding="utf-8")
-    assert "Entendiendo lo que dijiste y revisando qué todavía importa" in script
-    assert "Estoy tardando un poco más de lo normal" in script
-    assert "en lugar de inventar información" in script
+    assert "Recibí lo que me escribiste." in script
+    assert "Revisando qué necesita atención" in script
+    assert "Esto tarda un poco más; te diré si no puedo completarlo de forma segura." in script
     assert "addPending();" in script
     assert "setTimeout(addPending, 0)" not in script
+    assert 'document.addEventListener("healthia:chat-settled", removePending)' in script
     assert "Preguntas creadas para este caso" in script
     assert "No pude completar las próximas preguntas personalizadas" in script
     assert "Google AI está tardando" not in script

@@ -235,6 +235,6 @@ Video SHA-256: `cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19
 
 ## Submission status
 
-All functional, architecture, Cloud, browser, durability, reproducibility, video-content and public-video gates are proven. JUDGE Ω evidence score is **100/100** and the expected verdict is **`SUBMISSION_LOCKED`** once the exact final head completes CI/JUDGE green and PR #29 is merged.
+PR #29 was merged as `a1525ec` after its preserved candidate completed CI/JUDGE. Its **100/100** evidence score applies to that candidate only; the current working tree is not a replacement submission until it receives a fresh exact-head gate.
 
-The final operational sequence is: final exact-head CI/JUDGE → merge PR #29 → use this repository, architecture diagram, description and public video URL in Devpost.
+PR #29 was merged as `a1525ec` after its exact candidate head passed CI/JUDGE. For any later change, the operational sequence is: fresh exact-head CI/JUDGE → preserve or intentionally replace the submission evidence → use this repository, architecture diagram, description and public video URL in Devpost.

@@ -54,7 +54,7 @@ def test_android_bridge_guides_pairing_permissions_and_background_sync() -> None
     api = (SOURCE / "HealthiaApi.kt").read_text(encoding="utf-8")
     worker = (SOURCE / "HealthSyncWorker.kt").read_text(encoding="utf-8")
     rationale = (SOURCE / "PermissionsRationaleActivity.kt").read_text(encoding="utf-8")
-    assert "Código de seis dígitos" in activity
+    assert "Código temporal de ocho dígitos" in activity
     assert "HealthiaApi.claim" in activity
     assert 'putString("access_token"' in activity
     assert "Instalar o actualizar Health Connect" in activity

@@ -33,6 +33,7 @@ def test_profile_and_device_endpoints() -> None:
                 "device_id": "api-test-phone",
                 "source_package": "com.healthia.test",
                 "background_read": True,
+                "granted_metrics": ["heart_rate"],
                 "records": [
                     {
                         "external_id": "api-heart-1",

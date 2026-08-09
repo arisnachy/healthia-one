@@ -8,7 +8,7 @@ HealthIA ONE is a patient-owned continuity agent that turns scattered health evi
 **Google AI:** Gemini 3.5 Flash on Vertex AI  
 **Agent framework:** Google ADK  
 **Cloud:** Cloud Run + Firestore + private Cloud Storage + Vertex AI + Secret Manager  
-**JUDGE Ω:** **100/100 evidence-backed; final exact-head CI/merge gate in progress**
+**JUDGE Ω:** **100/100 evidence-backed on the merged Taskmaster candidate; subsequent changes require a fresh exact-head CI gate**
 
 The public/demo flows use synthetic patients and synthetic clinical files only.
 
@@ -261,6 +261,6 @@ tests/               regression, isolation and runtime contracts
 
 **Proven:** Gemini 3.5 Flash on Vertex AI; real Google ADK tool execution; Cloud Run; Firestore; private GCS; multimodal extraction; closed-loop Taskmaster mission; patient isolation; unmocked browser journey; original-evidence provenance; logout/login continuity; cross-revision durability; reproducible release; continuous judge demo; stable public video URL; and anonymous byte-identical publication proof.
 
-**Evidence score:** **100/100**. All hard gates are proven. The only remaining operational action is to pass final CI/JUDGE on the exact head, merge PR #29, and use the preserved evidence package in Devpost.
+**Evidence score:** **100/100**. PR #29 is merged and its exact merge head passed CI/JUDGE. Any later product hardening must pass a new exact-head gate before replacing the preserved Devpost candidate.
 
 See [`docs/EVIDENCE.md`](docs/EVIDENCE.md), [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md), and [`docs/DEVPOST_SUBMISSION.md`](docs/DEVPOST_SUBMISSION.md).

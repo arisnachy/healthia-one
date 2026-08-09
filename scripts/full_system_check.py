@@ -93,7 +93,7 @@ def run() -> dict:
         pending_result = check(
             client.post(
                 "/api/results/upload",
-                files={"file": ("scan.pdf", BytesIO(b"%PDF synthetic"), "application/pdf")},
+                files={"file": ("scan.pdf", BytesIO(b"%PDF-1.7 synthetic"), "application/pdf")},
             ),
             "unread pdf",
         )
@@ -187,6 +187,7 @@ def run() -> dict:
                     "device_id": "full-check-phone",
                     "source_package": "com.healthia.fullcheck",
                     "background_read": True,
+                    "granted_metrics": ["heart_rate"],
                     "records": [
                         {
                             "external_id": "full-check-heart-1",

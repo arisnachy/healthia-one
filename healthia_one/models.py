@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -361,13 +361,55 @@ class DeviceObservation(BaseModel):
     recording_method: str = Field(default="", max_length=80)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_measurement_contract(self):
+        contracts = {
+            DeviceMetric.STEPS: ({"count"}, 0, 1_000_000),
+            DeviceMetric.HEART_RATE: ({"bpm"}, 20, 300),
+            DeviceMetric.BLOOD_PRESSURE: ({"mmhg"}, 40, 300),
+            DeviceMetric.WEIGHT: ({"kg"}, 1, 500),
+            DeviceMetric.HEIGHT: ({"cm"}, 30, 250),
+            DeviceMetric.OXYGEN_SATURATION: ({"%", "percent"}, 1, 100),
+            DeviceMetric.RESPIRATORY_RATE: ({"breaths/min", "rpm"}, 1, 100),
+            DeviceMetric.BODY_TEMPERATURE: ({"°c", "c", "celsius"}, 25, 45),
+            DeviceMetric.BLOOD_GLUCOSE: ({"mg/dl"}, 1, 2000),
+            DeviceMetric.CHOLESTEROL: ({"mg/dl"}, 1, 1500),
+            DeviceMetric.MENSTRUATION_PERIOD: ({"period"}, 1, 1),
+        }
+        units, minimum, maximum = contracts[self.metric]
+        normalized_unit = self.unit.strip().lower().replace(" ", "")
+        normalized_units = {item.replace(" ", "") for item in units}
+        if normalized_unit not in normalized_units:
+            raise ValueError(f"unsupported unit for {self.metric.value}")
+        if not minimum <= self.value <= maximum:
+            raise ValueError(f"value outside supported range for {self.metric.value}")
+        if self.metric == DeviceMetric.BLOOD_PRESSURE:
+            if self.secondary_value is None or not 20 <= self.secondary_value <= 200:
+                raise ValueError("blood pressure requires a plausible diastolic value")
+            if self.value <= self.secondary_value:
+                raise ValueError("systolic pressure must be greater than diastolic pressure")
+        elif self.secondary_value is not None:
+            raise ValueError("secondary_value is only supported for blood pressure")
+        now = utc_now()
+        observed = self.observed_at
+        if observed.tzinfo is None:
+            raise ValueError("observed_at must include a timezone")
+        if observed > now.replace(microsecond=0) + timedelta(minutes=10):
+            raise ValueError("observed_at is too far in the future")
+        if observed < now - timedelta(days=3650):
+            raise ValueError("observed_at is outside the supported history window")
+        if len(str(self.metadata)) > 8192:
+            raise ValueError("metadata is too large")
+        return self
+
 
 class HealthConnectSyncBatch(BaseModel):
     device_id: str = Field(min_length=1, max_length=200)
     source_package: str = Field(default="", max_length=240)
     synced_at: datetime = Field(default_factory=utc_now)
     background_read: bool = False
-    records: list[DeviceObservation] = Field(default_factory=list, max_length=5000)
+    granted_metrics: list[DeviceMetric] = Field(default_factory=list)
+    records: list[DeviceObservation] = Field(default_factory=list, max_length=1000)
 
 
 class DeviceConnection(BaseModel):
@@ -466,7 +508,7 @@ class MedicationNormalizeRequest(BaseModel):
 
 
 class DevicePairingClaim(BaseModel):
-    code: str = Field(pattern=r"^\d{6}$")
+    code: str = Field(pattern=r"^\d{8}$")
     device_id: str = Field(min_length=3, max_length=200)
     display_name: str = Field(default="Android Health Connect", max_length=160)
 

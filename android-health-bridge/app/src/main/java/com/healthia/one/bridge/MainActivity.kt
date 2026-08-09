@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 BridgeScreen(
                     permissions = repository.permissions,
+                    dataPermissions = repository.dataPermissions,
                     healthConnectAvailable = repository.isAvailable,
                     providerUpdateRequired = repository.providerUpdateRequired,
                     supportsBackgroundRead = repository.supportsBackgroundRead,
@@ -49,8 +50,9 @@ class MainActivity : ComponentActivity() {
             updateStatus("Conectando con HealthIA…")
             runCatching {
                 val normalizedUrl = baseUrl.trim().trimEnd('/')
-                require(normalizedUrl.startsWith("http://") || normalizedUrl.startsWith("https://")) {
-                    "La dirección debe comenzar con http:// o https://"
+                val scheme = Uri.parse(normalizedUrl).scheme?.lowercase()
+                require(scheme == "https" || (BuildConfig.DEBUG && scheme == "http")) {
+                    "La versión de producción exige HTTPS. HTTP solo está permitido en la compilación de demostración local."
                 }
                 val token = withContext(Dispatchers.IO) {
                     HealthiaApi.claim(normalizedUrl, code, deviceId(), "HealthIA Android Bridge")
@@ -74,8 +76,16 @@ class MainActivity : ComponentActivity() {
                 val token = preferences.getString("access_token", "").orEmpty()
                 require(baseUrl.isNotBlank() && token.isNotBlank()) { "Vincula el puente primero" }
                 val records = repository.readSince()
+                val grantedMetrics = repository.grantedMetricNames()
                 withContext(Dispatchers.IO) {
-                    HealthiaApi.sync(baseUrl, token, deviceId(), records, background = false)
+                    HealthiaApi.sync(
+                        baseUrl,
+                        token,
+                        deviceId(),
+                        records,
+                        background = false,
+                        grantedMetrics = grantedMetrics,
+                    )
                 }
                 if (repository.supportsBackgroundRead) {
                     HealthSyncWorker.schedule(this@MainActivity)
@@ -114,6 +124,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun BridgeScreen(
     permissions: Set<String>,
+    dataPermissions: Set<String>,
     healthConnectAvailable: Boolean,
     providerUpdateRequired: Boolean,
     supportsBackgroundRead: Boolean,
@@ -130,10 +141,10 @@ private fun BridgeScreen(
     val permissionLauncher = rememberLauncherForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
-        status = if (granted.containsAll(permissions)) {
-            "Permisos concedidos. Ya puedes sincronizar."
+        status = if (granted.any { it in dataPermissions }) {
+            "Permisos actualizados. HealthIA solo leerá los tipos autorizados."
         } else {
-            "Faltan permisos. HealthIA solo leerá los tipos que autorices."
+            "No concediste tipos de datos. Elige al menos uno para sincronizar."
         }
     }
 
@@ -176,8 +187,8 @@ private fun BridgeScreen(
             )
             OutlinedTextField(
                 value = code,
-                onValueChange = { code = it.filter(Char::isDigit).take(6) },
-                label = { Text("Código de seis dígitos") },
+                onValueChange = { code = it.filter(Char::isDigit).take(8) },
+                label = { Text("Código temporal de ocho dígitos") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -185,7 +196,7 @@ private fun BridgeScreen(
             Text(status)
 
             Button(
-                enabled = baseUrl.isNotBlank() && code.length == 6,
+                enabled = baseUrl.isNotBlank() && code.length == 8,
                 onClick = { connect(baseUrl, code) { status = it } },
             ) { Text("Vincular con HealthIA") }
 

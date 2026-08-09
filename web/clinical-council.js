@@ -192,7 +192,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       form.innerHTML = `
         <header>
           <div><h4>${esc(text("Let me clarify two things first", "Déjame aclarar dos cosas primero"))}</h4><p>${esc(text("I kept what you already told me. I will show the remaining three only after these first two.", "Conservé lo que ya me dijiste. Te mostraré las tres restantes después de estas dos primeras."))}</p></div>
-          <span class="clinical-stage">2 + 3</span>
+          <div class="clinical-question-metadata"><span class="clinical-stage">2 + 3</span></div>
         </header>
         <div class="clinical-questions">
           ${questions.map((question, index) => `
@@ -218,7 +218,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       sourceBadge.textContent = source === "gemini_dynamic"
         ? text("Questions created for this case", "Preguntas creadas para este caso")
         : text("Adaptive questions checked for this case", "Preguntas adaptativas verificadas para este caso");
-      $("header", form)?.append(sourceBadge);
+      $(".clinical-question-metadata", form)?.append(sourceBadge);
 
       const reveal = $(".clinical-show-all", form);
       const submit = $(".clinical-submit", form);
@@ -280,7 +280,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
     }
 
     function removePending() {
-      $("#messageList .chat-pending")?.remove();
+      $$("#messageList .chat-pending").forEach(node => node.remove());
       clearTimeout(pendingTimer);
       pendingTimer = null;
     }
@@ -292,13 +292,13 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       const article = document.createElement("article");
       article.className = "message assistant chat-pending";
       article.innerHTML = `
-        <div class="avatar">H1</div>
-        <div class="message-content"><div class="message-head"><strong>HealthIA</strong><span>${text("now", "ahora")}</span></div><div class="message-body"><p>${text("Understanding what you said and checking what still matters", "Entendiendo lo que dijiste y revisando qué todavía importa")}<span class="chat-pending-dots"></span></p></div></div>`;
+        <div class="avatar healthia-avatar" aria-hidden="true">✦</div>
+        <div class="message-content"><div class="message-head"><strong>HealthIA</strong><span>${text("now", "ahora")}</span></div><div class="message-body"><p>${text("I received what you wrote.", "Recibí lo que me escribiste.")}</p></div><div class="chat-pending-status" role="status" aria-live="polite"><span>${text("Checking what needs attention", "Revisando qué necesita atención")}</span><span class="chat-pending-dots" aria-hidden="true"></span></div></div>`;
       list.append(article);
       $("#chatScroll")?.scrollTo({top: $("#chatScroll").scrollHeight, behavior: "smooth"});
       pendingTimer = setTimeout(() => {
-        const body = $(".message-body", article);
-        if (body) body.innerHTML = `<p>${text("I am taking a little longer than usual. If I cannot complete this part safely, I will tell you instead of inventing information.", "Estoy tardando un poco más de lo normal. Si no puedo completar esta parte de forma segura, te lo diré en lugar de inventar información.")}</p>`;
+        const status = $(".chat-pending-status span", article);
+        if (status) status.textContent = text("This is taking a little longer; I will tell you if I cannot complete it safely.", "Esto tarda un poco más; te diré si no puedo completarlo de forma segura.");
       }, 9000);
     }
 
@@ -340,6 +340,7 @@ if (!window.__HEALTHIA_CLINICAL_COUNCIL__) {
       clearTimeout(hydrateTimer);
       hydrateTimer = setTimeout(() => loadSnapshot().catch(() => hydrateMessages()), 80);
     });
+    document.addEventListener("healthia:chat-settled", removePending);
     document.addEventListener("healthia:locale-changed", () => {
       renderSidebarCouncil();
       consolidateIdentity();

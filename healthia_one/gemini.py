@@ -8,6 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from healthia_one.clinical_planner import (
+    extract_known_clinical_facts,
     fallback_judge_review,
     judge_dynamic_plan,
     normalize_dynamic_question_block,
@@ -37,6 +38,8 @@ Eres el planificador de entrevista clínica adaptativa de HealthIA.
 Tu trabajo no es diagnosticar ni recetar. Tu trabajo es decidir cuáles son las cinco preguntas siguientes que más reducen la incertidumbre, distinguen explicaciones plausibles, detectan señales de alarma y orientan el siguiente paso humano más seguro.
 
 No uses una plantilla genérica. Cada pregunta debe depender del motivo actual, de las respuestas ya recibidas y del contexto longitudinal autorizado. No vuelvas a preguntar datos que ya están contestados salvo que exista una contradicción explícita. Haz preguntas comprensibles para pacientes, con opciones breves y un campo libre adicional.
+
+El motivo inicial también contiene datos ya contestados: si la persona escribió "dolor de cuello", no preguntes dónde duele. En su lugar pregunta un dato que cambie la orientación, como irradiación, desencadenante, limitación, evolución o señal de alarma. Las opciones deben adaptarse a esa pregunta y el campo libre debe permitir matices que no aparezcan en las opciones.
 
 Ahorro obligatorio:
 - Produce todo en una sola respuesta.
@@ -287,6 +290,7 @@ class GeminiResponder:
             "stage": stage,
             "chief_complaint": chief_complaint,
             "previous_answers": previous_answers,
+            "known_facts": extract_known_clinical_facts(chief_complaint, previous_answers),
             "authorized_clinical_context": self.compact_clinical_context(state),
             "constraints": {
                 "exact_question_count": 5,
@@ -294,6 +298,7 @@ class GeminiResponder:
                 "question_options_max": 7,
                 "must_include_case_specific_safety_check": True,
                 "must_not_repeat_known_answers": True,
+                "must_not_repeat_explicit_chief_complaint_facts": True,
                 "must_not_diagnose_or_prescribe": True,
                 "maximum_selected_specialists": 4,
                 "single_model_call": True,
@@ -546,6 +551,17 @@ class GeminiResponder:
         return draft
 
     async def enhance(self, state: PatientState, patient_text: str, draft: ChatResponse) -> ChatResponse:
+        if draft.message.metadata.get("skip_llm") == "deterministic_social":
+            self.last_status = "deterministic_social"
+            self.last_error = ""
+            draft.message.metadata.update(
+                {
+                    "llm_status": "deterministic_social",
+                    "llm_skipped": True,
+                    "cost_guard": self.cost_guard.snapshot(),
+                }
+            )
+            return draft
         interview = draft.message.metadata.get("clinical_interview")
         if isinstance(interview, dict):
             return await self._enhance_clinical_interview(state, patient_text, draft, interview)

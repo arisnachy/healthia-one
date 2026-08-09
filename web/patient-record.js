@@ -120,33 +120,6 @@ if (!window.__HEALTHIA_PATIENT_RECORD__) {
     sync();
   }
 
-  function setupVoice() {
-    const button = $("#voiceButton");
-    const input = $("#chatInput");
-    if (!button || !input || button.dataset.patientVoiceBound === "true") return;
-    button.dataset.patientVoiceBound = "true";
-    button.addEventListener("click", () => {
-      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!Recognition) {
-        const toast = $("#toast");
-        if (toast) { toast.textContent = text("Voice dictation is not available in this browser.", "El dictado no está disponible en este navegador."); toast.hidden = false; setTimeout(() => { toast.hidden = true; }, 2800); }
-        return;
-      }
-      const recognition = new Recognition();
-      recognition.lang = localeTag();
-      recognition.interimResults = true;
-      recognition.continuous = false;
-      button.classList.add("is-listening");
-      recognition.onresult = event => {
-        input.value = [...event.results].map(result => result[0].transcript).join(" ");
-        input.dispatchEvent(new Event("input", {bubbles:true}));
-      };
-      recognition.onerror = () => {};
-      recognition.onend = () => { button.classList.remove("is-listening"); input.focus(); };
-      recognition.start();
-    });
-  }
-
   function setupRefreshHooks() {
     ["#runCheck", "#dataForm", "#resultFile", "#resultFilePage"].forEach(selector => {
       $(selector)?.addEventListener(selector.includes("File") ? "change" : "click", () => setTimeout(() => loadSnapshot().catch(() => {}), 700));
@@ -155,7 +128,7 @@ if (!window.__HEALTHIA_PATIENT_RECORD__) {
   }
 
   function boot() {
-    setupComposer(); setupVoice(); setupMessageActions(); setupRefreshHooks(); loadSnapshot().catch(() => {});
+    setupComposer(); setupMessageActions(); setupRefreshHooks(); loadSnapshot().catch(() => {});
   }
   document.addEventListener("healthia:locale-changed", () => { renderPatientOS(); hydrateMessageActions(); });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, {once:true}); else boot();

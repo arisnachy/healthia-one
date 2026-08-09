@@ -45,10 +45,10 @@ class DevicePairingManager:
 
     def __init__(
         self,
-        ttl_minutes: int = 10,
+        ttl_minutes: int = 5,
         *,
         token_secret: str | bytes | None = None,
-        token_ttl_days: int = 90,
+        token_ttl_days: int = 30,
     ) -> None:
         self.ttl_minutes = ttl_minutes
         self.token_ttl_days = max(1, int(token_ttl_days))
@@ -139,7 +139,7 @@ class DevicePairingManager:
         with self._lock:
             self._cleanup_unlocked()
             for _ in range(20):
-                code = f"{secrets.randbelow(1_000_000):06d}"
+                code = f"{secrets.randbelow(100_000_000):08d}"
                 if code not in self._sessions:
                     break
             else:

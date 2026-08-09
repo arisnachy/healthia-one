@@ -4,6 +4,8 @@ param(
     [switch]$Mock,
     [switch]$StartEnabled,
     [switch]$LiveProbe,
+    [switch]$Reload,
+    [switch]$AllowLan,
     [switch]$SkipApiCheck,
     [ValidateRange(1, 100)][int]$RequestLimit = 12,
     [ValidateRange(256, 4096)][int]$MaxOutputTokens = 1400,
@@ -129,23 +131,28 @@ try {
 
     Write-Host "Cuenta del paciente: login/logout ACTIVOS; crea tu cuenta en la primera apertura." -ForegroundColor Green
     Write-Host "Navegador en esta PC: http://127.0.0.1:$Port" -ForegroundColor Green
-    try {
-        $lanAddresses = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-            Where-Object {
-                $_.IPAddress -notlike "127.*" -and
-                $_.IPAddress -notlike "169.254.*" -and
-                $_.AddressState -eq "Preferred"
-            } |
-            Select-Object -ExpandProperty IPAddress -Unique
-        foreach ($address in $lanAddresses) {
-            Write-Host "Telefono en la misma Wi-Fi: http://${address}:$Port" -ForegroundColor Green
+    if ($AllowLan) {
+        try {
+            $lanAddresses = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                Where-Object {
+                    $_.IPAddress -notlike "127.*" -and
+                    $_.IPAddress -notlike "169.254.*" -and
+                    $_.AddressState -eq "Preferred"
+                } |
+                Select-Object -ExpandProperty IPAddress -Unique
+            foreach ($address in $lanAddresses) {
+                Write-Host "Telefono en la misma Wi-Fi: http://${address}:$Port" -ForegroundColor Green
+            }
+        }
+        catch {
+            Write-Host "No pude detectar la IP LAN automaticamente; usa ipconfig para verla." -ForegroundColor Yellow
         }
     }
-    catch {
-        Write-Host "No pude detectar la IP LAN automaticamente; usa ipconfig para verla." -ForegroundColor Yellow
-    }
 
-    & $venvPython -m uvicorn app.main:app --host 0.0.0.0 --port $Port --reload
+    $bindHost = if ($AllowLan) { "0.0.0.0" } else { "127.0.0.1" }
+    $uvicornArgs = @("-m", "uvicorn", "app.main:app", "--host", $bindHost, "--port", [string]$Port)
+    if ($Reload) { $uvicornArgs += "--reload" }
+    & $venvPython @uvicornArgs
 }
 finally {
     if ($bstr -ne [IntPtr]::Zero) {

@@ -14,7 +14,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 class HealthConnectRepository(private val context: Context) {
-    private val providerPackageName = HealthConnectClient.DEFAULT_PROVIDER_PACKAGE_NAME
+    private val providerPackageName = "com.google.android.apps.healthdata"
     private val sdkStatus = HealthConnectClient.getSdkStatus(context, providerPackageName)
 
     val isAvailable: Boolean = sdkStatus == HealthConnectClient.SDK_AVAILABLE
@@ -31,18 +31,26 @@ class HealthConnectRepository(private val context: Context) {
             HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND
         ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
 
+    private val metricPermissions: Map<String, String>
+        get() = linkedMapOf(
+            "steps" to HealthPermission.getReadPermission(StepsRecord::class),
+            "heart_rate" to HealthPermission.getReadPermission(HeartRateRecord::class),
+            "blood_pressure" to HealthPermission.getReadPermission(BloodPressureRecord::class),
+            "weight" to HealthPermission.getReadPermission(WeightRecord::class),
+            "height" to HealthPermission.getReadPermission(HeightRecord::class),
+            "oxygen_saturation" to HealthPermission.getReadPermission(OxygenSaturationRecord::class),
+            "respiratory_rate" to HealthPermission.getReadPermission(RespiratoryRateRecord::class),
+            "body_temperature" to HealthPermission.getReadPermission(BodyTemperatureRecord::class),
+            "blood_glucose" to HealthPermission.getReadPermission(BloodGlucoseRecord::class),
+            "menstruation_period" to HealthPermission.getReadPermission(MenstruationPeriodRecord::class),
+        )
+
+    val dataPermissions: Set<String>
+        get() = metricPermissions.values.toSet()
+
     val permissions: Set<String>
         get() = buildSet {
-            add(HealthPermission.getReadPermission(StepsRecord::class))
-            add(HealthPermission.getReadPermission(HeartRateRecord::class))
-            add(HealthPermission.getReadPermission(BloodPressureRecord::class))
-            add(HealthPermission.getReadPermission(WeightRecord::class))
-            add(HealthPermission.getReadPermission(HeightRecord::class))
-            add(HealthPermission.getReadPermission(OxygenSaturationRecord::class))
-            add(HealthPermission.getReadPermission(RespiratoryRateRecord::class))
-            add(HealthPermission.getReadPermission(BodyTemperatureRecord::class))
-            add(HealthPermission.getReadPermission(BloodGlucoseRecord::class))
-            add(HealthPermission.getReadPermission(MenstruationPeriodRecord::class))
+            addAll(dataPermissions)
             if (supportsBackgroundRead) add(PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
         }
 
@@ -69,24 +77,30 @@ class HealthConnectRepository(private val context: Context) {
         return client.permissionController.getGrantedPermissions()
     }
 
+    suspend fun grantedMetricNames(): List<String> {
+        val granted = grantedPermissions()
+        return metricPermissions.filterValues { it in granted }.keys.toList()
+    }
+
     suspend fun readSince(start: Instant = Instant.now().minus(24, ChronoUnit.HOURS)): List<HealthRecordDto> {
         requireAvailable()
         val granted = grantedPermissions()
-        val missing = permissions - granted
-        require(missing.isEmpty()) { "Faltan permisos de Health Connect" }
+        require(metricPermissions.values.any { it in granted }) {
+            "Concede al menos un tipo de dato en Health Connect"
+        }
 
         val end = Instant.now()
         val range = TimeRangeFilter.between(start, end)
         val output = mutableListOf<HealthRecordDto>()
-        read<StepsRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("steps") in granted) read<StepsRecord>(range).forEach { record ->
             output += record.dto("steps", record.count.toDouble(), "count", record.startTime)
         }
-        read<HeartRateRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("heart_rate") in granted) read<HeartRateRecord>(range).forEach { record ->
             record.samples.forEachIndexed { index, sample ->
                 output += record.dto("heart_rate", sample.beatsPerMinute.toDouble(), "bpm", sample.time, suffix = index.toString())
             }
         }
-        read<BloodPressureRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("blood_pressure") in granted) read<BloodPressureRecord>(range).forEach { record ->
             output += record.dto(
                 "blood_pressure",
                 record.systolic.inMillimetersOfMercury,
@@ -95,25 +109,25 @@ class HealthConnectRepository(private val context: Context) {
                 secondary = record.diastolic.inMillimetersOfMercury,
             )
         }
-        read<WeightRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("weight") in granted) read<WeightRecord>(range).forEach { record ->
             output += record.dto("weight", record.weight.inKilograms, "kg", record.time)
         }
-        read<HeightRecord>(range).forEach { record ->
-            output += record.dto("height", record.height.inCentimeters, "cm", record.time)
+        if (metricPermissions.getValue("height") in granted) read<HeightRecord>(range).forEach { record ->
+            output += record.dto("height", record.height.inMeters * 100.0, "cm", record.time)
         }
-        read<OxygenSaturationRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("oxygen_saturation") in granted) read<OxygenSaturationRecord>(range).forEach { record ->
             output += record.dto("oxygen_saturation", record.percentage.value, "%", record.time)
         }
-        read<RespiratoryRateRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("respiratory_rate") in granted) read<RespiratoryRateRecord>(range).forEach { record ->
             output += record.dto("respiratory_rate", record.rate, "breaths/min", record.time)
         }
-        read<BodyTemperatureRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("body_temperature") in granted) read<BodyTemperatureRecord>(range).forEach { record ->
             output += record.dto("body_temperature", record.temperature.inCelsius, "°C", record.time)
         }
-        read<BloodGlucoseRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("blood_glucose") in granted) read<BloodGlucoseRecord>(range).forEach { record ->
             output += record.dto("blood_glucose", record.level.inMilligramsPerDeciliter, "mg/dL", record.time)
         }
-        read<MenstruationPeriodRecord>(range).forEach { record ->
+        if (metricPermissions.getValue("menstruation_period") in granted) read<MenstruationPeriodRecord>(range).forEach { record ->
             output += record.dto("menstruation_period", 1.0, "period", record.startTime)
         }
         return output
