@@ -14,7 +14,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 class HealthConnectRepository(private val context: Context) {
-    private val providerPackageName = HealthConnectClient.DEFAULT_PROVIDER_PACKAGE_NAME
+    private val providerPackageName = "com.google.android.apps.healthdata"
     private val sdkStatus = HealthConnectClient.getSdkStatus(context, providerPackageName)
 
     val isAvailable: Boolean = sdkStatus == HealthConnectClient.SDK_AVAILABLE
@@ -113,7 +113,7 @@ class HealthConnectRepository(private val context: Context) {
             output += record.dto("weight", record.weight.inKilograms, "kg", record.time)
         }
         if (metricPermissions.getValue("height") in granted) read<HeightRecord>(range).forEach { record ->
-            output += record.dto("height", record.height.inCentimeters, "cm", record.time)
+            output += record.dto("height", record.height.inMeters * 100.0, "cm", record.time)
         }
         if (metricPermissions.getValue("oxygen_saturation") in granted) read<OxygenSaturationRecord>(range).forEach { record ->
             output += record.dto("oxygen_saturation", record.percentage.value, "%", record.time)
