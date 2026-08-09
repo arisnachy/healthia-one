@@ -12,6 +12,7 @@ from healthia_one.conversation_brain import build_frame
 from healthia_one.deterministic_router import respond as deterministic_respond
 from healthia_one.language import current_requested_locale, normalize_locale
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
+from healthia_one.opportunity_integration import respond as opportunity_respond
 from healthia_one.safety import assess_text
 
 
@@ -243,6 +244,17 @@ def _human_clinical_conversation(state: PatientState, patient_text: str) -> Chat
 
 
 def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
+    safety = assess_text(patient_text)
+    if safety.must_stop_normal_flow:
+        frame = build_frame(state, patient_text)
+        response = deterministic_respond(state, _router_text(patient_text))
+        return _attach_conversation_frame(response, frame)
+
+    opportunity_response = opportunity_respond(state, patient_text)
+    if opportunity_response is not None:
+        frame = build_frame(state, patient_text)
+        return _attach_conversation_frame(opportunity_response, frame)
+
     social_response = respond_to_social_small_talk(state, _clinical_text(patient_text))
     if social_response is not None:
         frame = build_frame(state, patient_text)
