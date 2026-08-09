@@ -92,3 +92,34 @@ def test_frontend_executes_chat_ui_actions_only_after_a_new_chat_response() -> N
     assert "let armed = false" in source
     assert "latestAssistant?.metadata?.ui_action" in source
     assert 'document.addEventListener("healthia:ui-updated"' not in source
+
+
+def test_adaptive_five_question_contract_is_presented_one_turn_at_a_time() -> None:
+    source = (ROOT / "web" / "conversational-interview.js").read_text(encoding="utf-8")
+    index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    css = (ROOT / "web" / "conversational-interview.css").read_text(encoding="utf-8")
+
+    assert "__HEALTHIA_CONVERSATIONAL_INTERVIEW__" in source
+    assert 'const ANSWER_PREFIX = "[ENTREVISTA_CLINICA]"' in source
+    assert "fields.length !== 5" in source
+    assert "index !== current" in source
+    assert "clinical-next-question" in source
+    assert "clinical-dont-know" in source
+    assert "ensureFreeText(fieldset)" in source
+    assert "form.requestSubmit()" in source
+    assert "collectPayload(form, fields)" in source
+    assert "answeredByKey" in source
+    assert "conversationCompleted" in source
+    assert ".clinical-conversation-mode" in css
+    assert index.index("clinical-council.js") < index.index("conversational-interview.js")
+
+
+def test_answered_interview_can_render_as_readable_chat_history() -> None:
+    source = (ROOT / "web" / "conversational-interview.js").read_text(encoding="utf-8")
+
+    assert "parseAnswerPayload" in source
+    assert "payload.answers" in source
+    assert "clinical-conversation-history" in source
+    assert "clinical-mini-turn assistant" in source
+    assert "clinical-mini-turn patient" in source
+    assert "Esta parte ya la conversamos" in source
