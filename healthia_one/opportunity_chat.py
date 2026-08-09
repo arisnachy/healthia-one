@@ -7,7 +7,12 @@ from pydantic import BaseModel, Field
 
 from healthia_one.autopilot_runtime import AutopilotEvent, OpportunityAutopilot
 from healthia_one.models import PatientState
-from healthia_one.opportunity_autopilot import DiscoveryStatus, OpportunityVault, opportunity_snapshot
+from healthia_one.opportunity_autopilot import (
+    DiscoveryStatus,
+    OpportunityVault,
+    opportunity_snapshot,
+    therapeutic_comparison,
+)
 
 
 def _normalize(value: str) -> str:
@@ -53,6 +58,17 @@ def _latest_application(vault: OpportunityVault):
     return vault.applications[-1] if vault.applications else None
 
 
+def _latest_discovery(vault: OpportunityVault):
+    if not vault.discoveries:
+        return None
+    return sorted(vault.discoveries, key=lambda item: item.created_at, reverse=True)[0]
+
+
+def _source_link(title: str, url: str) -> str:
+    safe_title = str(title or "Fuente original").replace("[", "(").replace("]", ")")
+    return f"[{safe_title}]({url})" if url else safe_title
+
+
 class OpportunityChatController:
     """Chat-first control surface for discoveries, programs and applications."""
 
@@ -92,13 +108,61 @@ class OpportunityChatController:
                 content = (
                     f"Encontré algo que pasó el filtro de relevancia para {scope}: **{item.title}**. "
                     f"{item.summary[:700]} "
-                    f"Fuente: {item.source.publisher or item.source.url}. "
+                    f"Fuente original: {_source_link(item.source.publisher or item.source.title, item.source.url)}. "
                     "Esto no cambia por sí solo ningún tratamiento. ¿Quieres que lo compare con lo que tienes registrado?"
                 )
             return OpportunityChatResult(
                 content=content,
                 action="show_discoveries",
                 metadata=snapshot,
+            )
+
+        if _mentions(
+            text,
+            (
+                "comparalo con mi medicacion",
+                "compáralo con mi medicación",
+                "comparalo con lo que tomo",
+                "compáralo con lo que tomo",
+                "compara esto con mi tratamiento",
+                "compare it with my medication",
+                "compare this with my treatment",
+            ),
+        ):
+            discovery = _latest_discovery(vault)
+            if discovery is None:
+                return OpportunityChatResult(
+                    content=(
+                        "No tengo una novedad científica guardada para comparar todavía. "
+                        "Puedes pedirme que revise novedades sobre una condición concreta."
+                    ),
+                    action="comparison_source_needed",
+                )
+            comparison = therapeutic_comparison(state, discovery)
+            medications = comparison["current_medications"]
+            current = "; ".join(
+                " ".join(part for part in (item["name"], item["strength"], item["schedule"]) if part)
+                for item in medications
+            ) or "No tengo medicación activa confirmada en el registro."
+            benefits = discovery.potential_benefits or [
+                "La fuente encontrada no trae todavía un beneficio estructurado que pueda atribuir con seguridad."
+            ]
+            limitations = discovery.limitations or [
+                "La aplicabilidad individual necesita revisar la fuente completa y el contexto clínico con un profesional."
+            ]
+            content = (
+                f"La comparé con tu registro actual. **Tratamiento registrado:** {current}. "
+                f"**Lo que la fuente reporta como posible beneficio:** {'; '.join(benefits[:4])}. "
+                f"**Límites/precauciones:** {'; '.join(limitations[:4])}. "
+                f"Fuente original: {_source_link(discovery.source.publisher or discovery.source.title, discovery.source.url)}. "
+                "Esto organiza evidencia para conversar con tu profesional; no demuestra que la nueva opción sea mejor para ti "
+                "y no inicia, suspende, sustituye ni cambia dosis."
+            )
+            return OpportunityChatResult(
+                content=content,
+                action="therapeutic_comparison",
+                resource_id=discovery.id,
+                metadata={"comparison": comparison},
             )
 
         if _mentions(
@@ -128,8 +192,9 @@ class OpportunityChatController:
                 )
             program = vault.programs[-1]
             content = (
-                f"Tengo {len(vault.programs)} recurso(s) verificado(s). El más reciente es **{program.title}** "
+                f"Tengo {len(vault.programs)} recurso(s) guardado(s). El más reciente es **{program.title}** "
                 f"de {program.provider}. {program.benefit_summary} "
+                f"Fuente: {_source_link(program.provider, program.url)}. "
                 "Puedo revisar los requisitos contra tus datos y decirte exactamente qué falta, sin asumir elegibilidad."
             )
             return OpportunityChatResult(
@@ -161,7 +226,9 @@ class OpportunityChatController:
                     action="application_program_needed",
                 )
             packet = self.autopilot.prepare_application(state, program.id)
-            parts = [f"Preparé el borrador para **{program.title}**."]
+            parts = [
+                f"Preparé el borrador para **{program.title}**. Fuente: {_source_link(program.provider, program.url)}."
+            ]
             if packet.missing_documents:
                 parts.append("Documentos que faltan: " + ", ".join(packet.missing_documents) + ".")
             if packet.missing_fields:
