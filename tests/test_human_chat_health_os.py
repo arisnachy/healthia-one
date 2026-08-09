@@ -70,7 +70,7 @@ def test_privacy_control_response_exposes_health_os_action() -> None:
     assert response.message.metadata["health_os_control"] is True
 
 
-def test_frontend_executes_chat_ui_actions() -> None:
+def test_frontend_executes_chat_ui_actions_only_after_a_new_chat_response() -> None:
     source = (ROOT / "web" / "continuity.js").read_text(encoding="utf-8")
 
     assert "__HEALTHIA_CHAT_OS_CONTROLLER__" in source
@@ -78,4 +78,6 @@ def test_frontend_executes_chat_ui_actions() -> None:
     assert 'action.type === "open_dialog"' in source
     assert 'action.type === "pick_file"' in source
     assert 'healthia:chat-settled' in source
-    assert 'healthia:ui-updated' in source
+    assert "let armed = false" in source
+    assert "latestAssistant?.metadata?.ui_action" in source
+    assert 'document.addEventListener("healthia:ui-updated"' not in source
