@@ -34,6 +34,8 @@ if (!window.__HEALTHIA_CHAT_OS_CONTROLLER__) {
     const $ = (selector, root = document) => root.querySelector(selector);
     const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
     let lastAppliedMessageId = "";
+    let armed = false;
+    let retries = 0;
     let scheduled = null;
 
     function showToast(message) {
@@ -47,7 +49,7 @@ if (!window.__HEALTHIA_CHAT_OS_CONTROLLER__) {
 
     function openView(view) {
       if (!view) return false;
-      const section = $(`#view-${CSS.escape(view)}`);
+      const section = document.getElementById(`view-${view}`);
       if (!section) return false;
       $$(".view").forEach(node => node.classList.toggle("is-active", node === section));
       $$('.main-nav [data-open], .primary-action[data-open]').forEach(node => node.classList.toggle("is-active", node.dataset.open === view));
@@ -58,49 +60,65 @@ if (!window.__HEALTHIA_CHAT_OS_CONTROLLER__) {
 
     function executeUiAction(message) {
       const action = message?.metadata?.ui_action;
-      if (!action || !message?.id || message.id === lastAppliedMessageId) return;
-      lastAppliedMessageId = message.id;
-
-      if (action.view) openView(String(action.view));
+      if (!armed || !action || !message?.id || message.id === lastAppliedMessageId) return false;
+      if (action.view && !openView(String(action.view))) return false;
 
       if (action.type === "open_dialog" && action.dialog) {
-        const trigger = $(`[data-dialog="${CSS.escape(String(action.dialog))}"]`);
-        if (trigger) {
-          trigger.click();
-          showToast(document.documentElement.lang === "es" ? "Abrí el registro que pediste." : "I opened the entry you asked for.");
-        }
+        const trigger = document.querySelector(`[data-dialog="${String(action.dialog).replace(/"/g, "\\\"")}"]`);
+        if (!trigger) return false;
+        trigger.click();
+        showToast(document.documentElement.lang === "es" ? "Abrí el registro que pediste." : "I opened the entry you asked for.");
       } else if (action.type === "pick_file" && action.picker === "result") {
         const input = $("#resultFilePage") || $("#resultFile");
-        if (input) {
-          input.click();
-          showToast(document.documentElement.lang === "es" ? "Selecciona el resultado que quieres cargar." : "Choose the result you want to upload.");
-        }
+        if (!input) return false;
+        input.click();
+        showToast(document.documentElement.lang === "es" ? "Selecciona el resultado que quieres cargar." : "Choose the result you want to upload.");
       } else if (action.type === "open_view") {
         showToast(document.documentElement.lang === "es" ? "Listo, abrí esa parte de HealthIA." : "Done, I opened that part of HealthIA.");
       }
+
+      lastAppliedMessageId = message.id;
+      armed = false;
+      retries = 0;
+      return true;
     }
 
     async function applyLatestAction() {
+      if (!armed) return;
       try {
         const response = await fetch("/api/bootstrap", {headers: {Accept: "application/json", "Accept-Language": window.HealthIAI18n?.locale || "en"}});
         if (!response.ok) return;
         const data = await response.json();
-        const latest = [...(data.messages || [])].reverse().find(message => message.role === "assistant" && message.metadata?.ui_action);
-        executeUiAction(latest);
-      } catch {}
+        const latestAssistant = [...(data.messages || [])].reverse().find(message => message.role === "assistant");
+        if (!latestAssistant?.metadata?.ui_action) {
+          armed = false;
+          return;
+        }
+        if (!executeUiAction(latestAssistant) && retries < 8) {
+          retries += 1;
+          scheduled = setTimeout(applyLatestAction, 80);
+        }
+      } catch {
+        armed = false;
+      }
     }
 
     function scheduleApply() {
+      if (!armed) return;
       clearTimeout(scheduled);
-      scheduled = setTimeout(applyLatestAction, 40);
+      scheduled = setTimeout(applyLatestAction, 30);
+    }
+
+    function armForChatResponse() {
+      armed = true;
+      retries = 0;
+      scheduleApply();
     }
 
     function boot() {
       const list = $("#messageList");
       if (list) new MutationObserver(scheduleApply).observe(list, {childList: true});
-      document.addEventListener("healthia:chat-settled", scheduleApply);
-      document.addEventListener("healthia:ui-updated", scheduleApply);
-      scheduleApply();
+      document.addEventListener("healthia:chat-settled", armForChatResponse);
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, {once: true});
