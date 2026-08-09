@@ -46,7 +46,8 @@ jobs:
           subscription="healthia-gmail-proof-${run_suffix}"
           full_topic="projects/${PROJECT_ID}/topics/${topic}"
           repo="cloud-run-source-deploy"
-          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/${repo}/healthia-gmail-proof:${GITHUB_SHA}"
+          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/${repo}/healthia-gmail-proof"
+          image="${image_package}:${GITHUB_SHA}"
           active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
           runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
@@ -62,9 +63,14 @@ jobs:
             gcloud pubsub subscriptions delete "$subscription" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
             gcloud pubsub topics delete "$topic" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
             gcloud run services delete "$service" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1
-            gcloud artifacts docker images delete "$image" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1
+            gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1
           }
           trap cleanup EXIT
+
+          # A previous proof may have completed Cloud Build after the GitHub job
+          # had already failed on log streaming. Remove only this dedicated proof
+          # package before building the new exact checkout.
+          gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
 
           {
             echo "# Google Health Constellation live proof"
@@ -78,8 +84,17 @@ jobs:
             echo
           } > "$proof"
 
-          echo "Building exact workflow checkout into Artifact Registry..."
-          gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --quiet
+          echo "Building exact workflow checkout into Artifact Registry without log streaming..."
+          gcloud builds submit . \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --tag "$image" \
+            --suppress-logs \
+            --quiet
+
+          # Artifact Registry is our independently readable build artifact truth.
+          image_digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+          test -n "$image_digest"
 
           echo "Deploying private worker..."
           gcloud run deploy "$service" \
@@ -172,10 +187,10 @@ jobs:
           done
           test "$push_status" = "204"
 
-          image_digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
           {
             echo "## Proven"
             echo "- Cloud Build completed for the exact workflow checkout."
+            echo "- Artifact Registry image digest: $image_digest"
             echo "- Private Cloud Run revision: $revision"
             echo "- Unauthenticated /healthz status: $unauth_status"
             echo "- Authenticated /healthz status: $auth_status"
@@ -183,7 +198,6 @@ jobs:
             echo "- Synthetic Gmail-shaped Pub/Sub message id: $message_id"
             echo "- Cloud Run /events/gmail-push status from Pub/Sub: $push_status"
             echo "- Firestore-backed worker runtime initialized successfully for an unknown mailbox and failed closed with 204."
-            if [[ -n "$image_digest" ]]; then echo "- Image digest: $image_digest"; fi
             echo
             echo "## Not proven by this run"
             echo "- Real Gmail users.watch / users.history.list: no patient OAuth refresh secret exists in Secret Manager."
