@@ -12,17 +12,17 @@ from healthia_one.google_constellation_store import (
     GoogleAuthorizationStore,
     GoogleGrantStore,
     GoogleReceiptStore,
+    build_action_intent_key,
 )
 
 
 class GuardedGoogleActionExecutor:
     """Durable authorization boundary around the raw connector executor.
 
-    The raw executor knows whether an action category requires authorization.
-    This guard proves that the presented authorization ID exists, belongs to the
-    same patient/mission/action, is not expired and, for one-time grants, is not
-    already consumed. Replays of an already completed idempotency key return the
-    durable receipt before checking a consumed one-time authorization.
+    The authorization is bound to patient + mission + action + exact material
+    payload. Replays of the exact completed request return the durable receipt;
+    changing destination, content, appointment time, file or task changes the
+    intent fingerprint and requires a new patient authorization.
     """
 
     def __init__(
@@ -37,7 +37,6 @@ class GuardedGoogleActionExecutor:
         self.grant_store = grant_store
         self.authorization_store = authorization_store
         self.receipt_store = receipt_store
-        # Keep the raw executor and guard on one durable receipt source.
         self.executor.receipt_store = receipt_store
 
     def _authorization_id(self, request: GoogleActionRequest) -> str:
@@ -54,6 +53,7 @@ class GuardedGoogleActionExecutor:
             patient_id=request.patient_id,
             mission_id=request.mission_id,
             action=request.action,
+            intent_key=build_action_intent_key(request),
         ):
             return None
         return authorization
@@ -75,7 +75,10 @@ class GuardedGoogleActionExecutor:
                 receipt = build_google_receipt(
                     request,
                     status="blocked",
-                    safe_summary="Presented Google action authorization is missing, expired, consumed, or scoped to another patient/mission/action.",
+                    safe_summary=(
+                        "Presented Google action authorization is missing, expired, consumed, scoped elsewhere, "
+                        "or does not match the exact action payload the patient authorized."
+                    ),
                 )
                 self.receipt_store.save(receipt)
                 return receipt, None
@@ -92,14 +95,7 @@ class GuardedGoogleActionExecutor:
 
 
 class GuardedMissionExecutorAdapter:
-    """Mission-coordinator adapter that makes durable policy non-bypassable.
-
-    `GoogleHealthMissionCoordinator` historically accepts an executor whose
-    signature includes a caller-supplied `grants` list so deterministic unit
-    tests can stay simple. Production must not trust that list. This adapter
-    deliberately ignores it and reloads grants/authorizations/receipts through
-    `GuardedGoogleActionExecutor` on every action.
-    """
+    """Mission-coordinator adapter that makes durable policy non-bypassable."""
 
     def __init__(self, guard: GuardedGoogleActionExecutor) -> None:
         self.guard = guard
