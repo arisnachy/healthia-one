@@ -4,10 +4,15 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "app/**"
+      - "healthia_one/**"
+      - "web/**"
+      - "healthia_agent/**"
       - "scripts/record_final_live_english_demo.py"
       - ".github/workflows/final-live-english-demo.yml"
       - "docs/HACKATHON_WIN_PLAN.md"
-      - "healthia_agent/agent.py"
+      - "tests/test_human_chat_health_os.py"
+      - "tests/test_result_ai_locale.py"
   workflow_dispatch:
 
 permissions:
