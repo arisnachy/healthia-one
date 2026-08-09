@@ -46,6 +46,10 @@ def enqueue_scheduled_refreshes(
             "scheduled.discovery_refresh",
             f"{mode}|{bucket}",
         )
+        if outbox_store.get(event_id) is not None:
+            # The same patient/mode/period is one durable event. Re-running the
+            # scheduler is therefore free of duplicate Eventarc work.
+            continue
         event = AutopilotEvent(
             id=event_id,
             patient_id=state.profile.id,
@@ -62,9 +66,8 @@ def enqueue_scheduled_refreshes(
                 "locality": str(state.profile.address or "")[:220],
             },
         )
-        record = outbox_store.put(event)
-        if record.status == "pending":
-            created.append(event)
+        outbox_store.put(event)
+        created.append(event)
     return created
 
 
