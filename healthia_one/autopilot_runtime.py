@@ -74,12 +74,21 @@ def event_key(event: AutopilotEvent) -> str:
 
 
 def _topic_relevance(topic_condition: str, title: str, abstract: str) -> float:
+    """Score within a source query, not across the open web.
+
+    A candidate returned by PubMed/Europe PMC/ClinicalTrials for this exact topic
+    already has query provenance. Keep a conservative floor so a Spanish topic
+    such as "autismo" does not reject an English title containing "autism" merely
+    because lexical overlap is zero. Exact lexical support can raise the score.
+    """
     condition_tokens = {item for item in topic_condition.lower().replace("-", " ").split() if len(item) >= 3}
     haystack = f"{title} {abstract}".lower()
     if not condition_tokens:
-        return 0
+        return 0.35
     matches = sum(1 for token in condition_tokens if token in haystack)
-    return min(1.0, matches / max(len(condition_tokens), 1) + (0.2 if topic_condition.lower() in haystack else 0))
+    lexical = matches / max(len(condition_tokens), 1)
+    exact_bonus = 0.2 if topic_condition.lower() in haystack else 0
+    return min(1.0, max(0.35, lexical + exact_bonus))
 
 
 def _interrupt_score(discovery: Discovery) -> float:
