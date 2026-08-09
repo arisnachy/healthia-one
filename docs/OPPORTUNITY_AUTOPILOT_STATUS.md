@@ -14,7 +14,8 @@ This document is a truth-boundary snapshot for draft PR #36. It exists so later 
 - A grounded program is only a candidate; model-extracted requirements remain UNKNOWN until original-source verification.
 - Official HTML/plain/PDF program sources can be loaded under an allowlisted domain boundary, hashed and used for structured requirement extraction.
 - HTML/plain evidence excerpts must exist literally in the downloaded source or the rule is downgraded to UNKNOWN.
-- Empty/unclear requirement sets remain blocking UNKNOWN rather than becoming eligible.
+- Empty/unclear requirement sets remain one explicit blocking UNKNOWN (`Verify official program requirements manually`) rather than being interpreted as “no requirements”.
+- A model-extracted submission portal outside the verifier's approved official-domain boundary is discarded and recorded as a caveat; it never becomes an executable destination merely because Gemini returned it.
 - Locale is never treated as residence, and display name is never substituted for legal name.
 - Application prefill, missing-field/document tracking, patient review, external-submit authorization and durable receipt states are modeled separately.
 - No application may be called SUBMITTED merely because the model generated a form; a real external adapter receipt is required.
