@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from datetime import timedelta
+
+from healthia_one.google_action_guard import GuardedGoogleActionExecutor, GuardedMissionExecutorAdapter
+from healthia_one.google_connector_runtime import (
+    CalendarConnector,
+    DriveConnector,
+    GmailConnector,
+    GoogleActionExecutor,
+    MapsConnector,
+    PeopleConnector,
+    TasksConnector,
+)
+from healthia_one.google_constellation import GrantBundle, GoogleAction, GoogleGrant, GoogleService
+from healthia_one.google_constellation_store import (
+    FirestoreGoogleAuthorizationStore,
+    FirestoreGoogleGrantStore,
+    FirestoreGoogleReceiptStore,
+    GoogleActionAuthorization,
+    MemoryGoogleAuthorizationStore,
+    MemoryGoogleGrantStore,
+    MemoryGoogleReceiptStore,
+    utc_now,
+)
+from healthia_one.google_mission_runtime import (
+    FirestoreMissionStore,
+    GoogleHealthMission,
+    GoogleHealthMissionCoordinator,
+    MemoryMissionStore,
+)
+from healthia_one.google_oauth_credentials import (
+    FirestoreOAuthConnectionStore,
+    MemoryOAuthConnectionStore,
+    SecretManagerOAuthTokenProvider,
+)
+
+
+@dataclass
+class GoogleConstellationRuntime:
+    coordinator: GoogleHealthMissionCoordinator
+    grant_store: object
+    receipt_store: object
+    authorization_store: object
+    oauth_connection_store: object
+    raw_executor: GoogleActionExecutor
+    guarded_executor: GuardedGoogleActionExecutor
+
+
+class GoogleConstellationService:
+    """High-level patient-scoped service used by chat/API/ADK mission tools."""
+
+    def __init__(self, runtime: GoogleConstellationRuntime) -> None:
+        self.runtime = runtime
+        self.coordinator = runtime.coordinator
+
+    def load_mission(self, patient_id: str, mission_id: str) -> GoogleHealthMission:
+        mission = self.coordinator.store.load(patient_id, mission_id)
+        if mission is None:
+            raise KeyError(mission_id)
+        if mission.patient_id != patient_id:
+            raise PermissionError("Google mission does not belong to this patient")
+        return mission
+
+    def grant(self, patient_id: str, bundle: GrantBundle, *, enabled: bool = True) -> GoogleGrant:
+        grant = GoogleGrant(patient_id=patient_id, bundle=bundle, enabled=enabled)
+        self.runtime.grant_store.save(grant)
+        return grant
+
+    def grants(self, patient_id: str) -> list[GoogleGrant]:
+        return self.runtime.grant_store.list_for_patient(patient_id)
+
+    def authorize(
+        self,
+        patient_id: str,
+        mission_id: str,
+        action: GoogleAction,
+        *,
+        ttl_minutes: int = 15,
+        one_time: bool = True,
+    ) -> GoogleActionAuthorization:
+        mission = self.load_mission(patient_id, mission_id)
+        ttl = min(max(int(ttl_minutes), 1), 1440)
+        authorization = GoogleActionAuthorization(
+            patient_id=patient_id,
+            mission_id=mission_id,
+            action=action,
+            one_time=one_time,
+            expires_at=utc_now() + timedelta(minutes=ttl),
+        )
+        self.runtime.authorization_store.save(authorization)
+        self.coordinator.authorize_action(mission, action, authorization.id)
+        return authorization
+
+    def revoke_grant(self, patient_id: str, grant_id: str) -> GoogleGrant:
+        grants = self.runtime.grant_store.list_for_patient(patient_id)
+        grant = next((item for item in grants if item.id == grant_id), None)
+        if grant is None:
+            raise KeyError(grant_id)
+        grant.enabled = False
+        self.runtime.grant_store.save(grant)
+        return grant
+
+
+def _stores(settings):
+    project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
+    if settings.store_backend == "firestore":
+        return (
+            FirestoreGoogleGrantStore(project=project),
+            FirestoreGoogleReceiptStore(project=project),
+            FirestoreGoogleAuthorizationStore(project=project),
+            FirestoreOAuthConnectionStore(project=project),
+            FirestoreMissionStore(project=project),
+        )
+    return (
+        MemoryGoogleGrantStore(),
+        MemoryGoogleReceiptStore(),
+        MemoryGoogleAuthorizationStore(),
+        MemoryOAuthConnectionStore(),
+        MemoryMissionStore(),
+    )
+
+
+def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
+    grant_store, receipt_store, authorization_store, oauth_store, mission_store = _stores(settings)
+
+    token_provider = SecretManagerOAuthTokenProvider(connection_store=oauth_store)
+    connectors = {}
+
+    maps_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+    if maps_key:
+        connectors[GoogleService.MAPS] = MapsConnector(maps_key)
+
+    # OAuth-backed connectors are safe to construct before a patient connects an
+    # account. They fail closed in the token provider until connection metadata,
+    # required scopes and Secret Manager material exist.
+    connectors.update(
+        {
+            GoogleService.CALENDAR: CalendarConnector("__patient_bound_at_execution__", token_provider),
+            GoogleService.GMAIL: GmailConnector("__patient_bound_at_execution__", token_provider),
+            GoogleService.PEOPLE: PeopleConnector("__patient_bound_at_execution__", token_provider),
+            GoogleService.DRIVE: DriveConnector("__patient_bound_at_execution__", token_provider),
+            GoogleService.TASKS: TasksConnector("__patient_bound_at_execution__", token_provider),
+        }
+    )
+
+    # OAuthConnectorBase stores patient_id on construction, so production needs
+    # patient-bound connector instances. A lazy proxy provides that binding while
+    # still keeping one shared executor/policy/receipt pipeline.
+    class PatientBoundOAuthProxy:
+        def __init__(self, service, connector_type):
+            self.service = service
+            self.connector_type = connector_type
+
+        def execute(self, action, payload, *, idempotency_key):
+            patient_id = str(payload.pop("__healthia_patient_id", ""))
+            if not patient_id:
+                raise PermissionError("Patient-bound Google connector missing patient identity")
+            connector = self.connector_type(patient_id, token_provider)
+            return connector.execute(action, payload, idempotency_key=idempotency_key)
+
+    connectors[GoogleService.CALENDAR] = PatientBoundOAuthProxy(GoogleService.CALENDAR, CalendarConnector)
+    connectors[GoogleService.GMAIL] = PatientBoundOAuthProxy(GoogleService.GMAIL, GmailConnector)
+    connectors[GoogleService.PEOPLE] = PatientBoundOAuthProxy(GoogleService.PEOPLE, PeopleConnector)
+    connectors[GoogleService.DRIVE] = PatientBoundOAuthProxy(GoogleService.DRIVE, DriveConnector)
+    connectors[GoogleService.TASKS] = PatientBoundOAuthProxy(GoogleService.TASKS, TasksConnector)
+
+    class PatientInjectingExecutor(GoogleActionExecutor):
+        def execute(self, request_value, grants):
+            if request_value.service in {
+                GoogleService.CALENDAR,
+                GoogleService.GMAIL,
+                GoogleService.PEOPLE,
+                GoogleService.DRIVE,
+                GoogleService.TASKS,
+            }:
+                request_value = request_value.model_copy(deep=True)
+                request_value.payload["__healthia_patient_id"] = request_value.patient_id
+            return super().execute(request_value, grants)
+
+    raw = PatientInjectingExecutor(connectors=connectors, receipt_store=receipt_store)
+    guard = GuardedGoogleActionExecutor(
+        executor=raw,
+        grant_store=grant_store,
+        authorization_store=authorization_store,
+        receipt_store=receipt_store,
+    )
+    coordinator = GoogleHealthMissionCoordinator(
+        GuardedMissionExecutorAdapter(guard),
+        store=mission_store,
+    )
+    return GoogleConstellationRuntime(
+        coordinator=coordinator,
+        grant_store=grant_store,
+        receipt_store=receipt_store,
+        authorization_store=authorization_store,
+        oauth_connection_store=oauth_store,
+        raw_executor=raw,
+        guarded_executor=guard,
+    )
+
+
+def build_google_constellation_service(settings) -> GoogleConstellationService:
+    return GoogleConstellationService(build_google_constellation_runtime(settings))
