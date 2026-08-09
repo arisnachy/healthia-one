@@ -26,6 +26,8 @@ def test_detailed_symptom_narrative_can_still_start_adaptive_interview() -> None
     assert response.message.metadata["intent"] == "clinical_consultation"
     assert response.message.metadata["clinical_interview"]["status"] == "awaiting_answers"
     assert response.mission is not None
+    assert response.message.mission_id == response.mission.id
+    assert any(item.id == response.mission.id for item in state.missions)
 
 
 def test_chat_open_results_command_is_not_hijacked_by_clinical_intake() -> None:
@@ -72,6 +74,11 @@ def test_past_tense_upload_narration_is_not_mistaken_for_file_picker_command() -
     assert response.mission is not None
     assert response.mission.mission_type == "result_explanation"
     assert response.message.metadata["mission_type"] == "result_explanation"
+    assert response.message.mission_id == response.mission.id
+    assert any(
+        item.id == response.mission.id and item.mission_type == "result_explanation"
+        for item in state.missions
+    )
 
 
 def test_chat_can_navigate_profile_and_devices() -> None:
