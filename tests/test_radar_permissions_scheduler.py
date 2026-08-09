@@ -96,3 +96,25 @@ def test_chat_can_enable_and_disable_scientific_radar_explicitly():
     assert disabled is not None
     assert disabled.message.metadata["scientific_radar_enabled"] is False
     assert radar_permissions().load(state.profile.id).scientific_enabled is False
+
+
+def test_radar_disable_intents_outrank_positive_substrings_for_resources():
+    state = unique_state("patient_chat_permission_resources")
+
+    enabled = _permission_response(state, "Activa el radar de ayudas")
+    assert enabled is not None
+    assert enabled.message.metadata["resource_radar_enabled"] is True
+
+    disabled = _permission_response(state, "Desactiva el radar de ayudas")
+    assert disabled is not None
+    assert disabled.message.metadata["resource_radar_enabled"] is False
+    assert radar_permissions().load(state.profile.id).resource_enabled is False
+
+
+def test_english_radar_opt_out_remains_explicit_and_fail_closed():
+    state = unique_state("patient_chat_permission_english")
+
+    assert _permission_response(state, "enable scientific radar").message.metadata["scientific_radar_enabled"] is True
+    assert _permission_response(state, "disable scientific radar").message.metadata["scientific_radar_enabled"] is False
+    assert _permission_response(state, "enable assistance radar").message.metadata["resource_radar_enabled"] is True
+    assert _permission_response(state, "disable assistance radar").message.metadata["resource_radar_enabled"] is False
