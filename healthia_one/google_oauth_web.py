@@ -286,7 +286,7 @@ class GoogleOAuthBrowserFlow:
         self.state_secret = (
             state_secret.encode("utf-8") if isinstance(state_secret, str) else bytes(state_secret)
         )
-        self.secret_reader = secret_reader or SecretManagerPayloadReader()
+        self.secret_reader = secret_reader
         self.secret_writer = secret_writer
         self.transport = transport or UrllibOAuthHttpTransport()
 
@@ -302,11 +302,16 @@ class GoogleOAuthBrowserFlow:
         if len(self.state_secret) < 32:
             raise GoogleOAuthFlowError("Google OAuth state secret is not configured")
 
+    def _reader(self):
+        if self.secret_reader is None:
+            self.secret_reader = SecretManagerPayloadReader()
+        return self.secret_reader
+
     def _app_secret(self) -> GoogleOAuthAppSecret:
         if not self.app_secret_resource:
             raise GoogleOAuthFlowError("Google OAuth client secret resource is not configured")
         try:
-            raw = self.secret_reader.read(self.app_secret_resource)
+            raw = self._reader().read(self.app_secret_resource)
         except Exception as exc:
             raise GoogleOAuthFlowError(
                 f"Google OAuth client secret is unavailable: {type(exc).__name__}"
@@ -419,7 +424,7 @@ class GoogleOAuthBrowserFlow:
         if not refresh_token and existing and existing.secret_version_resource:
             try:
                 prior = OAuthSecretMaterial.model_validate_json(
-                    self.secret_reader.read(existing.secret_version_resource)
+                    self._reader().read(existing.secret_version_resource)
                 )
                 refresh_token = prior.refresh_token
             except Exception as exc:
