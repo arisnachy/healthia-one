@@ -68,15 +68,15 @@ class OpportunityChatController:
         if _mentions(
             text,
             (
-                "que hay nuevo",
-                "qué hay nuevo",
-                "descubrimientos",
-                "investigacion nueva",
-                "investigación nueva",
+                "que hay nuevo sobre mi salud",
+                "qué hay nuevo sobre mi salud",
+                "descubrimientos de salud",
+                "investigacion nueva sobre",
+                "investigación nueva sobre",
                 "novedades sobre mi salud",
-                "what is new",
-                "new research",
-                "discoveries",
+                "what is new about my health",
+                "new research about",
+                "health discoveries",
             ),
         ):
             snapshot = opportunity_snapshot(vault)
@@ -98,7 +98,6 @@ class OpportunityChatController:
             return OpportunityChatResult(
                 content=content,
                 action="show_discoveries",
-                ui_action={"type": "open_view", "view": "discoveries"},
                 metadata=snapshot,
             )
 
@@ -107,11 +106,12 @@ class OpportunityChatController:
             (
                 "ayuda economica",
                 "ayuda económica",
-                "beneficios",
+                "beneficios disponibles",
+                "beneficio estatal",
                 "programas de ayuda",
                 "recursos estatales",
                 "recursos comunitarios",
-                "fundaciones",
+                "fundaciones para",
                 "community resources",
                 "financial assistance",
                 "government benefits",
@@ -125,7 +125,6 @@ class OpportunityChatController:
                         "las búsquedas web con Gemini se ejecutan sólo cuando están autorizadas para controlar el gasto."
                     ),
                     action="resource_refresh_available",
-                    ui_action={"type": "open_view", "view": "discoveries"},
                 )
             program = vault.programs[-1]
             content = (
@@ -137,7 +136,6 @@ class OpportunityChatController:
                 content=content,
                 action="show_programs",
                 resource_id=program.id,
-                ui_action={"type": "open_view", "view": "discoveries"},
             )
 
         if _mentions(
@@ -150,7 +148,7 @@ class OpportunityChatController:
                 "aplicar a esa ayuda",
                 "fill the form",
                 "prepare the application",
-                "apply for that",
+                "apply for that program",
             ),
         ):
             program = _find_program(vault, text)
@@ -177,19 +175,20 @@ class OpportunityChatController:
                 content=" ".join(parts),
                 action="application_prefilled",
                 resource_id=packet.id,
-                ui_action={"type": "open_view", "view": "discoveries"},
                 metadata={"application_status": str(packet.status)},
             )
 
         if _mentions(
             text,
             (
-                "que documento falta",
-                "qué documento falta",
-                "que falta",
-                "qué falta",
-                "missing document",
-                "what is missing",
+                "que documento falta para la solicitud",
+                "qué documento falta para la solicitud",
+                "que documentos faltan para aplicar",
+                "qué documentos faltan para aplicar",
+                "que falta para la solicitud",
+                "qué falta para la solicitud",
+                "missing document for the application",
+                "what is missing for the application",
             ),
         ):
             packet = _latest_application(vault)
@@ -214,12 +213,12 @@ class OpportunityChatController:
         if _mentions(
             text,
             (
-                "busca ayudas",
-                "buscar ayudas",
-                "busca recursos",
-                "buscar recursos",
-                "find assistance",
-                "find programs",
+                "busca ayudas para",
+                "buscar ayudas para",
+                "busca recursos para",
+                "buscar recursos para",
+                "find assistance for",
+                "find programs for",
             ),
         ):
             return OpportunityChatResult(
@@ -240,12 +239,12 @@ class OpportunityChatController:
         if _mentions(
             text,
             (
-                "no me avises",
-                "no busques mas",
-                "no busques más",
+                "no me avises sobre",
+                "no busques mas sobre",
+                "no busques más sobre",
                 "deja de vigilar",
                 "stop watching",
-                "stop notifying",
+                "stop notifying me about",
             ),
         ):
             topic_matches = [
