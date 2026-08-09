@@ -24,6 +24,22 @@ CONTINUATION_SIGNALS = (
     "what about", "and if", "so", "but", "why", "how so",
 )
 
+# Strong current-turn topics. These suppress a stale contextual routing hint even
+# if the same sentence also contains a pronoun such as "it"/"eso". The current
+# explicit noun wins; prior context is only used when the turn is genuinely
+# elliptical.
+EXPLICIT_TOPIC_SIGNALS = (
+    "resultado", "resultados", "result", "results", "laboratorio", "laboratory", "lab", "scan", "imaging", "xray", "x-ray", "ultrasound", "ecg", "ekg",
+    "medicamento", "medicación", "medicacion", "medication", "medicine", "treatment", "tratamiento", "dosis", "dose",
+    "presión", "presion", "blood pressure", "peso", "weight", "actividad", "activity", "steps",
+    "cita", "appointment", "specialist", "consulta",
+    "familia", "family", "genograma", "genogram",
+    "documento", "documentos", "document", "documents", "expediente", "health record",
+    "dispositivo", "dispositivos", "device", "devices", "wearable", "health connect",
+    "privacidad", "privacy", "permisos", "permissions", "consent",
+    "línea de tiempo", "linea de tiempo", "timeline", "health history",
+)
+
 ACTION_HINTS: dict[str, str] = {
     "results": "resultado estudio laboratorio imagen",
     "measurements": "medicion presion peso actividad",
@@ -74,6 +90,18 @@ class ConversationFrame:
 def _normalize(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or "").lower())
     return "".join(char for char in text if not unicodedata.combining(char)).strip()
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    normalized = _normalize(text)
+    needle = _normalize(phrase)
+    if not normalized or not needle:
+        return False
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", normalized))
+
+
+def _has_explicit_current_topic(text: str) -> bool:
+    return any(_contains_phrase(text, signal) for signal in EXPLICIT_TOPIC_SIGNALS)
 
 
 def _public_message_text(message: ChatMessage) -> str:
@@ -178,7 +206,12 @@ def build_frame(state: PatientState, patient_text: str) -> ConversationFrame:
     ambiguous = _is_ambiguous_followup(patient_text)
     correction = _is_correction(patient_text)
     routing_text = patient_text
-    if not patient_text.startswith(ANSWER_PREFIX) and ambiguous:
+    use_prior_hint = (
+        not patient_text.startswith(ANSWER_PREFIX)
+        and ambiguous
+        and not _has_explicit_current_topic(patient_text)
+    )
+    if use_prior_hint:
         hint = ACTION_HINTS.get(target or "") or MISSION_HINTS.get(mission_type or "")
         if hint:
             # Preserve the exact patient words; append only a private routing hint.
