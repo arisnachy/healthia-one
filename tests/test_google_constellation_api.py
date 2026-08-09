@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from healthia_one.google_mission_runtime import MissionState
 
 
 AUTH_SOURCE = Path("healthia_one/auth_web.py").read_text(encoding="utf-8")
@@ -27,7 +28,7 @@ def test_capabilities_expose_connection_metadata_but_never_secret_material():
         assert "secret_version_resource" not in serialized
 
 
-def test_api_creates_patient_scoped_mission_and_exact_authorization_without_external_action():
+def test_api_creates_patient_scoped_mission_and_exact_contact_authorization_without_external_action():
     with TestClient(app) as client:
         grant = client.post(
             "/api/google-constellation/grants",
@@ -52,22 +53,27 @@ def test_api_creates_patient_scoped_mission_and_exact_authorization_without_exte
         assert mission["private_reasoning"] is None
         mission_id = mission["id"]
 
+        constellation = app.state.google_constellation
+        stored = constellation.load_mission("patient_demo", mission_id)
+        stored.provider_email = "center@example.org"
+        stored.selected_place = {
+            "id": "place_1",
+            "displayName": {"text": "Support Center"},
+            "formattedAddress": "Santiago, Dominican Republic",
+        }
+        stored.state = MissionState.AWAITING_AUTHORIZATION
+        constellation.coordinator.store.save(stored)
+
         fetched = client.get(f"/api/google-constellation/missions/{mission_id}")
         assert fetched.status_code == 200
         assert fetched.json()["id"] == mission_id
 
-        exact_payload = {
-            "to": ["center@example.org"],
-            "subject": "Appointment",
-            "body": "Please advise.",
-        }
         authorization = client.post(
-            f"/api/google-constellation/missions/{mission_id}/authorize",
+            f"/api/google-constellation/missions/{mission_id}/authorize-contact",
             json={
-                "action": "gmail.send",
-                "payload": exact_payload,
+                "subject": "Appointment",
+                "body": "Please advise.",
                 "ttl_minutes": 5,
-                "one_time": True,
             },
         )
         assert authorization.status_code == 200
@@ -77,5 +83,14 @@ def test_api_creates_patient_scoped_mission_and_exact_authorization_without_exte
         assert auth_payload["authorization"]["mission_id"] == mission_id
         assert auth_payload["authorization"]["action"] == "gmail.send"
         assert len(auth_payload["authorization"]["intent_key"]) == 64
-        assert "exact patient + mission + action + payload fingerprint" in auth_payload["truth_boundary"]
-        assert "not an execution receipt" in auth_payload["truth_boundary"]
+        assert "exact provider destination + subject + body" in auth_payload["truth_boundary"]
+        assert "not a send receipt" in auth_payload["truth_boundary"]
+
+
+def test_generic_raw_google_action_authorization_endpoint_is_not_exposed():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/google-constellation/missions/not-real/authorize",
+            json={"action": "gmail.send", "payload": {}},
+        )
+        assert response.status_code == 404
