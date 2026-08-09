@@ -42,6 +42,7 @@ def service_with_connection(patient_id="patient_demo", mailbox="patient@example.
         GoogleOAuthConnection(
             patient_id=patient_id,
             google_account=mailbox,
+            google_subject="subject-1",
             granted_scopes=["https://www.googleapis.com/auth/gmail.readonly"],
             secret_version_resource="projects/test/secrets/oauth/versions/1",
         )
@@ -146,6 +147,59 @@ def test_account_change_disables_old_cursor_before_new_watch():
     assert status == "renewed"
     assert watch.email_address == "new@example.com"
     assert watch.history_id == "300"
+
+
+def test_disconnected_account_retires_expiring_watch_without_google_or_secret_access():
+    service = service_with_connection()
+    connection = service.runtime.oauth_connection_store.load("patient_demo")
+    connection.enabled = False
+    service.runtime.oauth_connection_store.save(connection)
+    watches = MemoryGmailWatchDirectory()
+    watches.save(
+        GmailWatchState(
+            patient_id="patient_demo",
+            email_address="patient@example.com",
+            history_id="100",
+            expiration_ms=epoch_ms(NOW + timedelta(hours=1)),
+        )
+    )
+    guard = WatchGuard(history_id="should-not-run")
+    service.runtime.guarded_executor = guard
+    manager = GmailWatchManager(
+        constellation=service,
+        watch_store=watches,
+        topic_name="projects/demo/topics/healthia-gmail",
+    )
+
+    results = manager.renew_due(now=NOW)
+    assert results == [("patient_demo", "disabled_disconnected")]
+    assert watches.load("patient_demo").enabled is False
+    assert guard.calls == []
+
+
+def test_mismatched_connected_mailbox_retires_old_watch_in_scheduler_without_google_call():
+    service = service_with_connection(mailbox="new@example.com")
+    watches = MemoryGmailWatchDirectory()
+    watches.save(
+        GmailWatchState(
+            patient_id="patient_demo",
+            email_address="old@example.com",
+            history_id="100",
+            expiration_ms=epoch_ms(NOW + timedelta(hours=1)),
+        )
+    )
+    guard = WatchGuard()
+    service.runtime.guarded_executor = guard
+    manager = GmailWatchManager(
+        constellation=service,
+        watch_store=watches,
+        topic_name="projects/demo/topics/healthia-gmail",
+    )
+
+    results = manager.renew_due(now=NOW)
+    assert results == [("patient_demo", "disabled_disconnected")]
+    assert watches.load("patient_demo").enabled is False
+    assert guard.calls == []
 
 
 def test_invalid_topic_fails_before_google_action():
