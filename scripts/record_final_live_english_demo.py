@@ -52,6 +52,22 @@ def clear_overlay(page: Page) -> None:
     page.evaluate("document.getElementById('healthia-cine-caption')?.remove()")
 
 
+def latest_assistant_message(page: Page) -> dict:
+    state = api_json(page, "/api/bootstrap")
+    assistants = [item for item in state.get("messages", []) if item.get("role") == "assistant"]
+    return assistants[-1] if assistants else {}
+
+
+def wait_for_assistant_after(page: Page, previous_id: str = "", timeout_s: float = 20.0) -> dict:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        message = latest_assistant_message(page)
+        if message.get("id") and message.get("id") != previous_id:
+            return message
+        page.wait_for_timeout(300)
+    raise RuntimeError("assistant did not produce a new response in time")
+
+
 def require_message_locale(page: Page, message_id: str, expected: str) -> None:
     state = api_json(page, "/api/bootstrap")
     message = next((item for item in state.get("messages", []) if item.get("id") == message_id), None)
@@ -72,8 +88,7 @@ def answer_conversational_block(page: Page, *, answer_prefix: str) -> None:
         visible = block.locator(".clinical-question:visible")
         require(visible.count() == 1, f"question {index + 1} is not the sole visible turn")
         require(block.locator(".clinical-stage").inner_text().strip() == f"{index + 1} / 5", f"turn counter wrong at {index + 1}")
-        detail = visible.locator(".clinical-detail")
-        detail.fill(f"{answer_prefix} {index + 1}")
+        visible.locator(".clinical-detail").fill(f"{answer_prefix} {index + 1}")
         option = visible.locator(".clinical-option").first
         if option.count():
             option.click()
@@ -193,17 +208,28 @@ def run() -> dict:
         report["readiness"] = {key: readiness.get(key) for key in ("ready", "model", "adk_ready", "ai_ready", "store_backend", "evidence_backend", "auth_required")}
         report["checks"].append("exact_candidate_live_google_runtime")
 
+        before = latest_assistant_message(page)
         send_chat(page, "Since yesterday I have burning pain when I urinate and I need to go very often. Help me understand what information is still missing.")
-        assistant_id, status = wait_for_dynamic_or_orientation(page)
-        require(status == "dynamic_clinical_questions", f"first clinical response was not dynamic: {status}")
+        human = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=20.0)
+        human_meta = human.get("metadata") or {}
+        require(human_meta.get("intent") == "clinical_conversation", f"first symptom turn did not stay human-first: {human_meta}")
+        require(human_meta.get("structured_interview_started") is False, "ambiguous first turn incorrectly launched structured intake")
+        require(page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').count() == 0, "structured interview appeared on the human-first turn")
+        report["checks"].append("human_first_conversation_before_structured_intake")
+        overlay(page, "Human before form", "HealthIA does not turn one symptom message into a questionnaire. It first responds naturally and asks what changed or matters most.", 7)
+        clear_overlay(page)
+
+        send_chat(page, "The burning is 6 out of 10, I also have lower abdominal pain, and the urinary frequency is getting worse. I want to discuss a health problem.")
+        assistant_id, status = wait_for_dynamic_or_orientation(page, str(human.get("id") or ""), timeout_s=90.0)
+        require(status == "dynamic_clinical_questions", f"concrete clinical follow-up did not start adaptive intake: {status}")
         require_message_locale(page, assistant_id, "en")
         page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
-        overlay(page, "Google ADK + Gemini", "ADK executes the bounded clinical baseline tool. Gemini creates five case-specific questions, while HealthIA presents them as a human conversation: one useful question at a time.", 8)
+        overlay(page, "Google ADK + Gemini", "Once the patient gives concrete clinical context, ADK executes the bounded baseline tool. Gemini creates five case-specific questions, shown as one conversational turn at a time.", 8)
         clear_overlay(page)
         answer_conversational_block(page, answer_prefix="Synthetic answer")
         report["checks"].append("one_question_at_a_time_five_question_contract")
 
-        assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
+        assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id, timeout_s=90.0)
         blocks = 1
         while status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"} and blocks < 3:
             require_message_locale(page, assistant_id, "en")
@@ -211,7 +237,7 @@ def run() -> dict:
             overlay(page, "Conversation memory", "If more evidence is useful, the next ADK/Gemini block receives the actual prior questions and answers instead of restarting the patient story.", 5)
             clear_overlay(page)
             answer_conversational_block(page, answer_prefix=f"Follow-up {blocks}")
-            assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id)
+            assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id, timeout_s=90.0)
         require(status == "clinical_ai_orientation_completed", f"clinical orientation did not complete: {status}")
         require_message_locale(page, assistant_id, "en")
         report["checks"].append("safe_clinical_orientation_completed")
@@ -220,7 +246,7 @@ def run() -> dict:
         page.wait_for_timeout(1800)
         require(page.locator("#view-results").evaluate("node => node.classList.contains('is-active')"), "chat Health OS command did not open Results")
         report["checks"].append("chat_health_os_open_results")
-        overlay(page, "Chat is the operating surface", "A safe workspace command is translated into an allowlisted UI action. Gemini is not allowed to invent arbitrary selectors or silently perform destructive actions.", 6)
+        overlay(page, "Chat is the operating surface", "A safe workspace command becomes an allowlisted UI action. Gemini cannot invent arbitrary selectors or silently perform destructive actions.", 6)
         clear_overlay(page)
 
         page.locator("#resultFile").set_input_files(str(pdf_path))
@@ -259,7 +285,7 @@ def run() -> dict:
         require(any(item.get("id") == document_id for item in restored.get("documents", [])), "document disappeared after relogin")
         require(any(item.get("id") == mission.get("id") and item.get("status") == "completed" for item in restored.get("missions", [])), "mission disappeared after relogin")
         report["checks"].append("logout_login_durable_continuity")
-        overlay(page, "Durable continuity", "After logout and login, the result, original evidence and completed mission are still present. The canonical state does not live in the browser tab.", 7)
+        overlay(page, "Durable continuity", "After logout and login, the result, original evidence and completed mission are still present. Canonical state does not live in the browser tab.", 7)
         clear_overlay(page)
 
         readiness = api_json(page, "/api/readiness")
