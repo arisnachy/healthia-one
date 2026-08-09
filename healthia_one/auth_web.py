@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from healthia_one.auth import AccountManager, AuthError, bind_principal, current_principal, reset_principal
 from healthia_one.config import Settings
 from healthia_one.language import bind_requested_locale, current_requested_locale, reset_requested_locale
+from healthia_one.opportunity_api import build_opportunity_router
 from healthia_one.service import HealthIAService
 
 
@@ -139,5 +140,10 @@ def install_patient_auth(
         response = JSONResponse({"authenticated": False, "logged_out": True})
         response.delete_cookie(settings.session_cookie_name, path="/")
         return response
+
+    # Opportunity data is deliberately mounted after the same patient-session
+    # middleware is installed. It is not added to public_exact and therefore
+    # inherits the existing authenticated patient boundary in Cloud mode.
+    app.include_router(build_opportunity_router(service))
 
     return manager
