@@ -1,0 +1,163 @@
+.clinical-question-block.clinical-conversation-mode {
+  margin-top: 10px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.clinical-conversation-mode > header {
+  margin: 0 0 12px;
+  padding: 0;
+  align-items: center;
+}
+
+.clinical-conversation-mode > header h4 {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.clinical-conversation-mode > header p {
+  max-width: 620px;
+  font-size: 10px;
+}
+
+.clinical-conversation-mode .clinical-stage {
+  min-width: 42px;
+  text-align: center;
+}
+
+.clinical-conversation-history {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.clinical-conversation-pair {
+  display: grid;
+  gap: 6px;
+}
+
+.clinical-mini-turn {
+  max-width: min(86%, 620px);
+  border-radius: 15px;
+  padding: 9px 11px;
+}
+
+.clinical-mini-turn span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.clinical-mini-turn p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.clinical-mini-turn.assistant {
+  justify-self: start;
+  border: 1px solid #e1e7ef;
+  background: #fff;
+  color: var(--ink);
+}
+
+.clinical-mini-turn.patient {
+  justify-self: end;
+  background: var(--slate-soft);
+  color: var(--slate-dark);
+}
+
+.clinical-conversation-mode .clinical-questions {
+  display: block;
+}
+
+.clinical-conversation-mode .clinical-question {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.clinical-conversation-mode .clinical-question legend {
+  margin: 0 0 9px;
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.45;
+}
+
+.clinical-conversation-mode .clinical-options {
+  gap: 7px;
+  margin: 0 0 8px;
+}
+
+.clinical-conversation-mode .clinical-option span {
+  min-height: 34px;
+  padding: 8px 11px;
+  font-size: 10px;
+  background: #fff;
+}
+
+.clinical-conversation-mode .clinical-detail {
+  margin-top: 4px;
+  border-radius: 12px;
+  padding: 10px 11px;
+  font-size: 10px;
+}
+
+.clinical-conversation-mode .clinical-progress-row,
+.clinical-conversation-mode .clinical-submit-row,
+.clinical-conversation-mode > .clinical-form-error {
+  display: none !important;
+}
+
+.clinical-turn-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.clinical-turn-controls button {
+  min-height: 34px;
+  border-radius: 11px;
+  padding: 8px 12px;
+  font-size: 10px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.clinical-dont-know {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+}
+
+.clinical-next-question {
+  border: 0;
+  background: var(--slate-dark);
+  color: #fff;
+}
+
+.clinical-turn-error {
+  margin: 7px 0 0;
+  color: var(--danger);
+  font-size: 9px;
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .clinical-mini-turn { max-width: 94%; }
+  .clinical-conversation-mode .clinical-options { display: flex; }
+  .clinical-conversation-mode .clinical-option span { width: auto; border-radius: 999px; }
+  .clinical-turn-controls { justify-content: stretch; }
+  .clinical-turn-controls button { flex: 1 1 0; }
+}

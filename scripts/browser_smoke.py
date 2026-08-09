@@ -202,18 +202,23 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-def reveal_and_answer(block) -> None:
+def answer_conversational_block(block) -> None:
     require(block.locator(".clinical-question").count() == 5, "dynamic clinical block is not exactly five questions")
-    require(block.locator(".clinical-question:visible").count() == 2, "progressive block must begin with exactly two visible questions")
-    reveal = block.locator(".clinical-show-all")
-    require(reveal.is_visible(), "progressive 2+3 continuation control is missing")
-    reveal.click()
-    require(block.locator(".clinical-question:visible").count() == 5, "remaining three questions were not revealed")
-    for field in block.locator(".clinical-question").all():
-        field.locator(".clinical-option").first.click()
-    submit = block.locator(".clinical-submit")
-    require(submit.is_visible(), "clinical submit did not become visible after progressive reveal")
-    submit.click()
+    require(block.locator(".clinical-question:visible").count() == 1, "clinical conversation must show exactly one question at a time")
+    require(block.locator(".clinical-show-all:visible").count() == 0, "legacy 2+3 reveal control is still visible")
+    require(block.locator(".clinical-detail:visible").count() == 1, "free-text answer is not available for the current question")
+    require(block.locator(".clinical-dont-know:visible").count() == 1, "I-don't-know path is missing")
+
+    for index in range(5):
+        visible = block.locator(".clinical-question:visible")
+        require(visible.count() == 1, f"question {index + 1} is not the only visible clinical turn")
+        require(block.locator(".clinical-stage").inner_text() == f"{index + 1} / 5", f"clinical turn counter is wrong at question {index + 1}")
+        require(visible.locator(".clinical-detail").count() == 1, f"question {index + 1} has no free-text path")
+        visible.locator(".clinical-option").first.click()
+        block.locator(".clinical-next-question").click()
+        if index < 4:
+            require(block.locator(".clinical-question:visible").count() == 1, f"question {index + 2} did not advance conversationally")
+            require(block.locator(".clinical-mini-turn.patient").count() == index + 1, "answered turns are not being preserved in the visible thread")
 
 
 def run() -> dict:
@@ -261,7 +266,7 @@ def run() -> dict:
         page.on("pageerror", lambda error: report["page_errors"].append(str(error)))
         page.set_content(html, wait_until="domcontentloaded")
         page.add_script_tag(content=mock_script(bootstrap, responses))
-        for stylesheet in ("styles.css", "interactions.css", "clinical-council.css", "cost-control.css"):
+        for stylesheet in ("styles.css", "interactions.css", "clinical-council.css", "conversational-interview.css", "cost-control.css"):
             page.add_style_tag(path=str(WEB / stylesheet))
         page.evaluate(
             """() => { for (const name of ['runtime','providers','clinical-council','cost-control']) { const script=document.createElement('script'); script.setAttribute('data-healthia-'+name,'true'); document.head.append(script); } }"""
@@ -276,6 +281,7 @@ def run() -> dict:
             "runtime-integrations.js",
             "provider-integrations.js",
             "clinical-council.js",
+            "conversational-interview.js",
             "cost-control.js",
             "icons.js",
         ):
@@ -315,22 +321,26 @@ def run() -> dict:
 
         page.locator("#chatInput").fill("Desde ayer me arde al orinar y tengo que ir al baño a cada rato")
         page.locator("#sendButton").click()
-        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
+        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"].clinical-conversation-mode', timeout=10_000)
         first_block = page.locator(".clinical-question-block").last
-        require(first_block.locator(".clinical-question").count() == 5, "first dynamic block does not have five questions")
-        require(first_block.bounding_box() and first_block.bounding_box()["height"] > 100, "first block is not visible")
-        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Questions created for this case", "patient-natural dynamic source badge missing")
+        require(first_block.locator(".clinical-question").count() == 5, "first dynamic block does not retain the five-question ADK contract")
+        require(first_block.locator(".clinical-question:visible").count() == 1, "first block is not presented as a single conversational turn")
+        require(first_block.bounding_box() and first_block.bounding_box()["height"] > 100, "first conversational block is not visible")
+        require(first_block.locator(".clinical-source.is-dynamic").inner_text() == "Adaptive to this conversation", "patient-natural adaptive source badge missing")
         require(page.locator(".chat-pending").count() == 0, "pending message remained after fast response")
-        page.screenshot(path=str(OUTPUT / "03-dynamic-block.png"), full_page=True)
+        page.screenshot(path=str(OUTPUT / "03-dynamic-conversation.png"), full_page=True)
 
-        reveal_and_answer(first_block)
+        answer_conversational_block(first_block)
         page.wait_for_function("window.__mockChatIndex >= 2")
-        page.wait_for_timeout(350)
+        page.wait_for_timeout(500)
+        require(page.locator('.clinical-question-block[data-conversation-completed="true"]').count() >= 1, "answered first block did not persist as readable conversation")
+        require(page.locator('.clinical-question-block[data-conversation-completed="true"] .clinical-mini-turn.patient').first.count() == 1, "completed interview history is missing patient turns")
         second_block = page.locator(".clinical-question-block").last
         require(second_block.get_attribute("data-stage") == "2", "second block did not render")
-        reveal_and_answer(second_block)
+        require(second_block.locator(".clinical-question:visible").count() == 1, "second block did not stay one-question-at-a-time")
+        answer_conversational_block(second_block)
         page.wait_for_function("window.__mockChatIndex >= 3")
-        page.wait_for_timeout(350)
+        page.wait_for_timeout(500)
         require(page.get_by_text("Ya reuní lo necesario para orientarte con esta consulta.", exact=False).count() > 0, "Spanish patient-facing clinical orientation is missing after Spanish input")
         require(page.get_by_text("¿Dónde sientes la molestia con mayor claridad?").count() > 0, "final transcript lost readable question labels")
         require(page.get_by_text("pain_location", exact=True).count() == 0, "internal question id leaked into patient transcript")
@@ -353,7 +363,9 @@ def run() -> dict:
         "first_message_visible": "pass",
         "dynamic_question_source": "pass",
         "two_five_question_blocks": "pass",
-        "progressive_two_plus_three_presentation": "pass",
+        "conversational_one_question_at_a_time": "pass",
+        "free_text_plus_optional_chips": "pass",
+        "answered_interview_persists_as_transcript": "pass",
         "pending_race_removed": "pass",
         "canonical_mission_returned": "pass",
         "mission_upsert_without_sse_race": "pass",

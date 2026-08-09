@@ -25,6 +25,7 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
         "i18n.js",
         "app.js",
         "clinical-council.js",
+        "conversational-interview.js",
         "patient-record.js",
         "family-documents.js",
         "continuity.js",
