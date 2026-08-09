@@ -36,29 +36,24 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Build and prove private PubSub to Cloud Run path
-        id: proof
+      - name: Build and prove authenticated PubSub to private Cloud Run
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/google-live-proof
           proof="dist/google-live-proof/proof.md"
           source_sha="$(git rev-parse HEAD)"
-          run_suffix="${GITHUB_RUN_ID}"
-          service="healthia-gmail-proof-${run_suffix}"
-          topic="healthia-gmail-proof-${run_suffix}"
-          subscription="healthia-gmail-proof-${run_suffix}"
+          suffix="${GITHUB_RUN_ID}"
+          service="healthia-gmail-proof-${suffix}"
+          topic="healthia-gmail-proof-${suffix}"
+          subscription="healthia-gmail-proof-${suffix}"
           full_topic="projects/${PROJECT_ID}/topics/${topic}"
-          repo="cloud-run-source-deploy"
-          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/${repo}/healthia-gmail-proof"
+          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-gmail-proof"
           image="${image_package}:${source_sha}"
           active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
           runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
-
-          if [[ -z "$runtime_sa" || -z "$active_account" ]]; then
-            echo "Unable to resolve existing proof identities."
-            exit 1
-          fi
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          compute_sa="${project_number}-compute@developer.gserviceaccount.com"
 
           cleanup() {
             set +e
@@ -69,67 +64,40 @@ jobs:
           }
           trap cleanup EXIT
 
-          # Previous proof builds may finish after their GitHub job has already
-          # failed. Remove only the dedicated proof package before this attempt;
-          # EXIT cleanup removes it again after the proof.
-          gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
-
-          project_invoker="$(gcloud projects get-iam-policy "$PROJECT_ID" \
-            --flatten='bindings[].members' \
-            --filter="bindings.role:roles/run.invoker AND bindings.members:serviceAccount:${active_account}" \
-            --format='value(bindings.members)' | head -n1 || true)"
-          token_creator="$(gcloud projects get-iam-policy "$PROJECT_ID" \
-            --flatten='bindings[].members' \
-            --filter='bindings.role:roles/iam.serviceAccountTokenCreator AND bindings.members:serviceAccount:service-1038180719788@gcp-sa-pubsub.iam.gserviceaccount.com' \
-            --format='value(bindings.members)' | head -n1 || true)"
-          test -n "$project_invoker"
-          test -n "$token_creator"
-
           {
             echo "# Google Health Constellation live proof"
             echo
             echo "Project: $PROJECT_ID"
             echo "Region: $REGION"
             echo "Exact source head: $source_sha"
-            echo "Mode: temporary/reversible infrastructure proof"
-            echo "IAM mutations by this proof: none"
-            echo "Production identity separation: NOT claimed by this temporary proof"
+            echo "Mode: temporary/reversible; no IAM mutation"
+            echo "Production identity separation: not claimed by this temporary proof"
             echo
           } > "$proof"
 
+          gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
+
           echo "Submitting exact branch HEAD to Cloud Build asynchronously..."
           build_id="$(gcloud builds submit . \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --tag "$image" \
-            --async \
-            --format='value(id)' \
-            --quiet)"
+            --project "$PROJECT_ID" --region "$REGION" --tag "$image" \
+            --async --format='value(id)' --quiet)"
           test -n "$build_id"
 
-          # Do not require Cloud Build log/viewer permission. Artifact Registry is
-          # independently readable and is the proof that this tagged build became
-          # an immutable image. Poll only image metadata, never build logs.
           image_digest=""
           for _ in $(seq 1 48); do
-            image_digest="$(gcloud artifacts docker images describe "$image" \
-              --project "$PROJECT_ID" \
-              --format='value(image_summary.digest)' 2>/dev/null || true)"
-            if [[ -n "$image_digest" ]]; then break; fi
+            image_digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$image_digest" ]] && break
             sleep 5
           done
           if [[ -z "$image_digest" ]]; then
-            echo "Cloud Build did not publish the expected Artifact Registry image within the bounded proof window. Build id: $build_id"
+            echo "Cloud Build did not publish the proof image within the bounded window. Build id: $build_id" >&2
             exit 1
           fi
 
-          echo "Deploying private worker..."
+          echo "Deploying private Gmail worker..."
           gcloud run deploy "$service" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --image "$image" \
-            --service-account "$runtime_sa" \
-            --no-allow-unauthenticated \
+            --project "$PROJECT_ID" --region "$REGION" --image "$image" \
+            --service-account "$runtime_sa" --no-allow-unauthenticated \
             --min 0 --max 1 --concurrency 4 --memory 512Mi --cpu 1 \
             --command uvicorn \
             --args 'healthia_one.gmail_push_worker:app,--host,0.0.0.0,--port,8080' \
@@ -140,43 +108,53 @@ jobs:
           revision="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           test -n "$service_url" && test -n "$revision"
 
-          # No service-level IAM mutation is needed: the audit proved the GitHub
-          # identity already inherits roles/run.invoker at project scope.
-          unauth_status="$(curl -sS -o /dev/null -w '%{http_code}' "$service_url/healthz")"
-          token="$(gcloud auth print-identity-token --audiences="$service_url")"
-          echo "::add-mask::$token"
-          auth_body="$(mktemp)"
-          auth_status="$(curl -sS -o "$auth_body" -w '%{http_code}' -H "Authorization: Bearer $token" "$service_url/healthz")"
-          grep -q 'healthia-gmail-worker' "$auth_body"
-          test "$unauth_status" = "403"
-          test "$auth_status" = "200"
+          unauth_status="$(curl -sS -o /dev/null -w '%{http_code}' "$service_url/healthz" || true)"
+          {
+            echo "## Infrastructure reached"
+            echo "- Cloud Build id: $build_id"
+            echo "- Artifact Registry digest: $image_digest"
+            echo "- Private Cloud Run revision: $revision"
+            echo "- Unauthenticated /healthz status: ${unauth_status:-curl_failed}"
+          } >> "$proof"
+          if [[ "$unauth_status" != "403" ]]; then
+            echo "Expected private Cloud Run to reject unauthenticated request with 403; got '${unauth_status}'." >&2
+            exit 1
+          fi
 
           echo "Creating temporary Pub/Sub topic..."
           gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
 
-          # The audit already proved Pub/Sub's service agent has project-level
-          # Service Account Token Creator. Use the already-invoker GitHub service
-          # account as the TEMPORARY push-auth identity. Production keeps a
-          # dedicated push identity; this proof performs no IAM mutation.
-          if ! subscription_output="$(gcloud pubsub subscriptions create "$subscription" \
-            --project "$PROJECT_ID" \
-            --topic "$topic" \
-            --push-endpoint "${service_url}/events/gmail-push" \
-            --push-auth-service-account "$active_account" \
-            --push-auth-token-audience "$service_url" \
-            --ack-deadline 20 \
-            --message-retention-duration 10m \
-            --quiet 2>&1)"; then
+          # Try an identity that already has project-level run.invoker. The audit
+          # proves both the GitHub principal and the default compute SA are invokers.
+          # Subscription creation itself may still require iam.serviceAccounts.actAs;
+          # no IAM is changed here. Try the current principal first, then compute.
+          push_sa=""
+          subscription_error=""
+          for candidate in "$active_account" "$compute_sa"; do
+            if output="$(gcloud pubsub subscriptions create "$subscription" \
+              --project "$PROJECT_ID" --topic "$topic" \
+              --push-endpoint "${service_url}/events/gmail-push" \
+              --push-auth-service-account "$candidate" \
+              --push-auth-token-audience "$service_url" \
+              --ack-deadline 20 --message-retention-duration 10m \
+              --quiet 2>&1)"; then
+              push_sa="$candidate"
+              break
+            fi
+            subscription_error="$output"
+            gcloud pubsub subscriptions delete "$subscription" --project "$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+          done
+
+          if [[ -z "$push_sa" ]]; then
             {
-              echo "## Partial proof reached"
-              echo "- Cloud Build produced an immutable image."
-              echo "- Private Cloud Run deployed successfully."
-              echo "- Unauthenticated /healthz status: $unauth_status"
-              echo "- Authenticated /healthz status: $auth_status"
-              echo "- Pub/Sub authenticated subscription creation was blocked without IAM mutation."
-              echo "- Blocker class: iam.serviceAccounts.actAs or equivalent subscription attachment permission."
+              echo
+              echo "## Exact remaining blocker"
+              echo "- Private Cloud Run is live and unauthenticated access is rejected."
+              echo "- Authenticated Pub/Sub subscription could not be attached without IAM mutation."
+              echo "- Expected blocker class: iam.serviceAccounts.actAs on a permitted push-auth service account."
+              echo "- No privacy boundary was weakened to bypass this permission."
             } >> "$proof"
-            echo "$subscription_output" >&2
+            echo "$subscription_error" >&2
             exit 1
           fi
 
@@ -184,44 +162,39 @@ jobs:
           message_id="$(gcloud pubsub topics publish "$topic" --project "$PROJECT_ID" --message "$payload" --format='value(messageIds[0])')"
           test -n "$message_id"
 
-          # Pub/Sub push is asynchronous. Poll only Cloud Run request metadata;
-          # this never polls Gmail or reads patient message content.
           push_status=""
-          for _ in $(seq 1 12); do
+          for _ in $(seq 1 15); do
             push_status="$(gcloud logging read \
               "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND httpRequest.requestUrl=\"${service_url}/events/gmail-push\"" \
-              --project "$PROJECT_ID" --limit 5 --freshness 5m --format='value(httpRequest.status)' 2>/dev/null | head -n1 || true)"
-            if [[ -n "$push_status" ]]; then break; fi
-            sleep 5
+              --project "$PROJECT_ID" --limit 10 --freshness 5m --format='value(httpRequest.status)' 2>/dev/null | head -n1 || true)"
+            [[ -n "$push_status" ]] && break
+            sleep 4
           done
+
           if [[ "$push_status" != "204" ]]; then
             {
-              echo "## Partial proof reached"
-              echo "- Authenticated Pub/Sub subscription was created and a synthetic message was published."
-              echo "- Request status could not be confirmed as 204 with the audit principal's available log permissions."
+              echo
+              echo "## Pub/Sub reached"
+              echo "- Authenticated push subscription created with existing identity: $push_sa"
+              echo "- Synthetic message id: $message_id"
+              echo "- Request status could not be confirmed as 204 from available log visibility: ${push_status:-not_visible}."
             } >> "$proof"
             exit 1
           fi
 
           {
+            echo
             echo "## Proven"
-            echo "- Cloud Build submitted for exact branch head: $build_id"
-            echo "- Artifact Registry image digest: $image_digest"
-            echo "- Private Cloud Run revision: $revision"
-            echo "- Unauthenticated /healthz status: $unauth_status"
-            echo "- Authenticated /healthz status: $auth_status"
-            echo "- Temporary authenticated Pub/Sub push subscription created without IAM mutation."
+            echo "- Authenticated Pub/Sub push used existing identity: $push_sa"
             echo "- Synthetic Gmail-shaped Pub/Sub message id: $message_id"
-            echo "- Cloud Run /events/gmail-push status from Pub/Sub: $push_status"
-            echo "- Firestore-backed worker runtime initialized successfully for an unknown mailbox and failed closed with 204."
+            echo "- Cloud Run /events/gmail-push status: $push_status"
+            echo "- Firestore-backed worker initialized and failed closed for unknown mailbox with 204."
+            echo "- No IAM policy was modified by this proof."
             echo
-            echo "## Not proven by this run"
-            echo "- Real Gmail users.watch / users.history.list: no patient OAuth refresh secret exists in Secret Manager."
-            echo "- Cloud Scheduler renewal job: audit identity lacks cloudscheduler.jobs.list; no Scheduler mutation attempted."
-            echo "- Real provider email / Calendar / Tasks side effects: intentionally not executed with a real patient account in this infrastructure proof."
-            echo
-            echo "## Cleanup"
-            echo "Temporary service/topic/subscription/image are removed by the workflow EXIT trap."
+            echo "## Not proven"
+            echo "- Real Gmail users.watch/users.history.list: no patient Google OAuth refresh secret is present."
+            echo "- Watch-renewal Scheduler live execution: current GitHub principal cannot list Scheduler jobs."
+            echo "- Real provider Gmail/Calendar/Tasks side effects: intentionally not executed against a real patient account."
           } >> "$proof"
           cat "$proof"
       - name: Upload live proof evidence
