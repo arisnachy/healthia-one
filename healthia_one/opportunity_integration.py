@@ -63,9 +63,18 @@ def _chat_response(result, *, metadata: dict | None = None) -> ChatResponse:
     )
 
 
-def _country_from_locale(state: PatientState) -> str:
-    locale = str(state.profile.locale or "")
-    return locale.rsplit("-", 1)[-1].upper() if "-" in locale else ""
+def _resource_location(state: PatientState) -> dict[str, str]:
+    """Return only patient-entered location evidence.
+
+    Locale controls language/formatting and must never be treated as residence.
+    Until HealthIA has a structured, patient-confirmed country field, the address
+    remains a free-text search hint and country/region stay explicitly unknown.
+    """
+    return {
+        "country": "",
+        "region": "",
+        "locality": str(state.profile.address or "")[:220],
+    }
 
 
 def _explicit_science_refresh(text: str) -> bool:
@@ -130,11 +139,7 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse | None:
             event = AutopilotEvent(
                 patient_id=state.profile.id,
                 event_type="manual.resource_refresh",
-                payload={
-                    "country": _country_from_locale(state),
-                    "region": "",
-                    "locality": state.profile.address[:220],
-                },
+                payload=_resource_location(state),
             )
             if not _RESOURCE.enabled:
                 result.content += (
