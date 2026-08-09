@@ -1,0 +1,204 @@
+name: Google Health Constellation live proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/google-cloud-live-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-google-live-proof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-health-constellation')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      BASE_SERVICE: healthia-one-demo
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Build and prove private PubSub to Cloud Run path
+        id: proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/google-live-proof
+          proof="dist/google-live-proof/proof.md"
+          run_suffix="${GITHUB_RUN_ID}"
+          service="healthia-gmail-proof-${run_suffix}"
+          topic="healthia-gmail-proof-${run_suffix}"
+          subscription="healthia-gmail-proof-${run_suffix}"
+          full_topic="projects/${PROJECT_ID}/topics/${topic}"
+          repo="cloud-run-source-deploy"
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/${repo}/healthia-gmail-proof:${GITHUB_SHA}"
+          active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
+          runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          pubsub_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+
+          if [[ -z "$runtime_sa" || -z "$active_account" || -z "$project_number" ]]; then
+            echo "Unable to resolve existing proof identities/project metadata."
+            exit 1
+          fi
+
+          cleanup() {
+            set +e
+            gcloud pubsub subscriptions delete "$subscription" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+            gcloud pubsub topics delete "$topic" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+            gcloud run services delete "$service" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1
+            gcloud artifacts docker images delete "$image" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1
+          }
+          trap cleanup EXIT
+
+          {
+            echo "# Google Health Constellation live proof"
+            echo
+            echo "Project: $PROJECT_ID"
+            echo "Region: $REGION"
+            echo "Source head: ${{ github.event.pull_request.head.sha || github.sha }}"
+            echo "Workflow checkout: $GITHUB_SHA"
+            echo "Mode: temporary/reversible infrastructure proof"
+            echo "Production identity separation: NOT claimed by this temporary proof"
+            echo
+          } > "$proof"
+
+          echo "Building exact workflow checkout into Artifact Registry..."
+          gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --quiet
+
+          echo "Deploying private worker..."
+          gcloud run deploy "$service" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "$image" \
+            --service-account "$runtime_sa" \
+            --no-allow-unauthenticated \
+            --min 0 --max 1 --concurrency 4 --memory 512Mi --cpu 1 \
+            --command uvicorn \
+            --args 'healthia_one.gmail_push_worker:app,--host,0.0.0.0,--port,8080' \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_GMAIL_PUBSUB_TOPIC=${full_topic}" \
+            --quiet
+
+          service_url="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$service_url" && test -n "$revision"
+
+          # The GitHub proof principal and the temporary push identity need invoke
+          # permission on this proof service only. Production deployment uses the
+          # dedicated identities required by deploy-gmail-push-worker.ps1.
+          gcloud run services add-iam-policy-binding "$service" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --member "serviceAccount:${active_account}" --role roles/run.invoker --quiet >/dev/null
+          gcloud run services add-iam-policy-binding "$service" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --member "serviceAccount:${runtime_sa}" --role roles/run.invoker --quiet >/dev/null
+
+          unauth_status="$(curl -sS -o /dev/null -w '%{http_code}' "$service_url/healthz")"
+          token="$(gcloud auth print-identity-token --audiences="$service_url")"
+          echo "::add-mask::$token"
+          auth_body="$(mktemp)"
+          auth_status="$(curl -sS -o "$auth_body" -w '%{http_code}' -H "Authorization: Bearer $token" "$service_url/healthz")"
+          grep -q 'healthia-gmail-worker' "$auth_body"
+          test "$unauth_status" = "403"
+          test "$auth_status" = "200"
+
+          echo "Creating temporary Pub/Sub topic..."
+          gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
+
+          # Pub/Sub must be able to mint an OIDC token as the temporary push SA.
+          # This binding is on the reused proof identity and is removed after the
+          # subscription/service are deleted only if the binding did not already
+          # exist. We record whether we added it before cleanup.
+          binding_added="false"
+          if ! gcloud iam service-accounts get-iam-policy "$runtime_sa" --project "$PROJECT_ID" \
+              --flatten='bindings[].members' \
+              --filter="bindings.role:roles/iam.serviceAccountTokenCreator AND bindings.members:serviceAccount:${pubsub_agent}" \
+              --format='value(bindings.members)' | grep -q .; then
+            gcloud iam service-accounts add-iam-policy-binding "$runtime_sa" \
+              --project "$PROJECT_ID" \
+              --member "serviceAccount:${pubsub_agent}" \
+              --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null
+            binding_added="true"
+          fi
+
+          cleanup_token_binding() {
+            if [[ "$binding_added" == "true" ]]; then
+              gcloud iam service-accounts remove-iam-policy-binding "$runtime_sa" \
+                --project "$PROJECT_ID" \
+                --member "serviceAccount:${pubsub_agent}" \
+                --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null 2>&1 || true
+            fi
+          }
+          trap 'cleanup_token_binding; cleanup' EXIT
+
+          gcloud pubsub subscriptions create "$subscription" \
+            --project "$PROJECT_ID" \
+            --topic "$topic" \
+            --push-endpoint "${service_url}/events/gmail-push" \
+            --push-auth-service-account "$runtime_sa" \
+            --push-auth-token-audience "$service_url" \
+            --ack-deadline 20 \
+            --message-retention-duration 10m \
+            --quiet
+
+          payload='{"emailAddress":"unknown-proof@example.invalid","historyId":"100"}'
+          message_id="$(gcloud pubsub topics publish "$topic" --project "$PROJECT_ID" --message "$payload" --format='value(messageIds[0])')"
+          test -n "$message_id"
+
+          # Pub/Sub push is asynchronous. Poll Cloud Run request logs only; this
+          # does not poll Gmail and does not read patient content.
+          push_status=""
+          for _ in $(seq 1 12); do
+            push_status="$(gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND httpRequest.requestUrl=\"${service_url}/events/gmail-push\"" \
+              --project "$PROJECT_ID" --limit 5 --freshness 5m --format='value(httpRequest.status)' 2>/dev/null | head -n1 || true)"
+            if [[ -n "$push_status" ]]; then break; fi
+            sleep 5
+          done
+          test "$push_status" = "204"
+
+          image_digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+          {
+            echo "## Proven"
+            echo "- Cloud Build completed for the exact workflow checkout."
+            echo "- Private Cloud Run revision: $revision"
+            echo "- Unauthenticated /healthz status: $unauth_status"
+            echo "- Authenticated /healthz status: $auth_status"
+            echo "- Temporary authenticated Pub/Sub push subscription created."
+            echo "- Synthetic Gmail-shaped Pub/Sub message id: $message_id"
+            echo "- Cloud Run /events/gmail-push status from Pub/Sub: $push_status"
+            echo "- Firestore-backed worker runtime initialized successfully for an unknown mailbox and failed closed with 204."
+            if [[ -n "$image_digest" ]]; then echo "- Image digest: $image_digest"; fi
+            echo
+            echo "## Not proven by this run"
+            echo "- Real Gmail users.watch / users.history.list: no patient OAuth refresh secret exists in Secret Manager."
+            echo "- Cloud Scheduler renewal job: audit identity lacks cloudscheduler.jobs.list; no Scheduler mutation attempted."
+            echo "- Real provider email / Calendar / Tasks side effects: intentionally not executed with a real patient account in this infrastructure proof."
+            echo
+            echo "## Cleanup"
+            echo "Temporary service/topic/subscription/image are removed by the workflow EXIT trap."
+          } >> "$proof"
+          cat "$proof"
+      - name: Upload live proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Google-Constellation-live-proof
+          path: dist/google-live-proof/proof.md
+          if-no-files-found: warn
+          retention-days: 30
