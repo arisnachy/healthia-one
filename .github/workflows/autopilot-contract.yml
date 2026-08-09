@@ -1,0 +1,32 @@
+name: HealthIA Opportunity Autopilot contract
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: healthia-autopilot-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse fail-closed PowerShell deployment contracts
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw "deployment/deploy-autopilot-worker.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/deploy-autopilot-schedules.ps1")) | Out-Null
+      - name: Assert no unauthenticated or silent API enablement
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number --fixed-strings -- '--allow-unauthenticated' deployment/deploy-autopilot-worker.ps1 deployment/deploy-autopilot-schedules.ps1
+          ! grep -R --line-number -E 'gcloud[[:space:]]+services[[:space:]]+enable' deployment/deploy-autopilot-worker.ps1 deployment/deploy-autopilot-schedules.ps1
+          grep -q -- '--no-allow-unauthenticated' deployment/deploy-autopilot-worker.ps1
+          grep -q 'roles/run.invoker' deployment/deploy-autopilot-worker.ps1
+          grep -q 'roles/eventarc.eventReceiver' deployment/deploy-autopilot-worker.ps1
+          grep -q -- '--oidc-service-account-email' deployment/deploy-autopilot-schedules.ps1
+          grep -q -- '--oidc-token-audience' deployment/deploy-autopilot-schedules.ps1
