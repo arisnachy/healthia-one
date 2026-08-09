@@ -35,6 +35,7 @@
         <button data-open="today"><span class="nav-icon">◷</span><b data-i18n="nav.today">Today</b><i id="todayBadge">0</i></button>
         <button data-open="measurements"><span class="nav-icon">⌁</span><b data-i18n="nav.measurements">Measurements</b></button>
         <button data-open="results"><span class="nav-icon">▤</span><b data-i18n="nav.results">Results</b></button>
+        <button data-open="discoveries"><span class="nav-icon">⌘</span><b id="discoveriesNavLabel">Discoveries</b><i id="discoveriesBadge">0</i></button>
         <button data-open="record"><span class="nav-icon">▦</span><b data-i18n="nav.record">My record</b></button>
         <button data-open="missions"><span class="nav-icon">◎</span><b data-i18n="nav.missions">Health missions</b></button>
       </nav>
@@ -84,6 +85,7 @@
       <section id="view-today" class="view"><div class="page-body"><div class="page-kicker" data-i18n="today.kicker">REQUESTED OR EVENT-DRIVEN FOLLOW-UP</div><h1 data-i18n="today.title">Today</h1><p data-i18n="today.body">Items derived from your data, events, or reviews you requested.</p><div id="todayList" class="card-grid"></div></div></section>
       <section id="view-measurements" class="view"><div class="page-body"><div class="page-kicker" data-i18n="measure.kicker">AUTHORIZED SIGNALS</div><h1 data-i18n="measure.title">Measurements</h1><p data-i18n="measure.body">Record data with context; a trend matters more than an isolated number.</p><div class="measurement-actions"><button data-dialog="vital" data-i18n="measure.vitals">＋ Blood pressure & vitals</button><button data-dialog="weight" data-i18n="measure.weight">＋ Weight</button><button data-dialog="activity" data-i18n="measure.activity">＋ Activity</button></div><div id="measurementList" class="card-grid"></div></div></section>
       <section id="view-results" class="view"><div class="page-body"><div class="page-kicker" data-i18n="results.kicker">EVIDENCE-BACKED RESULTS</div><h1 data-i18n="results.title">Results</h1><p data-i18n="results.body">Upload a study; HealthIA preserves the original, identifies what it can read, and links it to your clinical memory.</p><label class="drop-card"><input id="resultFilePage" type="file" accept=".json,.csv,.txt,.pdf,.png,.jpg,.jpeg,.webp" hidden><span>⇧</span><strong data-i18n="results.upload">Upload result</strong><small data-i18n="results.formats">JSON, CSV, TXT, PDF or image · max 5 MB</small></label><div id="resultProcessing" class="result-processing" role="status" aria-live="polite" hidden></div><div id="resultList" class="card-grid"></div></div></section>
+      <section id="view-discoveries" class="view"><div class="page-body"><div class="page-kicker" id="discoveriesKicker">EVIDENCE · OPPORTUNITIES · RECEIPTS</div><h1 id="discoveriesTitle">Discoveries</h1><p id="discoveriesBody">Relevant science, support programs and action receipts. HealthIA keeps this quiet until something is worth your attention.</p><div id="discoveriesSummary" class="continuity-strip"></div><div id="discoveriesList" class="card-grid"></div><div id="opportunityProgramList" class="card-grid"></div><div id="opportunityReceiptList" class="card-grid"></div></div></section>
       <section id="view-record" class="view"><div class="page-body"><div class="page-kicker" data-i18n="record.kicker">PATIENT RECORD</div><h1 data-i18n="record.title">My health story in one place</h1><p data-i18n="record.body">Confirmed data, registered treatment, allergies, and signals you authorized.</p><div id="recordGrid" class="record-grid"></div></div></section>
       <section id="view-missions" class="view"><div class="page-body"><div class="page-kicker" data-i18n="missions.kicker">CONTINUITY & FOLLOW-UP</div><h1 data-i18n="missions.title">Health missions</h1><p data-i18n="missions.body">Living tasks that stay open until a verifiable next step or closure exists.</p><div id="missionList" class="card-grid"></div></div></section>
     </main>
@@ -116,6 +118,7 @@
   <script src="/assets/runtime-integrations.js" defer></script>
   <script src="/assets/provider-integrations.js" defer></script>
   <script src="/assets/cost-control.js" defer></script>
+  <script src="/assets/opportunities-ui.js" defer></script>
   <script src="/assets/icons.js" defer></script>
 </body>
 </html>
