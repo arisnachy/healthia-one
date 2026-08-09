@@ -1,310 +1,343 @@
 # HealthIA ONE · Google Health Constellation
 
-Status: architecture contract for isolated branch `kira/google-health-constellation`.
-Base: `kira/opportunity-autopilot` exact head `6358d9eeb74fe8b19bba74f7d09f2359dc9418af`.
+Status: **draft candidate with verified guarded runtime and private Cloud ingress proof** on `kira/google-health-constellation`.
+Base: `kira/opportunity-autopilot` exact green head `3977b81dc4a6f47599ce9ec7f7f8cdad504a7574`.
 
-## Goal
+`main` is intentionally untouched. Do not merge this branch while any exact-head gate is red/pending or while the remaining live-credential/resource blockers below are unresolved.
 
-Turn HealthIA ONE from a chat that can call tools into a patient-controlled health agent that can coordinate real-world work across the Google ecosystem while preserving clinical safety, explicit authorization, idempotency, provenance, cost guards, and durable public receipts.
+## Product thesis
 
-The chat remains the primary control surface. Service-specific screens are evidence surfaces, not separate workflows.
+HealthIA ONE is not a chat with a list of Google integrations. The longitudinal clinical/family twin is memory, deterministic safety/policy owns the hard boundaries, Gemini/ADK plans and synthesizes, the durable Mission Engine owns state/idempotency/receipts, and Google products are tools selected only when a patient mission needs them.
 
-## Core orchestration rule
+`understand → plan → act → wait for events → verify → remember → follow through`
 
-Every Google action must flow through:
+The chat remains the primary control surface. Service-specific views expose evidence, mission state and receipts rather than becoming separate workflows.
 
-`patient intent/event -> deterministic safety -> patient scope + consent -> plan -> read-only discovery -> proposed action -> explicit authorization when external mutation is sensitive -> tool execution -> durable receipt -> HealthIA synthesis -> longitudinal state update`
+## Non-negotiable execution boundary
 
-No connector is allowed to bypass the patient-scoped mission/receipt boundary.
+Every Google action flows through:
 
-## Agent constellation
+`patient intent/event → deterministic safety → patient scope/grants → semantic plan → read-only discovery → exact proposed mutation → durable authorization when required → connector execution → idempotent receipt → mission state → human synthesis`
 
-### 1. Care Navigator Agent · Google Maps Platform
+No Gemini/ADK tool may create its own authorization, invent OAuth access, call raw Gmail/Calendar mutations, or bypass the patient-scoped mission/receipt layer.
 
-Purpose:
-- Find nearby hospitals, clinics, pharmacies, laboratories, imaging centers, rehabilitation services, autism/community support centers, government offices, foundations, and other relevant places.
-- Rank by distance/travel time, opening status, service relevance, and verified program/provider relationship.
-- Preserve Place ID, address, coordinates, phone/website when available, search radius, field mask, and retrieval timestamp.
-- Offer route/navigation handoff without claiming that a place provides a clinical service unless the source actually supports it.
+## Verified milestones
 
-Example:
-`Find autism assistance -> verified program -> locate nearest enrollment offices/support centers -> show map + travel options -> offer to contact the selected center.`
+### 1. Opportunity parent is green and synchronized
 
-Safety/truth boundary:
-- A nearby place is not automatically an appropriate clinical referral.
-- Do not infer service availability from category alone when a verified source is required.
-- Location search requires an explicit patient location or device-location grant; locale is never residence.
+PR #36 was hardened and its exact head `3977b81dc4a6f47599ce9ec7f7f8cdad504a7574` passed:
 
-### 2. Scheduling Agent · Google Calendar
+- pytest;
+- Full System;
+- KIRA DialogBench;
+- Chromium browser E2E;
+- LAB Ω Core;
+- LAB Ω Secondary;
+- compileall;
+- smoke;
+- JUDGE Ω;
+- frontend semantic gates;
+- PowerShell deployment parsing;
+- release ZIP build/verification;
+- pytest from the extracted release candidate.
 
-Purpose:
-- Read patient availability when authorized.
-- Check free/busy windows.
-- Propose appointment slots.
-- Create/update/cancel patient calendar events only after the patient confirms the selected slot unless a narrow standing automation explicitly grants that authority.
-- Store provider, address/Meet URL, required documents, preparation instructions, travel buffer, and source mission ID.
+The green parent was merged into this child through internal sync PR #38. `main` was not modified.
 
-Example:
-`The clinic offered Tuesday 10:30 -> check patient's calendar -> identify conflict -> propose Tuesday 11:30 -> after confirmation, create Calendar event + travel buffer + required-documents task.`
+### 2. Safety-first Conversation Brain routing
 
-Receipt fields:
-- calendar event ID
-- action (`created|updated|cancelled`)
-- event start/end/timezone
-- source mission ID
-- authorization ID
+Strong Google mission intent is now routed in this order:
 
-### 3. Communications Agent · Gmail + Pub/Sub
+`deterministic Safety → Google Mission candidate → Opportunity → social/clinical/UI fallback`
 
-Purpose:
-- Draft or send appointment/resource/program emails from the patient's authorized Gmail account.
-- Keep replies in the same thread.
-- Watch the mailbox using Gmail push notifications rather than permanent polling.
-- Classify replies such as `appointment_offered`, `appointment_confirmed`, `application_received`, `approved`, `rejected`, `missing_documents`, `needs_information`, `no_response`.
-- Never treat model classification as final administrative truth when the email text is ambiguous.
+The async Gemini boundary re-checks Safety before invoking the Google Mission planner. A valid Google mission response returns directly instead of going through a second generic Gemini generation.
 
-Example:
-`Email three verified autism support centers asking about intake -> record Gmail message/thread IDs -> Gmail push detects reply -> HealthIA reads only the relevant thread -> extracts offered date/requirements -> asks patient before Calendar mutation.`
+Examples:
 
-External-action gate:
-- Drafting may be autonomous when requested.
-- Sending requires explicit patient authorization for the message/recipient unless a narrowly scoped standing permission exists.
-- Replying with new sensitive medical information requires a fresh authorization preview.
+- `Búscame un centro de autismo en Santiago` can become a navigation mission.
+- `Tengo dolor fuerte en el pecho y falta de aire; búscame una clínica` stays in urgent deterministic safety and never becomes a Google mission first.
 
-Receipt fields:
-- Gmail message ID
-- Gmail thread ID
-- recipients
-- subject hash / safe summary
-- action status
-- timestamp
-- source mission ID
+Location truth rules:
 
-### 4. Family & Trusted People Agent · Google People API
+- patient-authorized coordinates may be used;
+- patient-explicit location text may be used for Places Text Search;
+- locale, timezone or language never become residence/location evidence;
+- Gemini may not expand `Santiago` into a country or invented coordinates;
+- search context is stored with `is_residence=false`.
 
-Purpose:
-- Read the patient's authorized Google Contacts.
-- Match contact candidates to HealthIA genogram members only by strong identifiers or explicit patient confirmation.
-- Let the patient designate trusted contacts/caregivers and communication permissions.
-- Resolve email/phone details when a mission needs a family contact.
+### 3. Shared Google Constellation runtime
 
-Important boundary:
-Google Contacts is an address book, not a clinical family graph. A contact named `Mamá` must not become a biological-relative medical fact without patient confirmation.
+FastAPI, chat/ADK and event surfaces use the same process-local Constellation singleton in memory mode. Firestore remains authoritative across Cloud Run processes.
 
-Example:
-`Tell my wife what documents we need -> resolve confirmed caregiver contact -> show message preview -> send only after authorization -> store receipt.`
+The shared runtime owns:
 
-### 5. Education Studio Agent · Gemini + Veo + YouTube
+- patient-scoped grants;
+- exact action authorizations;
+- completed/blocked receipts;
+- mission state;
+- OAuth connection metadata;
+- provider/tool connectors.
 
-Two distinct modes:
+OAuth refresh/client secrets are not stored in the clinical twin. Firestore retains only connection metadata and an opaque Secret Manager version reference; short-lived access tokens are obtained lazily when an authorized user-API action needs them.
 
-#### A. Curated education
-- Search YouTube for relevant public education videos.
-- Filter by language, captions/embeddability where possible, trusted channel/source policy, freshness when relevant, and topic fit.
-- Present the original source and never imply HealthIA produced the content.
+### 4. Exact-payload authorization
 
-#### B. Generated education
-- Gemini converts the patient's approved educational objective into a plain-language storyboard/script.
-- Veo generates short explanatory visual segments when suitable.
-- HealthIA assembles them into an education asset with a truth boundary and source references.
-- Patient-specific clinical identifiers must not be published to YouTube.
-- Generated patient-specific media should remain inside HealthIA/private storage unless the patient explicitly exports it.
+A durable authorization is bound to:
 
-Example:
-`Explain my pneumonia to me -> 60-second educational package: what pneumonia is, why hydration/medication adherence matter, alarm signs, follow-up -> optional Veo visual sequence -> private HealthIA playback.`
+`patient + mission + action + material payload fingerprint + expiry`
 
-### 6. Document & Application Agent · Google Drive + HealthIA document store
+Examples:
 
-Purpose:
-- Save patient-approved copies of generated applications, appointment letters, referral summaries, educational assets, receipts, and source PDFs to a dedicated Drive folder when authorized.
-- Preserve canonical HealthIA evidence IDs and Drive file IDs.
-- Avoid making Drive the clinical source of truth; HealthIA remains canonical and Drive is an export/synchronization target.
-- For assistance applications, connect required documents to the existing Opportunity Application Packet before any external submission.
+- authorizing one Gmail recipient/subject/body cannot authorize a changed message;
+- authorizing a Calendar slot cannot authorize a different time/location;
+- authorization is one-time by default and consumed transactionally;
+- duplicate completed requests return the existing receipt rather than repeating the side effect.
 
-Example:
-`Program requires ID + diagnosis letter -> HealthIA identifies existing documents -> patient adds missing letter -> application packet becomes complete -> export review copy to Drive -> patient authorizes submission.`
+### 5. Executable Workspace/Maps mission tools
 
-### 7. Mission / Follow-up Agent · Google Tasks
+Implemented behind the shared action policy/receipt boundary:
 
-Purpose:
-- Create patient-visible tasks for actionable steps such as obtaining a document, calling a clinic, fasting before a lab, carrying insurance, or following up after no reply.
-- Keep HealthIA mission state canonical and synchronize only tasks the patient has authorized.
-- Completing a Google Task does not automatically prove the clinical action occurred; HealthIA may request supporting evidence when needed.
+- Google Maps Platform Places Nearby;
+- Places Text Search (New) with explicit `textQuery`, bounded `pageSize` and FieldMask;
+- Routes;
+- Calendar Free/Busy;
+- Calendar create/update/cancel with deterministic event ID recovery;
+- Gmail read/watch/draft/send/reply;
+- deterministic sent-message recovery before re-send;
+- People contact candidate resolution;
+- Drive export-container metadata slice;
+- Tasks create/update/complete.
 
-Example:
-`Bring ID and insurance card before Tuesday appointment -> two Tasks with due date -> appointment mission references both task IDs.`
+Contacts never become genogram relationships from labels alone. Places candidates never become clinical referrals from proximity alone.
 
-### 8. Conversational Presence Agent · Gemini Live
+### 6. Durable Gmail event worker and watch renewal
 
-Purpose:
-- Real-time low-latency voice interaction with the same HealthIA Conversation Brain.
-- Voice/vision is an interface, not an independent clinical brain.
-- All tool use routes through the same deterministic safety, consent, authorization, and receipt layer.
+Implemented:
 
-Example:
-Patient says aloud: `Busca un centro cerca para terapia de lenguaje y escríbele para preguntar disponibilidad.`
-HealthIA can search Maps immediately, present 2–3 candidates, resolve contact channels, draft the inquiry, and request send authorization without leaving the conversation.
+- mailbox watch state in Memory/Firestore;
+- reverse lookup by connected mailbox;
+- watch renewal based on expiration metadata, not mailbox polling;
+- account change invalidates the old cursor;
+- Gmail Pub/Sub notification decode (`emailAddress` + `historyId`);
+- `users.history.list` bridge;
+- exact mission `threadId` matching;
+- unrelated mail ignored;
+- history cursor advances only after successful processing;
+- ambiguous/low-confidence administrative reply does not advance mission state;
+- private FastAPI worker with lazy Cloud client initialization;
+- fail-closed deployment contract with authenticated Pub/Sub push and Scheduler OIDC.
 
-## High-value autonomous workflows
+`GOOGLE_CLOUD_PROJECT` is now an explicit required worker environment variable in both production deployment and live-proof workflow. A Cloud proof exposed this missing variable and the production script was corrected before promotion.
 
-### Workflow A · Assistance-to-enrollment
-1. Opportunity Radar finds a candidate program.
-2. Official Program Verifier confirms requirements and source hash.
-3. Eligibility Engine evaluates only supported facts.
-4. Maps Agent locates enrollment/support offices.
-5. People Agent resolves caregiver if patient requests family involvement.
-6. Gmail Agent drafts/sends inquiry after authorization.
-7. Gmail push detects reply without polling.
-8. Application Agent updates requirements/status.
-9. Calendar Agent schedules appointment after patient confirms slot.
-10. Tasks Agent creates required-document/preparation tasks.
-11. HealthIA posts one consolidated chat update with receipts.
+### 7. Production-shaped guarded mega-loop
 
-### Workflow B · Appointment negotiation
-1. Patient: `Consígueme una cita de neurología la semana que viene.`
-2. HealthIA identifies location + preferred travel radius + insurance constraints if available.
-3. Maps/verified provider directory identifies candidate centers.
-4. Calendar Free/Busy identifies feasible patient windows.
-5. Gmail sends a narrowly authorized availability request.
-6. Inbox push receives replies.
-7. HealthIA ranks offered slots against patient availability/travel.
-8. Patient chooses.
-9. Calendar event is created and receipt stored.
-10. Tasks/Drive prepare documents.
+The deterministic integration laboratory proves:
 
-### Workflow C · Approval/rejection monitoring
-1. Application was externally submitted and has a real submission receipt.
-2. Gmail watch monitors the relevant thread/labels.
-3. Reply arrives.
-4. HealthIA retrieves only the new relevant message/history.
-5. Classifier extracts status and cites the original email.
-6. `approved` -> update mission + Calendar/Tasks if next steps exist.
-7. `missing_documents` -> update packet + ask patient for exact missing item.
-8. `rejected` -> explain stated reason, preserve original wording/source, and optionally search appeal/alternative programs.
+`Maps → selection → Calendar Free/Busy → exact Gmail authorization → Gmail receipt → Pub/Sub reply → offered slot → exact Calendar authorization → Calendar receipt → exact Tasks authorization → Tasks receipt → mission COMPLETED`
 
-### Workflow D · Personalized education after a result
-1. New result is parsed and stored with provenance.
-2. HealthIA identifies what the patient asked to understand.
-3. Gemini creates a plain-language explanation grounded in that result and the longitudinal record.
-4. YouTube Agent can offer trusted public videos.
-5. Education Studio can generate a private Veo visual explanation when useful.
-6. The patient can save/export the asset; no patient-specific media is published by default.
+The test uses the real Constellation service/store/guard architecture with synthetic connector transport. It proves:
 
-## Permission model
+- mission reload across request/process boundaries;
+- one-time authorization persistence/consumption;
+- duplicate Pub/Sub history is a no-op;
+- no duplicate Gmail/Calendar/Tasks side effects;
+- completed receipts for every executed tool;
+- final public `mission.completed` trace.
 
-Use OAuth scopes incrementally. Never request all Google scopes at login.
+### 8. Private Google Cloud live proof
 
-Suggested grant bundles:
-- `maps_location`: location/search only.
-- `calendar_read`: read/free-busy.
-- `calendar_write`: create/update events.
-- `gmail_read_relevant`: read/watch mailbox subset needed for active missions.
-- `gmail_send`: send mail.
-- `contacts_read`: People contacts read.
-- `drive_export`: create/update HealthIA export files.
-- `tasks_write`: create/update HealthIA-linked tasks.
-- `youtube_search`: public education discovery.
-- `youtube_upload`: separate high-friction permission; not needed for private patient-specific education.
+A reversible exact-head proof succeeded for source head:
 
-Each mission stores the exact grant IDs/scopes used.
+`28c5b24797a8bdf72f60a21c171a35cd7aff07de`
 
-## Mutation policy
+Evidence:
 
-### Can run without a new confirmation when previously authorized
-- read nearby places using already granted location/search scope;
-- read Calendar free/busy;
-- read the specific Gmail thread already attached to an active mission;
-- retrieve previously authorized contacts;
-- search public YouTube education;
-- build draft emails/forms/events/tasks without executing them.
+- Cloud Build ID: `cd6225d5-da32-43fd-a52f-b14d47de555a`;
+- Artifact Registry image digest: `sha256:bebeed8ce95d23c2972f930bbee0306a74953d60f7875a520f81eb9d089f03cc`;
+- private Cloud Run revision: `healthia-gmail-proof-31333013858-00001-7ww`;
+- unauthenticated `/healthz` did not receive a 2xx response;
+- authenticated Pub/Sub OIDC subscription was created using an already-authorized project identity;
+- a synthetic Gmail-shaped Pub/Sub message was published;
+- private `/events/gmail-push` returned HTTP `204`;
+- the Firestore-backed worker initialized and failed closed for an unknown mailbox;
+- the proof performed no IAM policy mutation;
+- temporary service/topic/subscription/image were removed by the workflow cleanup path.
 
-### Requires explicit patient authorization by default
-- send/reply email;
-- create/update/cancel Calendar event;
-- share patient information with a family member/provider/program;
-- create/update Drive exports containing patient data;
-- submit an external application;
-- upload/publish video;
-- disclose a new clinical fact to an external recipient.
+This proves the implemented infrastructure path:
 
-## Receipt contract
+`exact branch head → Cloud Build → Artifact Registry → private Cloud Run → authenticated Pub/Sub OIDC → Gmail worker → Firestore-aware fail-closed handling`
 
-All side effects use a shared `GoogleActionReceipt` shape:
+It does **not** prove a real patient Gmail mailbox because no patient OAuth refresh secret is provisioned in Secret Manager.
 
-```json
-{
-  "id": "receipt_...",
-  "patient_id": "patient_...",
-  "mission_id": "mission_...",
-  "provider": "google",
-  "service": "gmail|calendar|maps|people|drive|tasks|youtube|veo",
-  "action": "...",
-  "resource_id": "provider-native-id",
-  "status": "completed|blocked|failed|pending",
-  "authorization_id": "authz_...",
-  "idempotency_key": "...",
-  "occurred_at": "RFC3339",
-  "safe_summary": "patient-visible execution summary",
-  "evidence_ids": []
-}
-```
+## Clinical Google Cloud capability layer
 
-Never store chain-of-thought in receipts.
+The following server-side connectors use **Application Default Credentials (workload identity)**, not patient OAuth refresh tokens. Patient grants/action policy remain an independent HealthIA consent boundary above them.
 
-## Cost strategy
+### Document AI — executable guarded slice
 
-- Prefer read APIs and deterministic ranking before Gemini.
-- Use Gmail push notifications rather than inbox polling.
-- Use field masks in Maps/Places and request only needed fields.
-- Cache stable Place details by Place ID subject to Google Maps policies/terms.
-- Search YouTube only on explicit education requests or bounded missions.
-- Veo is generated only on explicit education requests; never as background decoration.
-- Generate one patient-facing synthesis after tools complete instead of one LLM call per connector.
+Implemented:
 
-## Judge-visible demonstration
+- configured processor resource only;
+- private `gs://` evidence URI only;
+- synchronous `:process` request;
+- text/entities/pages/form fields/tables returned to the internal connector result;
+- evidence ID linkage;
+- patient text is not copied into public receipt summaries.
 
-One strong end-to-end demo should prove multiple products through a single mission rather than showing disconnected buttons:
+Truth boundary: connector/policy/tests exist; no live HealthIA Document AI processor invocation is claimed yet.
 
-> Patient: `My son has autism. Find help near us and help me get an appointment.`
+### Cloud Healthcare FHIR/DICOM — executable guarded slice
 
-Expected visible trace:
-1. HealthIA separates son's condition from patient's health.
-2. Opportunity source is verified.
-3. Maps shows nearby relevant centers/offices.
+Implemented:
+
+- configured FHIR/DICOM stores only;
+- FHIR read;
+- FHIR bounded search;
+- FHIR create/update with exact patient authorization;
+- DICOM study metadata retrieval;
+- resource type/ID/query/UID validation against path injection.
+
+Truth boundary: no live HealthIA FHIR/DICOM store is claimed. HealthIA's internal longitudinal twin remains canonical; this is an interoperability gateway.
+
+### Firebase Cloud Messaging — executable guarded slice
+
+Implemented:
+
+- HTTP v1 mission notification connector;
+- exact patient authorization before send;
+- caller-supplied title/body are ignored;
+- lock-screen copy is fixed and PHI-neutral;
+- notification data contains only bounded mission routing metadata.
+
+Truth boundary: no real device registration token send is claimed yet.
+
+### Speech-to-Text — executable guarded slice
+
+Implemented:
+
+- synchronous recognition for patient-authorized private audio in Cloud Storage;
+- language configuration;
+- transcript returned internally, not exposed in receipt summary.
+
+Truth boundary: streaming voice/Gemini Live input is not implied by this slice and remains contract-only.
+
+### Text-to-Speech — executable guarded slice
+
+Implemented:
+
+- bounded patient-facing text synthesis;
+- private audio payload returned internally;
+- source text stays out of public receipt summary.
+
+Truth boundary: bidirectional Gemini Live voice is separate and not claimed.
+
+### Veo private education — executable guarded slice
+
+Implemented:
+
+- allowlisted Veo models only;
+- exactly authorized generation action;
+- long-running operation submission;
+- output constrained under a private GCS prefix;
+- one sample, bounded duration/resolution;
+- `personGeneration=dont_allow`;
+- no public YouTube output.
+
+Truth boundary: no live Veo generation is claimed until the project has the required private output prefix/API/IAM and the exact action is explicitly authorized. YouTube public search/upload remains a separate contract.
+
+## Capability truth registry
+
+`existing` means already part of the verified HealthIA foundation.
+
+`executable` means a guarded connector/runtime slice exists behind grants/policy/receipts and has deterministic tests. **It does not mean the required external Google resource/account is configured or live-proven.**
+
+`contract` means architecture/policy is reserved but an executable connector slice is not yet promoted.
+
+`deferred` means intentionally outside the current winning path.
+
+### Existing
+
+- Vertex AI / Gemini;
+- Google ADK;
+- Firestore;
+- Cloud Storage;
+- Android Health Connect.
+
+### Executable guarded slices
+
+- Maps/Places/Routes;
+- Calendar;
+- Gmail + Pub/Sub mission bridge;
+- People contact candidates;
+- Drive export-container metadata;
+- Tasks;
+- Document AI private-GCS processing;
+- Cloud Healthcare FHIR/DICOM gateway;
+- FCM PHI-neutral mission notifications;
+- Speech-to-Text private-GCS recognition;
+- Text-to-Speech;
+- private Veo LRO generation.
+
+### Contract only
+
+- Cloud Vision OCR;
+- Cloud Translation;
+- Firebase Authentication / Identity Platform migration;
+- YouTube public education/search/upload;
+- Gemini Live bidirectional voice.
+
+### Deferred
+
+- BigQuery population intelligence;
+- Google Forms follow-up;
+- Google Wallet passes/credentials.
+
+## Remaining live blockers
+
+1. **Real Gmail mailbox:** provision a patient-authorized Google OAuth connection/refresh secret and granted Gmail scopes; only then can `users.watch`, `users.history.list` and a real provider thread be live-proven.
+2. **Scheduler renewal:** code/deployment contract exists, but the current GitHub audit principal cannot list Cloud Scheduler jobs; do not claim live watch renewal until the job is independently verified.
+3. **Document AI:** configure a processor resource and private evidence path before live invocation.
+4. **Cloud Healthcare:** configure HealthIA FHIR/DICOM stores and least-privilege IAM before live interoperability proof.
+5. **FCM:** register a real HealthIA device token before a live neutral notification proof.
+6. **Speech/TTS:** APIs/runtime access must be verified with synthetic/private evidence before claiming live calls.
+7. **Veo:** configure private GCS output prefix and verify API/IAM/cost guard before a live generation proof.
+8. **Real external patient side effects:** no real provider Gmail message, Calendar event or Tasks item was created in the infrastructure proof; the guarded mega-loop is production-shaped/synthetic until a patient OAuth account is connected.
+9. **Assistance document delivery:** a real external application submission still requires a verifiable external delivery receipt.
+
+## Demo target
+
+The strongest judge-visible mission remains:
+
+> `My son has autism. Find help near us and help me get an appointment.`
+
+Desired trace:
+
+1. HealthIA preserves the son's condition as family context, not the patient's diagnosis.
+2. Opportunity source/requisites are verified.
+3. Places finds relevant candidates from explicit location evidence.
 4. Patient selects a center.
-5. Gmail draft appears with exactly what will be shared.
-6. Patient authorizes send.
-7. Gmail receipt appears.
-8. Simulated/test or live reply is received via event-driven mailbox update.
-9. HealthIA extracts offered appointment slots.
-10. Calendar availability is checked.
-11. Patient confirms one slot.
-12. Calendar event + Tasks are created.
-13. HealthIA offers a private plain-language education asset.
-14. Discoveries/Mission receipt view shows the whole causal chain.
+5. Calendar read finds feasible windows.
+6. HealthIA prepares the exact inquiry.
+7. Patient authorizes that exact Gmail payload.
+8. Gmail receipt is stored.
+9. Gmail Pub/Sub wakes the private worker when a mission-linked reply arrives.
+10. Only the exact thread is read/interpreted.
+11. Offered slots are presented.
+12. Patient selects one.
+13. Exact Calendar/Tasks actions are authorized.
+14. Calendar/Tasks receipts close the mission.
+15. Optional private education can use Document AI/STT/TTS/Veo without publishing patient-specific content.
+16. The Mission Flight Recorder shows Event → Evidence → Decision → Tool → Authorization → Receipt → Outcome, never private chain-of-thought.
 
-The winning story is not `we integrated eight APIs`; it is `HealthIA completed one real patient mission across eight systems without losing safety, context, consent, or proof.`
+The winning story is not “we integrated many Google APIs.” It is:
 
-## Implementation sequence
+**HealthIA completed one real patient mission across multiple systems without losing clinical safety, patient/family context, consent, idempotency or proof.**
 
-P0 — shared Google connector boundary + OAuth grant registry + action receipt + idempotency.
+## Merge rule
 
-P1 — Maps/Places read-only + Calendar free/busy + Gmail draft/send + Gmail push processing.
+Keep PR #37 **draft** and keep `main` untouched until:
 
-P2 — People contact resolution + Calendar write + Tasks synchronization.
-
-P3 — Drive export/application-document linkage.
-
-P4 — YouTube trusted education search + Gemini/Veo private Education Studio.
-
-P5 — Gemini Live voice control through the same orchestrator.
-
-## Non-goals until separately proven
-
-- No autonomous medical diagnosis or prescription changes through Google tools.
-- No sending messages to contacts inferred only from names.
-- No claiming an appointment is booked until a provider reply or booking receipt exists.
-- No claiming an application is approved/rejected from a vague email.
-- No publishing patient-specific clinical videos to YouTube by default.
-- No global OAuth consent request for every service at first login.
-- No permanent polling loops.
+- its exact final head passes pytest + Full System + DialogBench + Chromium + LAB Ω Core/Secondary + JUDGE + release verification;
+- all documentation reflects the exact candidate;
+- any Google product described as live has independent live evidence;
+- real patient OAuth/resource configuration is not confused with executable connector code;
+- no red/pending required gate remains.
