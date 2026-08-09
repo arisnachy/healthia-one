@@ -60,6 +60,34 @@ _UI_RECORD_VERBS = (
     "record", "log", "add", "save",
 )
 _UI_UPLOAD_VERBS = ("subir", "cargar", "adjuntar", "upload", "attach")
+_UI_GOOGLE_CONNECTION_PHRASES = (
+    "conecta google",
+    "conectar google",
+    "conecta mi google",
+    "conectar mi google",
+    "conecta mi cuenta google",
+    "conectar mi cuenta google",
+    "conecta mi cuenta de google",
+    "conectar mi cuenta de google",
+    "vincula mi cuenta google",
+    "vincular mi cuenta google",
+    "gestiona mi cuenta google",
+    "gestionar mi cuenta google",
+    "configura mi cuenta google",
+    "configurar mi cuenta google",
+    "desconecta google",
+    "desconectar google",
+    "desconecta mi cuenta google",
+    "desconectar mi cuenta google",
+    "connect google",
+    "connect my google account",
+    "link google account",
+    "link my google account",
+    "manage google account",
+    "manage my google account",
+    "disconnect google",
+    "disconnect my google account",
+)
 
 _UI_VIEW_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("results", ("resultado", "resultados", "results", "labs", "laboratorio")),
@@ -166,6 +194,15 @@ def _has_any_command_phrase(text: str, phrases: tuple[str, ...]) -> bool:
     return any(_contains_command_phrase(text, phrase) for phrase in phrases)
 
 
+def _requested_google_connection_action(text: str) -> dict[str, str] | None:
+    normalized = text.lower().strip()
+    if not normalized:
+        return None
+    if _has_any_command_phrase(normalized, _UI_GOOGLE_CONNECTION_PHRASES):
+        return {"type": "open_google_connection"}
+    return None
+
+
 def _requested_ui_action(text: str) -> dict[str, str] | None:
     normalized = text.lower().strip()
     if not normalized:
@@ -244,6 +281,30 @@ def _human_clinical_conversation(state: PatientState, patient_text: str) -> Chat
     )
 
 
+def _google_connection_control_response(state: PatientState, patient_text: str) -> ChatResponse:
+    frame = build_frame(state, patient_text)
+    english = bool(re.search(r"\b(connect|link|manage|disconnect)\b", patient_text.lower()))
+    content = (
+        "I opened your Google connection controls. HealthIA will not connect, disconnect, or authorize anything by itself; review the status and use the Google button only if you want to continue."
+        if english else
+        "Te abrí los controles de conexión de Google. HealthIA no conectará, desconectará ni autorizará nada por sí sola; revisa el estado y usa el botón de Google sólo si quieres continuar."
+    )
+    response = ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=content,
+            metadata={
+                "intent": "google_connection_control",
+                "ui_action": {"type": "open_google_connection"},
+                "health_os_control": True,
+                "external_action_executed": False,
+            },
+        )
+    )
+    return _attach_conversation_frame(response, frame)
+
+
 def _google_mission_candidate_response(state: PatientState, patient_text: str) -> ChatResponse:
     frame = build_frame(state, patient_text)
     english = bool(re.search(r"\b(find|get me|where can i|contact|book)\b", patient_text.lower()))
@@ -273,6 +334,13 @@ def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
         frame = build_frame(state, patient_text)
         response = deterministic_respond(state, _router_text(patient_text))
         return _attach_conversation_frame(response, frame)
+
+    # Google account management is a deterministic Health OS control, not a
+    # mission and never an OAuth authorization. Safety still runs first. The UI
+    # only opens the patient-controlled connection surface; the patient must
+    # explicitly press Connect/Disconnect there.
+    if _requested_google_connection_action(patient_text) is not None:
+        return _google_connection_control_response(state, patient_text)
 
     if should_consider_google_mission(state, patient_text):
         return _google_mission_candidate_response(state, patient_text)
