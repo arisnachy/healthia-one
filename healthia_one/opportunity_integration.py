@@ -40,6 +40,13 @@ _AUTOPILOT = OpportunityAutopilot(
     receipt_store=_RECEIPTS,
 )
 _CONTROLLER = OpportunityChatController(_AUTOPILOT)
+_AUTO_OPEN_ACTIONS = {
+    "show_discoveries",
+    "therapeutic_comparison",
+    "show_programs",
+    "application_prefilled",
+    "show_application_missing_items",
+}
 
 
 def _sync_topics(state: PatientState) -> None:
@@ -56,8 +63,11 @@ def _chat_response(result, *, metadata: dict | None = None) -> ChatResponse:
     payload.update(metadata or {})
     payload["opportunity_autopilot"] = True
     payload["action_target"] = "discoveries"
-    if result.ui_action:
-        payload["ui_action"] = result.ui_action
+    ui_action = result.ui_action
+    if ui_action is None and result.action in _AUTO_OPEN_ACTIONS:
+        ui_action = {"type": "open_view", "view": "discoveries"}
+    if ui_action:
+        payload["ui_action"] = ui_action
         payload["health_os_control"] = True
     return ChatResponse(
         message=ChatMessage(
