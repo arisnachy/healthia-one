@@ -27,7 +27,7 @@ def test_capabilities_expose_connection_metadata_but_never_secret_material():
         assert "secret_version_resource" not in serialized
 
 
-def test_api_creates_patient_scoped_mission_and_authorization_without_external_action():
+def test_api_creates_patient_scoped_mission_and_exact_authorization_without_external_action():
     with TestClient(app) as client:
         grant = client.post(
             "/api/google-constellation/grants",
@@ -56,9 +56,19 @@ def test_api_creates_patient_scoped_mission_and_authorization_without_external_a
         assert fetched.status_code == 200
         assert fetched.json()["id"] == mission_id
 
+        exact_payload = {
+            "to": ["center@example.org"],
+            "subject": "Appointment",
+            "body": "Please advise.",
+        }
         authorization = client.post(
             f"/api/google-constellation/missions/{mission_id}/authorize",
-            json={"action": "gmail.send", "ttl_minutes": 5, "one_time": True},
+            json={
+                "action": "gmail.send",
+                "payload": exact_payload,
+                "ttl_minutes": 5,
+                "one_time": True,
+            },
         )
         assert authorization.status_code == 200
         auth_payload = authorization.json()
@@ -66,4 +76,6 @@ def test_api_creates_patient_scoped_mission_and_authorization_without_external_a
         assert auth_payload["authorization"]["patient_id"] == "patient_demo"
         assert auth_payload["authorization"]["mission_id"] == mission_id
         assert auth_payload["authorization"]["action"] == "gmail.send"
+        assert len(auth_payload["authorization"]["intent_key"]) == 64
+        assert "exact patient + mission + action + payload fingerprint" in auth_payload["truth_boundary"]
         assert "not an execution receipt" in auth_payload["truth_boundary"]
