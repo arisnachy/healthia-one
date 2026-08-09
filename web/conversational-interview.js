@@ -6,6 +6,9 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
     const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
     const i18n = window.HealthIAI18n;
     const text = (en, es) => i18n?.locale === "es" ? es : en;
+    const ANSWER_PREFIX = "[ENTREVISTA_CLINICA]";
+    let answeredByKey = new Map();
+    let refreshTimer = null;
 
     const esc = value => String(value ?? "").replace(/[&<>'"]/g, char => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -18,6 +21,49 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
       link.href = "/assets/conversational-interview.css";
       link.dataset.conversationalInterviewStyle = "true";
       document.head.append(link);
+    }
+
+    function formKey(form) {
+      return `${form?.dataset?.interviewId || ""}:${form?.dataset?.stage || ""}`;
+    }
+
+    function parseAnswerPayload(content) {
+      const raw = String(content || "");
+      const index = raw.indexOf(ANSWER_PREFIX);
+      if (index < 0) return null;
+      try {
+        const payload = JSON.parse(raw.slice(index + ANSWER_PREFIX.length));
+        if (!payload?.interview_id || !Array.isArray(payload.answers)) return null;
+        return payload;
+      } catch {
+        return null;
+      }
+    }
+
+    function indexAnswered(messages) {
+      const next = new Map();
+      (messages || []).forEach(message => {
+        if (message?.role !== "patient") return;
+        const payload = parseAnswerPayload(message.content);
+        if (!payload) return;
+        next.set(`${payload.interview_id}:${Number(payload.stage || 1)}`, payload);
+      });
+      answeredByKey = next;
+    }
+
+    async function refreshAnswered() {
+      try {
+        const response = await fetch("/api/bootstrap", {headers: {Accept: "application/json", "Accept-Language": i18n?.locale || "en"}});
+        if (!response.ok) return;
+        const snapshot = await response.json();
+        indexAnswered(snapshot.messages);
+        hydrate();
+      } catch {}
+    }
+
+    function scheduleRefresh() {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(refreshAnswered, 70);
     }
 
     function ensureFreeText(fieldset) {
@@ -38,9 +84,12 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
       return [selected.join(", "), detail].filter(Boolean).join(" · ");
     }
 
-    function appendHistory(history, fieldset) {
-      const prompt = fieldset.dataset.questionPrompt || $("legend", fieldset)?.textContent || "";
-      const answer = answerText(fieldset);
+    function payloadAnswerText(answer) {
+      const selected = Array.isArray(answer?.selected) ? answer.selected.filter(Boolean).join(", ") : "";
+      return [selected, String(answer?.detail || "").trim()].filter(Boolean).join(" · ") || text("No detail", "Sin detalle");
+    }
+
+    function appendPair(history, prompt, answer) {
       const pair = document.createElement("div");
       pair.className = "clinical-conversation-pair";
       pair.innerHTML = `
@@ -49,43 +98,99 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
       history.append(pair);
     }
 
-    function transform(form) {
-      if (!form || form.dataset.conversationalized === "true") return;
-      const fields = $$(".clinical-question", form);
-      if (fields.length !== 5) return;
+    function appendHistory(history, fieldset) {
+      const prompt = fieldset.dataset.questionPrompt || $("legend", fieldset)?.textContent || "";
+      appendPair(history, prompt, answerText(fieldset));
+    }
 
-      form.dataset.conversationalized = "true";
+    function ensureConversationShell(form) {
       form.classList.add("clinical-conversation-mode");
       const headerTitle = $("header h4", form);
       const headerCopy = $("header p", form);
-      const stage = $(".clinical-stage", form);
       const source = $(".clinical-source", form);
-      const questionsRoot = $(".clinical-questions", form);
       const progressRow = $(".clinical-progress-row", form);
       const submitRow = $(".clinical-submit-row", form);
       const legacyError = $(".clinical-form-error", form);
-
-      if (headerTitle) headerTitle.textContent = text("I will ask one useful thing at a time", "Te iré preguntando una cosa útil a la vez");
-      if (headerCopy) headerCopy.textContent = text(
-        "Use a suggestion if it fits, or answer naturally in your own words.",
-        "Puedes tocar una sugerencia si encaja o responder con tus propias palabras."
-      );
       if (source) source.textContent = text("Adaptive to this conversation", "Adaptado a esta conversación");
       if (progressRow) progressRow.hidden = true;
       if (submitRow) submitRow.hidden = true;
       if (legacyError) legacyError.hidden = true;
+      return {headerTitle, headerCopy, stage: $(".clinical-stage", form), questionsRoot: $(".clinical-questions", form)};
+    }
+
+    function renderCompleted(form, payload) {
+      if (!form || form.dataset.conversationCompleted === "true") return;
+      const fields = $$(".clinical-question", form);
+      if (fields.length !== 5) return;
+      form.dataset.conversationalized = "true";
+      form.dataset.conversationCompleted = "true";
+      const shell = ensureConversationShell(form);
+      if (shell.headerTitle) shell.headerTitle.textContent = text("We already covered this part", "Esta parte ya la conversamos");
+      if (shell.headerCopy) shell.headerCopy.textContent = text(
+        "I kept your answers in the thread so we do not ask the same things again.",
+        "Conservé tus respuestas en el hilo para no volver a preguntarte lo mismo."
+      );
+      if (shell.stage) shell.stage.textContent = text("Done", "Listo");
+      fields.forEach(fieldset => { fieldset.hidden = true; });
+      $(".clinical-turn-controls", form)?.remove();
+      $(".clinical-turn-error", form)?.remove();
+      let history = $(".clinical-conversation-history", form);
+      if (!history) {
+        history = document.createElement("div");
+        history.className = "clinical-conversation-history";
+        shell.questionsRoot?.before(history);
+      }
+      history.innerHTML = "";
+      (payload?.answers || []).forEach(answer => appendPair(
+        history,
+        answer.question_prompt || text("Clinical question", "Pregunta clínica"),
+        payloadAnswerText(answer)
+      ));
+    }
+
+    function collectPayload(form, fields) {
+      return {
+        interview_id: form.dataset.interviewId,
+        stage: Number(form.dataset.stage || 1),
+        answers: fields.map(fieldset => ({
+          question_id: fieldset.dataset.questionId,
+          question_prompt: fieldset.dataset.questionPrompt,
+          selected: $$("input:checked", fieldset).map(input => input.value),
+          detail: $(".clinical-detail", fieldset)?.value.trim() || "",
+        })),
+      };
+    }
+
+    function transform(form) {
+      if (!form) return;
+      const existing = answeredByKey.get(formKey(form));
+      if (existing) {
+        renderCompleted(form, existing);
+        return;
+      }
+      if (form.dataset.conversationalized === "true") return;
+      const fields = $$(".clinical-question", form);
+      if (fields.length !== 5) return;
+
+      form.dataset.conversationalized = "true";
+      const shell = ensureConversationShell(form);
+      if (shell.headerTitle) shell.headerTitle.textContent = text("I will ask one useful thing at a time", "Te iré preguntando una cosa útil a la vez");
+      if (shell.headerCopy) shell.headerCopy.textContent = text(
+        "Use a suggestion if it fits, or answer naturally in your own words.",
+        "Puedes tocar una sugerencia si encaja o responder con tus propias palabras."
+      );
 
       const history = document.createElement("div");
       history.className = "clinical-conversation-history";
       history.setAttribute("aria-live", "polite");
-      questionsRoot?.before(history);
+      shell.questionsRoot?.before(history);
 
       const controls = document.createElement("div");
       controls.className = "clinical-turn-controls";
       controls.innerHTML = `
         <button type="button" class="clinical-dont-know">${text("I don't know", "No sé")}</button>
         <button type="button" class="clinical-next-question">${text("Continue", "Continuar")}</button>`;
-      questionsRoot?.after(controls);
+      shell.questionsRoot?.after(controls);
 
       const error = document.createElement("p");
       error.className = "clinical-turn-error";
@@ -104,7 +209,7 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
 
       function updateTurn() {
         fields.forEach((fieldset, index) => { fieldset.hidden = index !== current; });
-        if (stage) stage.textContent = `${current + 1} / ${fields.length}`;
+        if (shell.stage) shell.stage.textContent = `${current + 1} / ${fields.length}`;
         const next = $(".clinical-next-question", controls);
         if (next) next.textContent = current === fields.length - 1
           ? text("Send and continue", "Enviar y continuar")
@@ -138,7 +243,9 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
 
         completed = true;
         controls.hidden = true;
-        if (stage) stage.textContent = text("Done", "Listo");
+        if (shell.stage) shell.stage.textContent = text("Done", "Listo");
+        const payload = collectPayload(form, fields);
+        answeredByKey.set(formKey(form), payload);
         form.requestSubmit();
       }
 
@@ -166,6 +273,7 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
 
     function boot() {
       ensureStylesheet();
+      refreshAnswered();
       hydrate();
       const list = $("#messageList");
       if (!list) return;
@@ -176,7 +284,9 @@ if (!window.__HEALTHIA_CONVERSATIONAL_INTERVIEW__) {
           hydrate(node);
         }));
       }).observe(list, {childList: true, subtree: true});
-      document.addEventListener("healthia:ui-updated", () => hydrate());
+      document.addEventListener("healthia:ui-updated", scheduleRefresh);
+      document.addEventListener("healthia:chat-settled", scheduleRefresh);
+      document.addEventListener("healthia:locale-changed", scheduleRefresh);
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, {once: true});
