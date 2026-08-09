@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field
 
 from healthia_one.google_constellation import GoogleAction, GoogleActionRequest, GoogleGrant
 from healthia_one.google_connector_runtime import ConnectorResult, GoogleActionExecutor
+from healthia_one.google_mission_actions import (
+    calendar_event_payload,
+    followup_task_payload,
+    provider_contact_payload,
+)
 
 
 def utc_now() -> datetime:
@@ -90,7 +95,13 @@ class GoogleHealthMission(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
-    def record(self, event_type: str, summary: str, resource_id: str = "", evidence_ids: list[str] | None = None) -> None:
+    def record(
+        self,
+        event_type: str,
+        summary: str,
+        resource_id: str = "",
+        evidence_ids: list[str] | None = None,
+    ) -> None:
         self.public_events.append(
             PublicMissionEvent(
                 event_type=event_type,
@@ -103,11 +114,8 @@ class GoogleHealthMission(BaseModel):
 
 
 class MissionStore(Protocol):
-    def load(self, patient_id: str, mission_id: str) -> GoogleHealthMission | None:
-        ...
-
-    def save(self, mission: GoogleHealthMission) -> None:
-        ...
+    def load(self, patient_id: str, mission_id: str) -> GoogleHealthMission | None: ...
+    def save(self, mission: GoogleHealthMission) -> None: ...
 
 
 class MemoryMissionStore:
@@ -127,11 +135,15 @@ class FirestoreMissionStore:
 
     def __init__(self, project: str | None = None) -> None:
         from google.cloud import firestore
-
         self.client = firestore.Client(project=project)
 
     def _doc(self, patient_id: str, mission_id: str):
-        return self.client.collection(self.COLLECTION).document(patient_id).collection("missions").document(mission_id)
+        return (
+            self.client.collection(self.COLLECTION)
+            .document(patient_id)
+            .collection("missions")
+            .document(mission_id)
+        )
 
     def load(self, patient_id: str, mission_id: str) -> GoogleHealthMission | None:
         snapshot = self._doc(patient_id, mission_id).get()
@@ -146,12 +158,7 @@ class MissionTransitionError(ValueError):
 
 
 class GoogleHealthMissionCoordinator:
-    """Event-resumable mission coordinator.
-
-    Gemini/ADK may decide *what* mission the patient wants and interpret an
-    external reply, but this coordinator owns the state transitions and tool
-    execution boundaries. It contains no private chain-of-thought.
-    """
+    """Event-resumable mission coordinator with deterministic mutation gates."""
 
     def __init__(self, executor: GoogleActionExecutor, store: MissionStore | None = None) -> None:
         self.executor = executor
@@ -180,16 +187,24 @@ class GoogleHealthMissionCoordinator:
         self.store.save(mission)
         return mission
 
-    def _execute(self, mission: GoogleHealthMission, grants: list[GoogleGrant], action: GoogleAction, payload: dict[str, Any], *, authorization_key: str = "") -> tuple[Any, ConnectorResult | None]:
+    def _execute(
+        self,
+        mission: GoogleHealthMission,
+        grants: list[GoogleGrant],
+        action: GoogleAction,
+        payload: dict[str, Any],
+        *,
+        authorization_key: str = "",
+    ) -> tuple[Any, ConnectorResult | None]:
         auth_id = mission.action_authorizations.get(authorization_key or str(action), "")
-        req = GoogleActionRequest(
+        request = GoogleActionRequest(
             patient_id=mission.patient_id,
             mission_id=mission.id,
             action=action,
             payload=payload,
             explicit_authorization_id=auth_id,
         )
-        receipt, outcome = self.executor.execute(req, grants)
+        receipt, outcome = self.executor.execute(request, grants)
         mission.record(
             f"tool.{action}",
             receipt.safe_summary,
@@ -198,11 +213,17 @@ class GoogleHealthMissionCoordinator:
         )
         return receipt, outcome
 
-    def discover(self, mission: GoogleHealthMission, grants: list[GoogleGrant], *, radius_m: int = 10000) -> GoogleHealthMission:
+    def discover(
+        self,
+        mission: GoogleHealthMission,
+        grants: list[GoogleGrant],
+        *,
+        radius_m: int = 10000,
+    ) -> GoogleHealthMission:
         if mission.state not in {MissionState.RECEIVED, MissionState.DISCOVERING, MissionState.BLOCKED}:
             raise MissionTransitionError(f"Cannot discover providers from {mission.state}")
         mission.state = MissionState.DISCOVERING
-        maps_receipt, maps_outcome = self._execute(
+        receipt, outcome = self._execute(
             mission,
             grants,
             GoogleAction.MAPS_SEARCH_NEARBY,
@@ -213,91 +234,161 @@ class GoogleHealthMissionCoordinator:
                 "max_results": 8,
             },
         )
-        if maps_receipt.status != "completed" or maps_outcome is None:
+        if receipt.status != "completed" or outcome is None:
             mission.state = MissionState.BLOCKED
             self.store.save(mission)
             return mission
-        mission.tool_outputs["place_candidates"] = maps_outcome.data.get("places") or []
+        mission.tool_outputs["place_candidates"] = outcome.data.get("places") or []
         mission.state = MissionState.AWAITING_SELECTION
-        mission.record("mission.awaiting_selection", "Nearby candidates are ready; HealthIA needs one verified/selected destination before disclosure or contact.")
+        mission.record(
+            "mission.awaiting_selection",
+            "Nearby candidates are ready; HealthIA needs one verified/selected destination before disclosure or contact.",
+        )
         self.store.save(mission)
         return mission
 
-    def select_provider(self, mission: GoogleHealthMission, *, place: dict[str, Any], provider_email: str = "") -> GoogleHealthMission:
+    def select_provider(
+        self,
+        mission: GoogleHealthMission,
+        *,
+        place: dict[str, Any],
+        provider_email: str = "",
+    ) -> GoogleHealthMission:
         if mission.state != MissionState.AWAITING_SELECTION:
             raise MissionTransitionError("Provider selection is only valid after discovery")
         mission.selected_place = dict(place)
         mission.provider_email = provider_email.strip()
         mission.state = MissionState.AWAITING_AUTHORIZATION if mission.provider_email else MissionState.AWAITING_SELECTION
-        mission.record("provider.selected", "A provider/resource candidate was selected; clinical appropriateness is not inferred from proximity alone.", resource_id=str(place.get("id") or ""))
+        mission.record(
+            "provider.selected",
+            "A provider/resource candidate was selected; clinical appropriateness is not inferred from proximity alone.",
+            resource_id=str(place.get("id") or ""),
+        )
         self.store.save(mission)
         return mission
 
-    def check_availability(self, mission: GoogleHealthMission, grants: list[GoogleGrant], *, time_min: str, time_max: str, time_zone: str) -> GoogleHealthMission:
+    def check_availability(
+        self,
+        mission: GoogleHealthMission,
+        grants: list[GoogleGrant],
+        *,
+        time_min: str,
+        time_max: str,
+        time_zone: str,
+    ) -> GoogleHealthMission:
         receipt, outcome = self._execute(
             mission,
             grants,
             GoogleAction.CALENDAR_FREEBUSY,
-            {"time_min": time_min, "time_max": time_max, "time_zone": time_zone, "calendar_ids": ["primary"]},
+            {
+                "time_min": time_min,
+                "time_max": time_max,
+                "time_zone": time_zone,
+                "calendar_ids": ["primary"],
+            },
         )
         if receipt.status == "completed" and outcome is not None:
             mission.tool_outputs["calendar_freebusy"] = outcome.data
         self.store.save(mission)
         return mission
 
-    def authorize_action(self, mission: GoogleHealthMission, action: GoogleAction, authorization_id: str) -> GoogleHealthMission:
+    def authorize_action(
+        self,
+        mission: GoogleHealthMission,
+        action: GoogleAction,
+        authorization_id: str,
+    ) -> GoogleHealthMission:
         if not authorization_id.strip():
             raise ValueError("authorization_id is required")
         mission.action_authorizations[str(action)] = authorization_id.strip()
-        mission.record("authorization.recorded", f"Patient authorization recorded for {action}.", resource_id=authorization_id.strip())
+        mission.record(
+            "authorization.recorded",
+            f"Patient authorization recorded for {action}.",
+            resource_id=authorization_id.strip(),
+        )
         self.store.save(mission)
         return mission
 
-    def contact_selected_provider(self, mission: GoogleHealthMission, grants: list[GoogleGrant], *, subject: str, body: str) -> GoogleHealthMission:
-        if not mission.provider_email:
-            raise MissionTransitionError("Selected provider has no verified/entered email destination")
+    def contact_selected_provider(
+        self,
+        mission: GoogleHealthMission,
+        grants: list[GoogleGrant],
+        *,
+        subject: str,
+        body: str,
+    ) -> GoogleHealthMission:
+        try:
+            payload = provider_contact_payload(mission, subject=subject, body=body)
+        except ValueError as exc:
+            raise MissionTransitionError(str(exc)) from exc
         mission.state = MissionState.CONTACTING
-        receipt, outcome = self._execute(
-            mission,
-            grants,
-            GoogleAction.GMAIL_SEND,
-            {"to": [mission.provider_email], "subject": subject, "body": body},
-        )
+        receipt, outcome = self._execute(mission, grants, GoogleAction.GMAIL_SEND, payload)
         if receipt.status == "blocked":
             mission.state = MissionState.AWAITING_AUTHORIZATION
         elif receipt.status == "completed" and outcome is not None:
             mission.gmail_thread_id = str(outcome.data.get("threadId") or "")
             mission.state = MissionState.AWAITING_EXTERNAL_EVENT
-            mission.record("mission.awaiting_reply", "Inquiry sent; mission is waiting for an event-driven provider reply.", resource_id=mission.gmail_thread_id)
+            mission.record(
+                "mission.awaiting_reply",
+                "Inquiry sent; mission is waiting for an event-driven provider reply.",
+                resource_id=mission.gmail_thread_id,
+            )
         else:
             mission.state = MissionState.FAILED
         self.store.save(mission)
         return mission
 
-    def ingest_gmail_reply(self, mission: GoogleHealthMission, signal: GmailReplySignal) -> GoogleHealthMission:
+    def ingest_gmail_reply(
+        self,
+        mission: GoogleHealthMission,
+        signal: GmailReplySignal,
+    ) -> GoogleHealthMission:
         if mission.state != MissionState.AWAITING_EXTERNAL_EVENT:
             raise MissionTransitionError("Gmail reply can only resume a mission waiting for an external event")
         if mission.gmail_thread_id and signal.thread_id != mission.gmail_thread_id:
             raise PermissionError("Gmail reply thread does not match the mission-linked thread")
         if signal.confidence < 0.7:
-            mission.state = MissionState.AWAITING_EXTERNAL_EVENT
-            mission.record("gmail.reply_ambiguous", "A reply arrived but its administrative meaning is not clear enough to act on automatically.", resource_id=signal.message_id)
+            mission.record(
+                "gmail.reply_ambiguous",
+                "A reply arrived but its administrative meaning is not clear enough to act on automatically.",
+                resource_id=signal.message_id,
+            )
         elif signal.classification in {"appointment_offered", "appointment_confirmed"} and signal.offered_slots:
             mission.offered_slots = list(signal.offered_slots)
             mission.state = MissionState.SLOT_OFFERED
-            mission.record("gmail.appointment_offered", f"Provider offered {len(signal.offered_slots)} appointment slot(s).", resource_id=signal.message_id)
+            mission.record(
+                "gmail.appointment_offered",
+                f"Provider offered {len(signal.offered_slots)} appointment slot(s).",
+                resource_id=signal.message_id,
+            )
         elif signal.classification == "missing_documents":
-            mission.required_documents = list(dict.fromkeys([*mission.required_documents, *signal.missing_documents]))
-            mission.state = MissionState.AWAITING_EXTERNAL_EVENT
-            mission.record("gmail.missing_documents", "Provider requested additional documents; the mission remains open.", resource_id=signal.message_id)
+            mission.required_documents = list(
+                dict.fromkeys([*mission.required_documents, *signal.missing_documents])
+            )
+            mission.record(
+                "gmail.missing_documents",
+                "Provider requested additional documents; the mission remains open.",
+                resource_id=signal.message_id,
+            )
         elif signal.classification in {"approved", "application_received"}:
-            mission.state = MissionState.AWAITING_EXTERNAL_EVENT
-            mission.record(f"gmail.{signal.classification}", f"Provider/program reply classified as {signal.classification}; original message remains the source of truth.", resource_id=signal.message_id)
+            mission.record(
+                f"gmail.{signal.classification}",
+                f"Provider/program reply classified as {signal.classification}; original message remains the source of truth.",
+                resource_id=signal.message_id,
+            )
         elif signal.classification == "rejected":
             mission.state = MissionState.BLOCKED
-            mission.record("gmail.rejected", "The external source states that the request was rejected; no appeal reason is invented.", resource_id=signal.message_id)
+            mission.record(
+                "gmail.rejected",
+                "The external source states that the request was rejected; no appeal reason is invented.",
+                resource_id=signal.message_id,
+            )
         else:
-            mission.record("gmail.reply_received", "A mission-linked reply was received and preserved without forcing an unsupported status.", resource_id=signal.message_id)
+            mission.record(
+                "gmail.reply_received",
+                "A mission-linked reply was received and preserved without forcing an unsupported status.",
+                resource_id=signal.message_id,
+            )
         self.store.save(mission)
         return mission
 
@@ -308,7 +399,11 @@ class GoogleHealthMissionCoordinator:
             raise ValueError("Selected slot is not one of the provider-offered slots")
         mission.selected_slot = slot
         mission.state = MissionState.AWAITING_AUTHORIZATION
-        mission.record("slot.selected", "Patient selected one provider-offered appointment slot.", resource_id=slot.source_message_id)
+        mission.record(
+            "slot.selected",
+            "Patient selected one provider-offered appointment slot.",
+            resource_id=slot.source_message_id,
+        )
         self.store.save(mission)
         return mission
 
@@ -321,22 +416,21 @@ class GoogleHealthMissionCoordinator:
         time_zone: str,
         create_followup_task: bool = True,
     ) -> GoogleHealthMission:
-        if mission.selected_slot is None:
-            raise MissionTransitionError("No provider-offered slot is selected")
+        try:
+            calendar_payload = calendar_event_payload(mission, summary=summary, time_zone=time_zone)
+        except ValueError as exc:
+            raise MissionTransitionError(str(exc)) from exc
         mission.state = MissionState.SCHEDULING
-        place_name = str((mission.selected_place.get("displayName") or {}).get("text") or mission.selected_place.get("formattedAddress") or "Health appointment")
-        event = {
-            "summary": summary,
-            "location": str(mission.selected_place.get("formattedAddress") or ""),
-            "description": f"HealthIA mission {mission.id}. No diagnosis details are placed in the title.",
-            "start": {"dateTime": mission.selected_slot.start, "timeZone": time_zone},
-            "end": {"dateTime": mission.selected_slot.end, "timeZone": time_zone},
-        }
+        place_name = str(
+            (mission.selected_place.get("displayName") or {}).get("text")
+            or mission.selected_place.get("formattedAddress")
+            or "Health appointment"
+        )
         receipt, outcome = self._execute(
             mission,
             grants,
             GoogleAction.CALENDAR_CREATE_EVENT,
-            {"calendar_id": "primary", "event": event},
+            calendar_payload,
         )
         if receipt.status == "blocked":
             mission.state = MissionState.AWAITING_AUTHORIZATION
@@ -347,26 +441,37 @@ class GoogleHealthMissionCoordinator:
             self.store.save(mission)
             return mission
         mission.calendar_event_id = receipt.resource_id
-        mission.record("calendar.booked", f"Calendar event created for the selected provider slot at {place_name}.", resource_id=receipt.resource_id)
+        mission.record(
+            "calendar.booked",
+            f"Calendar event created for the selected provider slot at {place_name}.",
+            resource_id=receipt.resource_id,
+        )
 
         if create_followup_task:
             task_receipt, _ = self._execute(
                 mission,
                 grants,
                 GoogleAction.TASKS_CREATE,
-                {
-                    "tasklist": "@default",
-                    "task": {
-                        "title": "Prepare for health appointment",
-                        "notes": "Review required documents and questions in HealthIA before the appointment.",
-                        "due": mission.selected_slot.start,
-                    },
-                },
+                followup_task_payload(mission),
             )
             if task_receipt.status == "completed" and task_receipt.resource_id:
                 mission.task_ids.append(task_receipt.resource_id)
+            elif task_receipt.status == "blocked":
+                # Calendar is already a real external outcome. Do not call the
+                # whole mission failed because an optional follow-up task still
+                # needs its separate exact authorization.
+                mission.state = MissionState.FOLLOWUP_CREATED
+                mission.record(
+                    "tasks.authorization_pending",
+                    "Appointment is booked; optional follow-up task still requires its own exact authorization.",
+                )
+                self.store.save(mission)
+                return mission
 
         mission.state = MissionState.COMPLETED
-        mission.record("mission.completed", "The navigation mission has a verifiable scheduled outcome and remains linked to its receipts.")
+        mission.record(
+            "mission.completed",
+            "The navigation mission has a verifiable scheduled outcome and remains linked to its receipts.",
+        )
         self.store.save(mission)
         return mission
