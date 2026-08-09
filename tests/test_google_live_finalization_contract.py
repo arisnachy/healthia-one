@@ -20,10 +20,12 @@ def test_tts_probe_is_synthetic_and_does_not_upload_audio_bytes():
     assert "audioContent" in WORKFLOW
 
 
-def test_fcm_probe_cannot_notify_a_real_device():
+def test_fcm_probe_cannot_notify_a_real_device_and_classifies_iam_blocker():
     assert "healthia-proof-intentionally-invalid-registration-token" in WORKFLOW
     assert "INVALID_ARGUMENT" in WORKFLOW
-    assert "Delivery: impossible by construction" in WORKFLOW
+    assert "PERMISSION_DENIED" in WORKFLOW
+    assert "BLOCKED_IAM: FCM API is enabled" in WORKFLOW
+    assert "Delivery: none" in WORKFLOW
     assert "fcm.googleapis.com/v1/projects/${PROJECT_ID}/messages:send" in WORKFLOW
 
 
