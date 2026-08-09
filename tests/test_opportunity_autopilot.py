@@ -141,7 +141,7 @@ def assistance_program() -> AssistanceProgram:
             ProgramRequirement(
                 key="country",
                 label="Resident in Dominican Republic",
-                rule={"type": "country", "value": "DO"},
+                rule={"type": "country", "value": "Dominican Republic"},
             ),
             ProgramRequirement(
                 key="caregiver",
@@ -184,6 +184,16 @@ def test_program_eligibility_never_invents_missing_documents():
     assert len(decision.matched) == 2
     assert decision.unmet == []
     assert decision.missing_documents == ["Supporting diagnosis document"]
+
+
+def test_locale_alone_never_proves_residence():
+    state = patient_state()
+    state.profile.address = ""
+    decision = evaluate_program_eligibility(state, assistance_program())
+
+    assert decision.likely_eligible is None
+    assert "Resident in Dominican Republic" in decision.unknown
+    assert "Caregiver of a child with autism" in decision.matched
 
 
 def test_application_requires_missing_document_patient_review_and_explicit_send_authorization():
