@@ -10,6 +10,7 @@ from healthia_one.clinical_intake import (
 )
 from healthia_one.conversation_brain import build_frame
 from healthia_one.deterministic_router import respond as deterministic_respond
+from healthia_one.language import current_requested_locale, normalize_locale
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
 from healthia_one.safety import assess_text
 
@@ -82,6 +83,20 @@ _CONCRETE_CLINICAL_SIGNALS = (
     "shortness of breath", "difficulty breathing", "rash", "swelling", "palpitations",
 )
 
+_ENGLISH_MISSION_TITLES = {
+    "clinical_interview": "Understand the current health problem and guide the next step",
+    "result_explanation": "Understand a health result",
+    "medication_management": "Organize treatment and adherence",
+    "consultation_preparation": "Prepare the next appointment",
+    "timeline_review": "Review the health timeline",
+    "family_history": "Review family health history",
+    "document_management": "Organize patient documents",
+    "weight_followup": "Understand a weight change",
+    "blood_pressure": "Review blood pressure",
+    "activity_plan": "Review activity and movement",
+    "device_connection": "Connect and review a health device",
+}
+
 
 def _append_aliases(text: str, aliases: tuple[tuple[tuple[str, ...], str], ...]) -> str:
     if text.startswith(ANSWER_PREFIX):
@@ -126,14 +141,6 @@ def _explicit_clinical_request(text: str) -> bool:
 
 
 def _automatic_structured_intake(text: str) -> bool:
-    """Require concrete clinical evidence before launching the five-question UI.
-
-    Generic words such as "siento", "presento" or a bare time expression used in
-    ordinary app conversation are deliberately insufficient. This keeps the
-    adaptive interview for a real symptom narrative while letting normal chat
-    and Health OS commands remain conversational.
-    """
-
     normalized = text.lower().strip()
     if not normalized or text.startswith(ANSWER_PREFIX):
         return False
@@ -150,14 +157,6 @@ def _automatic_structured_intake(text: str) -> bool:
 
 
 def _contains_command_phrase(text: str, phrase: str) -> bool:
-    """Match a real command token/phrase instead of a substring inside narration.
-
-    This deliberately keeps `upload` distinct from `uploaded`, `record` from
-    `recorded`, and `open` from `opened`. Past-tense descriptions such as
-    "the result I just uploaded" must stay ordinary conversation instead of
-    reopening a file picker.
-    """
-
     return bool(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text, flags=re.IGNORECASE))
 
 
@@ -244,8 +243,6 @@ def _human_clinical_conversation(state: PatientState, patient_text: str) -> Chat
 
 
 def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
-    """Route safety, app control and conversation before structured intake."""
-
     social_response = respond_to_social_small_talk(state, _clinical_text(patient_text))
     if social_response is not None:
         frame = build_frame(state, patient_text)
@@ -290,14 +287,50 @@ def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
     return _attach_conversation_frame(response, frame)
 
 
+def _mission_status_value(mission) -> str:
+    value = getattr(mission.status, "value", mission.status)
+    return str(value or "")
+
+
+def _english_next_action(mission) -> str | None:
+    status = _mission_status_value(mission)
+    mission_type = str(mission.mission_type or "")
+    if mission_type == "clinical_interview":
+        if status == "waiting_professional":
+            return "Complete the clinical orientation and confirm the appropriate level of care"
+        return "Answer the adaptive questions generated for this case"
+    if mission_type == "result_explanation":
+        if status == "completed":
+            return "Mission closed: result retrieved, explained, and linked to its persisted evidence"
+        return "Upload the result you want to review"
+    defaults = {
+        "medication_management": "Record a dose, omission, or question without changing the prescribed plan",
+        "consultation_preparation": "Review the summary and confirm documents and questions",
+        "timeline_review": "Open the timeline and select an event",
+        "family_history": "Confirm relationships, conditions, and age at diagnosis",
+        "document_management": "Upload or select the document you need",
+        "weight_followup": "Record weight and answer the context questions",
+        "blood_pressure": "Review the measurement and any associated symptoms",
+        "activity_plan": "Review the activity trend and choose the next realistic step",
+        "device_connection": "Open Devices and review permissions or connection status",
+    }
+    return defaults.get(mission_type)
+
+
+def _localize_state_missions(state: PatientState) -> None:
+    locale = normalize_locale(current_requested_locale(), fallback="es")
+    if locale != "en":
+        return
+    for mission in state.missions:
+        title = _ENGLISH_MISSION_TITLES.get(str(mission.mission_type or ""))
+        next_action = _english_next_action(mission)
+        if title:
+            mission.title = title
+        if next_action:
+            mission.next_action = next_action
+
+
 def _persist_response_mission(state: PatientState, response: ChatResponse) -> ChatResponse:
-    """Make the mission returned by routing part of canonical patient state.
-
-    The service saves this same mutable PatientState after Gemini enhancement, so
-    persisting here keeps mission creation in the same chat mutation without a
-    second store write. Existing IDs are replaced rather than duplicated.
-    """
-
     mission = response.mission
     if mission is None:
         return response
@@ -313,6 +346,6 @@ def _persist_response_mission(state: PatientState, response: ChatResponse) -> Ch
 
 
 def respond(state: PatientState, patient_text: str) -> ChatResponse:
-    """Return the routed response with its Taskmaster mission durably staged."""
-
-    return _persist_response_mission(state, _route_response(state, patient_text))
+    response = _persist_response_mission(state, _route_response(state, patient_text))
+    _localize_state_missions(state)
+    return response
