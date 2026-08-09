@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unicodedata
 
+from healthia_one.autopilot_claims import build_event_claim_store
+from healthia_one.autopilot_receipts import build_autopilot_receipt_store
 from healthia_one.autopilot_runtime import AutopilotEvent, OpportunityAutopilot
 from healthia_one.config import settings
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
@@ -17,6 +19,8 @@ def _normalize(value: str) -> str:
 
 
 _STORE = build_opportunity_store(settings)
+_CLAIMS = build_event_claim_store(settings)
+_RECEIPTS = build_autopilot_receipt_store(settings)
 _SCIENTIFIC = ScientificRadar()
 _RESOURCE = GroundedResourceRadar(
     settings,
@@ -32,6 +36,8 @@ _AUTOPILOT = OpportunityAutopilot(
     _STORE,
     scientific_radar=_SCIENTIFIC,
     resource_radar=_RESOURCE,
+    claim_store=_CLAIMS,
+    receipt_store=_RECEIPTS,
 )
 _CONTROLLER = OpportunityChatController(_AUTOPILOT)
 
