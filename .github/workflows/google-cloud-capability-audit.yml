@@ -22,6 +22,7 @@ jobs:
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
+      BASE_SERVICE: healthia-one-demo
     steps:
       - uses: actions/checkout@v4
       - name: Authenticate to Google Cloud read-only audit
@@ -39,6 +40,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist/google-cloud-audit
           out="dist/google-cloud-audit/inventory.md"
+          active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
+          runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)"
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || true)"
+          pubsub_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
           {
             echo "# HealthIA Google Cloud capability audit"
             echo
@@ -46,6 +51,9 @@ jobs:
             echo "Region: $REGION"
             echo "Commit: $GITHUB_SHA"
             echo "Mode: read-only inventory; no secret values requested"
+            echo "Audit principal: $active_account"
+            echo "Existing demo runtime identity: $runtime_sa"
+            echo "Pub/Sub service agent: $pubsub_agent"
             echo
             echo "## Enabled relevant APIs"
             gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' \
@@ -59,6 +67,25 @@ jobs:
             echo "## Service accounts"
             gcloud iam service-accounts list --project "$PROJECT_ID" \
               --format='value(email)' | sort || true
+            echo
+            echo "## Existing project IAM relevant to private push"
+            gcloud projects get-iam-policy "$PROJECT_ID" \
+              --flatten='bindings[].members' \
+              --filter='bindings.role:(roles/run.invoker roles/iam.serviceAccountTokenCreator roles/iam.serviceAccountUser roles/pubsub.serviceAgent)' \
+              --format='table(bindings.role,bindings.members)' || true
+            echo
+            echo "## Existing base-service IAM"
+            gcloud run services get-iam-policy "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+              --flatten='bindings[].members' \
+              --format='table(bindings.role,bindings.members)' || true
+            echo
+            echo "## Existing runtime service-account IAM"
+            if [[ -n "$runtime_sa" ]]; then
+              gcloud iam service-accounts get-iam-policy "$runtime_sa" --project "$PROJECT_ID" \
+                --flatten='bindings[].members' \
+                --filter='bindings.role:(roles/iam.serviceAccountTokenCreator roles/iam.serviceAccountUser)' \
+                --format='table(bindings.role,bindings.members)' || true
+            fi
             echo
             echo "## Pub/Sub topics"
             gcloud pubsub topics list --project "$PROJECT_ID" --format='value(name)' | sort || true
