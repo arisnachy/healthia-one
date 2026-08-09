@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import unicodedata
 from typing import Any
 from uuid import uuid4
 
@@ -9,6 +10,11 @@ from pydantic import BaseModel, Field
 
 from healthia_one.google_constellation_runtime import GoogleConstellationService
 from healthia_one.google_mission_runtime import MissionState
+
+
+def _normalize_location(value: str) -> str:
+    text = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return " ".join("".join(char for char in text if not unicodedata.combining(char)).split())
 
 
 class GoogleMissionToolResult(BaseModel):
@@ -37,10 +43,12 @@ class GoogleMissionToolFacade:
         constellation: GoogleConstellationService,
         patient_id: str,
         authorized_location: dict[str, float] | None = None,
+        patient_text: str = "",
     ) -> None:
         self.constellation = constellation
         self.patient_id = patient_id
         self.authorized_location = dict(authorized_location or {})
+        self.patient_text = str(patient_text or "")
 
     def _load(self, mission_id: str):
         return self.constellation.load_mission(self.patient_id, mission_id)
@@ -113,30 +121,54 @@ class GoogleMissionToolFacade:
             },
         )
 
-    def start_navigation_mission(self, condition_or_need: str, provider_query: str) -> dict:
+    def start_navigation_mission(
+        self,
+        condition_or_need: str,
+        provider_query: str,
+        location_text: str = "",
+    ) -> dict:
         lat = self.authorized_location.get("lat")
         lng = self.authorized_location.get("lng")
-        if lat is None or lng is None:
-            return GoogleMissionToolResult(
-                ok=False,
-                state="location_required",
-                next_action="ask_patient_to_share_location_or_choose_a_place_text_search_flow",
-                public_summary=(
-                    "HealthIA does not have patient-authorized coordinates for this mission. "
-                    "The model must not invent latitude/longitude."
+        if lat is not None and lng is not None:
+            mission = self.constellation.coordinator.create_navigation_mission(
+                patient_id=self.patient_id,
+                condition_or_need=str(condition_or_need)[:240],
+                provider_query=str(provider_query)[:240],
+                lat=float(lat),
+                lng=float(lng),
+            )
+            return self._result(
+                mission,
+                summary="Created a patient-scoped navigation mission from patient-authorized coordinates.",
+            )
+
+        explicit_text = " ".join(str(location_text or "").split()).strip()
+        normalized_current = _normalize_location(self.patient_text)
+        normalized_location = _normalize_location(explicit_text)
+        if explicit_text and normalized_location and normalized_location in normalized_current:
+            mission = self.constellation.coordinator.create_navigation_mission(
+                patient_id=self.patient_id,
+                condition_or_need=str(condition_or_need)[:240],
+                provider_query=str(provider_query)[:240],
+                location_text=explicit_text[:240],
+            )
+            return self._result(
+                mission,
+                summary=(
+                    "Created a patient-scoped navigation mission from location text explicitly present in the current "
+                    "patient message. The search context is not treated as residence."
                 ),
-            ).model_dump(mode="json")
-        mission = self.constellation.coordinator.create_navigation_mission(
-            patient_id=self.patient_id,
-            condition_or_need=str(condition_or_need)[:240],
-            provider_query=str(provider_query)[:240],
-            lat=float(lat),
-            lng=float(lng),
-        )
-        return self._result(
-            mission,
-            summary="Created a patient-scoped navigation mission from authorized location evidence.",
-        )
+            )
+
+        return GoogleMissionToolResult(
+            ok=False,
+            state="location_required",
+            next_action="ask_patient_to_share_location_or_name_a_search_location",
+            public_summary=(
+                "HealthIA has neither patient-authorized coordinates nor location text explicitly present in the "
+                "current patient message. The model must not invent latitude/longitude or a place."
+            ),
+        ).model_dump(mode="json")
 
     def discover_care_options(self, mission_id: str, radius_m: int = 10000) -> dict:
         mission = self._load(mission_id)
@@ -146,10 +178,11 @@ class GoogleMissionToolFacade:
             radius_m=min(max(int(radius_m), 100), 50000),
         )
         candidates = mission.tool_outputs.get("place_candidates") or []
+        location_mode = str((mission.tool_outputs.get("location_evidence") or {}).get("mode") or "location")
         return self._result(
             mission,
             summary=(
-                f"Found {len(candidates)} nearby candidate(s). Proximity is navigation evidence, not a clinical referral."
+                f"Found {len(candidates)} place candidate(s) using {location_mode}. Search/proximity evidence is not a clinical referral."
             ),
             data={
                 "candidates": [
@@ -356,6 +389,7 @@ class AdkGoogleMissionRuntime:
             constellation=self.constellation,
             patient_id=patient_id,
             authorized_location=authorized_location,
+            patient_text=patient_text,
         )
         tools = [getattr(facade, name) for name in self.tool_names()]
         instruction = """
@@ -364,8 +398,11 @@ Use tools only when the patient's message is actually about finding care/resourc
 
 Hard boundaries:
 - You have NO tool that grants Google permissions, connects OAuth, or creates patient authorization. Never claim you authorized yourself.
-- Never invent latitude/longitude, a provider email, a place, an appointment offer, a document, or a Google receipt.
-- Nearby Places results are candidates, never proof of clinical appropriateness.
+- Never invent latitude/longitude, a location, a provider email, a place, an appointment offer, a document, or a Google receipt.
+- `start_navigation_mission.location_text` may be used only when that same location text is explicitly present in the current patient message. The deterministic tool rejects model-invented location text.
+- Locale, language, timezone and broad profile context are not residence or search location evidence.
+- If patient-authorized coordinates are available they take priority over text search context.
+- Nearby/Text Search Places results are candidates, never proof of clinical appropriateness.
 - A provider can be contacted only when the deterministic mission already holds a verified/entered destination and an exact patient authorization for the exact message payload.
 - A Calendar/Tasks mutation can occur only when the deterministic guard has exact payload-bound authorization.
 - If a tool returns requires_authorization=true, stop external execution and explain the precise human action that needs approval.
@@ -405,10 +442,14 @@ Return only the requested JSON planning object after using tools as needed.
         prompt = {
             "patient_message": patient_text,
             "conversation_context": conversation_context[:6000],
-            "location_available": bool(
+            "authorized_coordinates_available": bool(
                 authorized_location
                 and authorized_location.get("lat") is not None
                 and authorized_location.get("lng") is not None
+            ),
+            "text_search_rule": (
+                "If the current patient message explicitly names a search location, pass only that explicit text to "
+                "start_navigation_mission.location_text. Do not expand or infer a city/country not written by the patient."
             ),
             "policy": "Use mission tools, not raw Google APIs. Never authorize an action yourself.",
         }
