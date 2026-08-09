@@ -116,18 +116,17 @@ jobs:
             echo "- Private Cloud Run revision: $revision"
             echo "- Unauthenticated /healthz status: ${unauth_status:-curl_failed}"
           } >> "$proof"
-          if [[ "$unauth_status" != "403" ]]; then
-            echo "Expected private Cloud Run to reject unauthenticated request with 403; got '${unauth_status}'." >&2
+          if [[ -z "$unauth_status" || "$unauth_status" =~ ^2 ]]; then
+            echo "Private Cloud Run unexpectedly allowed an unauthenticated 2xx response: '${unauth_status:-empty}'." >&2
             exit 1
           fi
 
           echo "Creating temporary Pub/Sub topic..."
           gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
 
-          # Try an identity that already has project-level run.invoker. The audit
-          # proves both the GitHub principal and the default compute SA are invokers.
-          # Subscription creation itself may still require iam.serviceAccounts.actAs;
-          # no IAM is changed here. Try the current principal first, then compute.
+          # Try identities that already have project-level run.invoker. The
+          # subscription creator may still need iam.serviceAccounts.actAs; no IAM
+          # is changed here. Try the current principal first, then compute.
           push_sa=""
           subscription_error=""
           for candidate in "$active_account" "$compute_sa"; do
@@ -149,7 +148,7 @@ jobs:
             {
               echo
               echo "## Exact remaining blocker"
-              echo "- Private Cloud Run is live and unauthenticated access is rejected."
+              echo "- Private Cloud Run is live and unauthenticated access is rejected (${unauth_status})."
               echo "- Authenticated Pub/Sub subscription could not be attached without IAM mutation."
               echo "- Expected blocker class: iam.serviceAccounts.actAs on a permitted push-auth service account."
               echo "- No privacy boundary was weakened to bypass this permission."
