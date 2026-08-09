@@ -87,6 +87,15 @@ Run-Gcloud @(
     "--role", "roles/run.invoker"
 )
 
+# Direct Firestore events require the Eventarc Event Receiver role on the
+# trigger identity. Grant it only after explicit -Confirmed opt-in.
+Run-Gcloud @(
+    "projects", "add-iam-policy-binding", $ProjectId,
+    "--member", "serviceAccount:$eventarcEmail",
+    "--role", "roles/eventarc.eventReceiver",
+    "--condition", "None"
+)
+
 $existingTrigger = gcloud eventarc triggers describe $TriggerName --project $ProjectId --location $TriggerLocation --format="value(name)" 2>$null
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingTrigger)) {
     throw "Eventarc trigger '$TriggerName' already exists. Filters are immutable; inspect/delete it explicitly instead of mutating it silently."
