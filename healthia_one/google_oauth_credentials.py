@@ -114,9 +114,10 @@ class SecretManagerOAuthTokenProvider(AccessTokenProvider):
     """Mint short-lived Google access tokens without exposing refresh tokens.
 
     Firestore contains only connection metadata and a Secret Manager resource
-    pointer. The refresh token/client secret are decoded into process memory only
-    for token refresh and are never returned by public methods or persisted into
-    HealthIA patient state, prompts or receipts.
+    pointer. The Secret Manager client itself is lazy: a process that only reads
+    capability state or runs local tests never needs cloud credentials. Secret
+    material is decoded into process memory only for token refresh and is never
+    returned by public methods or persisted into patient state/prompts/receipts.
     """
 
     def __init__(
@@ -128,7 +129,7 @@ class SecretManagerOAuthTokenProvider(AccessTokenProvider):
         cache_seconds: int = 300,
     ) -> None:
         self.connection_store = connection_store
-        self.secret_reader = secret_reader or SecretManagerPayloadReader()
+        self.secret_reader = secret_reader
         self.refresh_request = refresh_request
         self.cache_seconds = max(30, min(int(cache_seconds), 300))
         self._cache: dict[tuple[str, GoogleService], tuple[str, datetime]] = {}
@@ -142,8 +143,13 @@ class SecretManagerOAuthTokenProvider(AccessTokenProvider):
             raise GoogleConnectorError(f"Google OAuth connection lacks a scope for {service.value}")
         return connection
 
+    def _reader(self) -> SecretPayloadReader:
+        if self.secret_reader is None:
+            self.secret_reader = SecretManagerPayloadReader()
+        return self.secret_reader
+
     def _material(self, connection: GoogleOAuthConnection) -> OAuthSecretMaterial:
-        raw = self.secret_reader.read(connection.secret_version_resource)
+        raw = self._reader().read(connection.secret_version_resource)
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
