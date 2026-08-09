@@ -61,6 +61,7 @@ _UI_UPLOAD_VERBS = ("subir", "cargar", "adjuntar", "upload", "attach")
 _UI_VIEW_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("results", ("resultado", "resultados", "results", "labs", "laboratorio")),
     ("measurements", ("mediciones", "medición", "medicion", "measurements", "vitals", "signos vitales")),
+    ("profile", ("perfil", "mi perfil", "patient profile", "profile")),
     ("record", ("mi expediente", "expediente clínico", "expediente clinico", "my record", "health record")),
     ("missions", ("misiones", "health missions", "missions")),
     ("today", ("hoy", "today")),
@@ -244,15 +245,11 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
     routed_text = frame.routing_text
     ui_action = _requested_ui_action(patient_text)
 
-    # Structured answers always resume the matching interview, regardless of
-    # whatever topic Conversation Brain remembers from surrounding turns.
     if patient_text.startswith(ANSWER_PREFIX):
         clinical_response = respond_to_clinical_intake(state, patient_text)
         if clinical_response is not None:
             return _attach_conversation_frame(clinical_response, frame)
 
-    # The chat is also the Health OS controller. Navigation/data-entry commands
-    # must never be hijacked by incidental words such as "dolor" or "desde ayer".
     if ui_action is not None:
         response = deterministic_respond(state, _router_text(routed_text))
         response = _attach_ui_action(response, ui_action)
@@ -274,8 +271,6 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             interview["chief_complaint"] = patient_text
             return _attach_conversation_frame(clinical_response, frame)
 
-    # The legacy detector remains useful as a broad safety/conversation signal,
-    # but no longer has authority by itself to open the five-question form.
     is_clinical, _ = detect_clinical_consultation(_clinical_text(routed_text))
     if is_clinical:
         response = _human_clinical_conversation(state, patient_text)
