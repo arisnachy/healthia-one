@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 from healthia_one.auth import AccountManager, AuthError, bind_principal, current_principal, reset_principal
 from healthia_one.config import Settings
+from healthia_one.google_constellation_api import build_google_constellation_router
+from healthia_one.google_constellation_runtime import build_google_constellation_service
 from healthia_one.language import bind_requested_locale, current_requested_locale, reset_requested_locale
 from healthia_one.opportunity_api import build_opportunity_router
 from healthia_one.service import HealthIAService
@@ -66,7 +68,7 @@ def install_patient_auth(
             public = path.startswith("/assets/") or path in public_exact
             if settings.auth_required and principal is None and not public:
                 if path == "/":
-                    return RedirectResponse("/login", status_code=303)
+                    return RedirectResponse("/", status_code=303)
                 if path.startswith("/api/"):
                     return JSONResponse(
                         status_code=401,
@@ -141,9 +143,12 @@ def install_patient_auth(
         response.delete_cookie(settings.session_cookie_name, path="/")
         return response
 
-    # Opportunity data is deliberately mounted after the same patient-session
-    # middleware is installed. It is not added to public_exact and therefore
-    # inherits the existing authenticated patient boundary in Cloud mode.
+    # Opportunity and Google Constellation data are mounted after the same
+    # patient-session middleware. Neither prefix is public, so Cloud mode always
+    # requires an authenticated patient before any mission/grant/receipt read.
     app.include_router(build_opportunity_router(service))
+    constellation = build_google_constellation_service(settings)
+    app.state.google_constellation = constellation
+    app.include_router(build_google_constellation_router(constellation))
 
     return manager
