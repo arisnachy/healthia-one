@@ -8,6 +8,7 @@ from healthia_one.google_constellation_store import (
     MemoryGoogleAuthorizationStore,
     MemoryGoogleGrantStore,
     MemoryGoogleReceiptStore,
+    build_action_intent_key,
     utc_now,
 )
 
@@ -44,14 +45,26 @@ def setup_guard():
     return guard, connector, grants, receipts, authorizations
 
 
-def request(auth_id: str) -> GoogleActionRequest:
+def request(auth_id: str, *, body: str = "Please advise.") -> GoogleActionRequest:
     return GoogleActionRequest(
         patient_id="patient_a",
         mission_id="mission_a",
         action=GoogleAction.GMAIL_SEND,
-        payload={"to": ["center@example.org"], "subject": "Appointment", "body": "Please advise."},
+        payload={"to": ["center@example.org"], "subject": "Appointment", "body": body},
         explicit_authorization_id=auth_id,
     )
+
+
+def authorization(auth_id: str, request_value: GoogleActionRequest, **overrides) -> GoogleActionAuthorization:
+    values = {
+        "id": auth_id,
+        "patient_id": request_value.patient_id,
+        "mission_id": request_value.mission_id,
+        "action": request_value.action,
+        "intent_key": build_action_intent_key(request_value),
+    }
+    values.update(overrides)
+    return GoogleActionAuthorization(**values)
 
 
 def test_nonexistent_authorization_id_is_not_a_permission():
@@ -64,76 +77,77 @@ def test_nonexistent_authorization_id_is_not_a_permission():
 
 def test_foreign_patient_or_mission_authorization_is_blocked():
     guard, connector, _, _, authorizations = setup_guard()
-    auth = GoogleActionAuthorization(
-        id="auth_foreign",
-        patient_id="patient_b",
-        mission_id="mission_a",
-        action=GoogleAction.GMAIL_SEND,
+    req = request("auth_foreign")
+    authorizations.save(
+        authorization("auth_foreign", req, patient_id="patient_b")
     )
-    authorizations.save(auth)
-    receipt, _ = guard.execute(request("auth_foreign"))
+    receipt, _ = guard.execute(req)
     assert receipt.status == "blocked"
     assert connector.calls == 0
 
-    auth2 = GoogleActionAuthorization(
-        id="auth_wrong_mission",
-        patient_id="patient_a",
-        mission_id="mission_b",
-        action=GoogleAction.GMAIL_SEND,
+    req2 = request("auth_wrong_mission")
+    authorizations.save(
+        authorization("auth_wrong_mission", req2, mission_id="mission_b")
     )
-    authorizations.save(auth2)
-    receipt2, _ = guard.execute(request("auth_wrong_mission"))
+    receipt2, _ = guard.execute(req2)
     assert receipt2.status == "blocked"
     assert connector.calls == 0
 
 
 def test_expired_and_wrong_action_authorizations_are_blocked():
     guard, connector, _, _, authorizations = setup_guard()
+    req = request("auth_expired")
     authorizations.save(
-        GoogleActionAuthorization(
-            id="auth_expired",
-            patient_id="patient_a",
-            mission_id="mission_a",
-            action=GoogleAction.GMAIL_SEND,
+        authorization(
+            "auth_expired",
+            req,
             expires_at=utc_now() - timedelta(seconds=1),
         )
     )
-    receipt, _ = guard.execute(request("auth_expired"))
+    receipt, _ = guard.execute(req)
     assert receipt.status == "blocked"
 
+    req2 = request("auth_calendar")
     authorizations.save(
-        GoogleActionAuthorization(
-            id="auth_calendar",
-            patient_id="patient_a",
-            mission_id="mission_a",
+        authorization(
+            "auth_calendar",
+            req2,
             action=GoogleAction.CALENDAR_CREATE_EVENT,
         )
     )
-    receipt2, _ = guard.execute(request("auth_calendar"))
+    receipt2, _ = guard.execute(req2)
     assert receipt2.status == "blocked"
     assert connector.calls == 0
 
 
+def test_authorized_payload_cannot_be_changed_after_patient_approval():
+    guard, connector, _, _, authorizations = setup_guard()
+    approved = request("auth_exact", body="Please advise.")
+    authorizations.save(authorization("auth_exact", approved))
+
+    tampered = request("auth_exact", body="Send the entire medical record instead.")
+    receipt, outcome = guard.execute(tampered)
+
+    assert receipt.status == "blocked"
+    assert outcome is None
+    assert connector.calls == 0
+    assert "exact action payload" in receipt.safe_summary
+
+
 def test_one_time_authorization_is_consumed_after_success_but_completed_replay_is_safe():
     guard, connector, _, _, authorizations = setup_guard()
+    req = request("auth_once")
     authorizations.save(
-        GoogleActionAuthorization(
-            id="auth_once",
-            patient_id="patient_a",
-            mission_id="mission_a",
-            action=GoogleAction.GMAIL_SEND,
-            one_time=True,
-        )
+        authorization("auth_once", req, one_time=True)
     )
-    first, outcome = guard.execute(request("auth_once"))
+    first, outcome = guard.execute(req)
     assert first.status == "completed"
     assert outcome is not None
     assert connector.calls == 1
     consumed = authorizations.get("patient_a", "auth_once")
     assert consumed is not None and consumed.consumed_at is not None
 
-    # Same mission action replays the durable receipt before re-consuming auth.
-    second, recovered = guard.execute(request("auth_once"))
+    second, recovered = guard.execute(req)
     assert second.idempotency_key == first.idempotency_key
     assert recovered is not None and recovered.recovered_existing is True
     assert connector.calls == 1
