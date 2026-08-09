@@ -149,12 +149,28 @@ def _automatic_structured_intake(text: str) -> bool:
     return concrete >= 2 or (concrete >= 1 and (has_duration or has_case_language))
 
 
+def _contains_command_phrase(text: str, phrase: str) -> bool:
+    """Match a real command token/phrase instead of a substring inside narration.
+
+    This deliberately keeps `upload` distinct from `uploaded`, `record` from
+    `recorded`, and `open` from `opened`. Past-tense descriptions such as
+    "the result I just uploaded" must stay ordinary conversation instead of
+    reopening a file picker.
+    """
+
+    return bool(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text, flags=re.IGNORECASE))
+
+
+def _has_any_command_phrase(text: str, phrases: tuple[str, ...]) -> bool:
+    return any(_contains_command_phrase(text, phrase) for phrase in phrases)
+
+
 def _requested_ui_action(text: str) -> dict[str, str] | None:
     normalized = text.lower().strip()
     if not normalized:
         return None
 
-    wants_record = any(verb in normalized for verb in _UI_RECORD_VERBS)
+    wants_record = _has_any_command_phrase(normalized, _UI_RECORD_VERBS)
     if wants_record and any(term in normalized for term in ("presión", "presion", "tensión", "tension", "blood pressure", "vital", "signos vitales")):
         return {"type": "open_dialog", "view": "measurements", "dialog": "vital"}
     if wants_record and any(term in normalized for term in ("peso", "weight")):
@@ -162,11 +178,11 @@ def _requested_ui_action(text: str) -> dict[str, str] | None:
     if wants_record and any(term in normalized for term in ("actividad", "pasos", "ejercicio", "activity", "steps", "exercise")):
         return {"type": "open_dialog", "view": "measurements", "dialog": "activity"}
 
-    wants_upload = any(verb in normalized for verb in _UI_UPLOAD_VERBS)
+    wants_upload = _has_any_command_phrase(normalized, _UI_UPLOAD_VERBS)
     if wants_upload and any(term in normalized for term in ("resultado", "laboratorio", "analítica", "analitica", "imagen", "result", "lab", "scan", "image")):
         return {"type": "pick_file", "view": "results", "picker": "result"}
 
-    wants_open = any(verb in normalized for verb in _UI_OPEN_VERBS)
+    wants_open = _has_any_command_phrase(normalized, _UI_OPEN_VERBS)
     if wants_open:
         for view, terms in _UI_VIEW_TERMS:
             if any(term in normalized for term in terms):
