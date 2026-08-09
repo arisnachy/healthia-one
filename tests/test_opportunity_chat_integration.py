@@ -1,5 +1,6 @@
 from healthia_one.models import FamilyCondition, FamilyMember
-from healthia_one.opportunity_integration import _resource_location
+from healthia_one.opportunity_chat import OpportunityChatResult
+from healthia_one.opportunity_integration import _chat_response, _resource_location
 from healthia_one.orchestrator import respond
 from healthia_one.service import seed_state
 
@@ -57,3 +58,26 @@ def test_chat_can_request_family_support_without_hidden_model_spend_in_local_mod
     assert response.message.metadata.get("opportunity_autopilot") is True
     assert response.message.metadata.get("paid_search_enabled") is False
     assert "no haré llamadas ocultas" in response.message.content
+
+
+def test_actionable_opportunity_reply_can_open_discoveries_from_chat():
+    response = _chat_response(
+        OpportunityChatResult(
+            content="Encontré una oportunidad relevante.",
+            action="show_programs",
+        )
+    )
+
+    assert response.message.metadata["ui_action"] == {"type": "open_view", "view": "discoveries"}
+    assert response.message.metadata["health_os_control"] is True
+
+
+def test_non_actionable_resource_search_prompt_does_not_force_navigation():
+    response = _chat_response(
+        OpportunityChatResult(
+            content="Puedo buscar recursos cuando lo autorices.",
+            action="request_resource_refresh",
+        )
+    )
+
+    assert "ui_action" not in response.message.metadata
