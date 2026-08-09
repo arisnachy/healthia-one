@@ -1,0 +1,237 @@
+name: Final live English hackathon demo
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "healthia_one/**"
+      - "web/**"
+      - "healthia_agent/**"
+      - "scripts/record_final_live_english_demo.py"
+      - ".github/workflows/final-live-english-demo.yml"
+      - "docs/HACKATHON_WIN_PLAN.md"
+      - "tests/test_human_chat_health_os.py"
+      - "tests/test_conversation_brain.py"
+      - "tests/test_result_ai_locale.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-final-live-demo-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-candidate-live-demo:
+    name: Deploy exact candidate and record live English demo
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-final-video
+      BUCKET_NAME: healthia-6088a-healthia-evidence
+      BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
+      RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      VOICE_PART_1: https://resource2.heygen.ai/text_to_speech/8981c4b72391476e87aacb95e683d25d/04d0ae1d0af2489ca7d3bb402a39a890/id=c2308a93-dd4a-4840-8660-527da461507e.wav
+      VOICE_PART_2: https://resource2.heygen.ai/text_to_speech/8981c4b72391476e87aacb95e683d25d/04d0ae1d0af2489ca7d3bb402a39a890/id=8934ea99-20db-4f64-a4af-5178ef8a07cc.wav
+    steps:
+      - name: Check out exact candidate head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checked-out SHA is the candidate SHA
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SHA"
+          echo "HEALTHIA_EXACT_HEAD_PASS $actual"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Deploy this exact commit to temporary private Cloud Run service
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --build-service-account "$BUILD_SA" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --service-account "$RUNTIME_SA" \
+            --min 0 \
+            --max 1 \
+            --concurrency 20 \
+            --cpu 1 \
+            --memory 512Mi \
+            --timeout 600 \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=20,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_GCS_BUCKET=${BUCKET_NAME},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
+            --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" \
+            --no-allow-unauthenticated \
+            --quiet
+
+      - name: Bind recorder to exact deployed revision
+        id: cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          test -n "$url" && test -n "$revision" && test -n "$image" && test -n "$token"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install recorder and media tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      - name: Record continuous live English application demo
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+          HEALTHIA_CLOUD_REVISION: ${{ steps.cloud.outputs.revision }}
+          HEALTHIA_CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
+          HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
+          HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
+          HEALTHIA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python scripts/record_final_live_english_demo.py
+
+      - name: Build narrated public-hosting master under three minutes
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/final-live-english-demo
+          mkdir -p "$base/audio" "$base/master"
+          curl --fail --location --silent --show-error "$VOICE_PART_1" -o "$base/audio/part1.wav"
+          curl --fail --location --silent --show-error "$VOICE_PART_2" -o "$base/audio/part2.wav"
+          printf "file '%s'\nfile '%s'\n" "$PWD/$base/audio/part1.wav" "$PWD/$base/audio/part2.wav" > "$base/audio/concat.txt"
+          ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$base/audio/concat.txt" -c:a pcm_s16le "$base/audio/narration.wav"
+
+          raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"
+          test -n "$raw"
+          raw_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$raw")"
+          narration_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$base/audio/narration.wav")"
+          read video_factor audio_speed target < <(python - "$raw_duration" "$narration_duration" <<'PY'
+          import sys
+          raw=float(sys.argv[1])
+          narration=float(sys.argv[2])
+          if raw <= 0 or narration <= 0:
+              raise SystemExit('invalid live-video or narration duration')
+          target=min(150.0, max(125.0, raw*2.15))
+          video_factor=target/raw
+          audio_target=max(1.0, target-1.0)
+          audio_speed=narration/audio_target
+          if not 0.5 <= audio_speed <= 2.0:
+              raise SystemExit(f'audio speed outside ffmpeg atempo range: {audio_speed:.4f}')
+          print(f"{video_factor:.8f} {audio_speed:.8f} {target:.3f}")
+          PY
+          )
+          echo "CINE_TIMING raw=${raw_duration}s narration=${narration_duration}s target=${target}s video_factor=${video_factor} audio_speed=${audio_speed}"
+
+          ffmpeg -hide_banner -loglevel error -y \
+            -i "$base/audio/narration.wav" \
+            -af "atempo=${audio_speed},loudnorm=I=-16:LRA=7:TP=-1.5,apad" -t "$target" \
+            -c:a aac -b:a 160k "$base/master/narration-master.m4a"
+
+          ffmpeg -hide_banner -loglevel error -y \
+            -i "$raw" \
+            -vf "setpts=${video_factor}*PTS" -an \
+            -c:v libx264 -preset veryfast -crf 21 -pix_fmt yuv420p \
+            -movflags +faststart "$base/master/video-master.mp4"
+
+          ffmpeg -hide_banner -loglevel error -y \
+            -i "$base/master/video-master.mp4" \
+            -i "$base/master/narration-master.m4a" \
+            -map 0:v:0 -map 1:a:0 -c:v copy -c:a copy \
+            -t "$target" -movflags +faststart \
+            "$base/HealthIA-ONE-Gemini3-Taskmaster-live-English.mp4"
+
+      - name: CUTLOCK — reject over-limit, silent, static or failed evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          final=dist/final-live-english-demo/HealthIA-ONE-Gemini3-Taskmaster-live-English.mp4
+          report=dist/final-live-english-demo/report.json
+          test -s "$final" && test -s "$report"
+          duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$final")"
+          audio_streams="$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$final" | wc -l | tr -d ' ')"
+          video_streams="$(ffprobe -v error -select_streams v -show_entries stream=index -of csv=p=0 "$final" | wc -l | tr -d ' ')"
+          python - "$duration" "$audio_streams" "$video_streams" "$report" <<'PY'
+          import json, sys
+          duration=float(sys.argv[1])
+          audio_streams=int(sys.argv[2])
+          video_streams=int(sys.argv[3])
+          report=json.load(open(sys.argv[4], encoding='utf-8'))
+          if not 100 <= duration < 180:
+              raise SystemExit(f'final Taskmaster demo must be substantial and strictly under three minutes: {duration:.2f}s')
+          if audio_streams < 1 or video_streams < 1:
+              raise SystemExit('final demo must contain both live video and English narration audio')
+          if report.get('status') != 'PASS':
+              raise SystemExit(f"recorder report is not PASS: {report}")
+          if report.get('live_app_only') is not True or report.get('static_screenshots_used') is not False:
+              raise SystemExit('demo is not certified as live-app-only')
+          required={
+              'exact_candidate_live_google_runtime',
+              'human_first_conversation_before_structured_intake',
+              'one_question_at_a_time_five_question_contract',
+              'chat_health_os_open_results',
+              'multimodal_original_result_and_provenance',
+              'english_multimodal_result_explanation',
+              'explicit_current_topic_overrides_stale_context',
+              'assistant_mission_link_matches_persisted_taskmaster',
+              'taskmaster_mission_completed_from_persisted_evidence',
+              'logout_login_durable_continuity',
+              'visible_exact_candidate_cloud_proof',
+              'zero_browser_console_or_page_errors',
+          }
+          missing=required-set(report.get('checks') or [])
+          if missing:
+              raise SystemExit(f'missing demo gates: {sorted(missing)}')
+          print(f'HEALTHIA_CUTLOCK_PASS duration={duration:.2f}s audio_streams={audio_streams} video_streams={video_streams}')
+          PY
+          sha256sum "$final" | tee dist/final-live-english-demo/final-video.sha256
+
+      - name: Upload exact-candidate live English judge evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-ONE-final-live-English-demo
+          path: dist/final-live-english-demo
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove temporary Cloud Run video service
+        if: always()
+        shell: bash
+        run: |
+          gcloud run services delete "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet || true

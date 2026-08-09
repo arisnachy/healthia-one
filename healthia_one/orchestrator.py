@@ -10,6 +10,7 @@ from healthia_one.clinical_intake import (
 )
 from healthia_one.conversation_brain import build_frame
 from healthia_one.deterministic_router import respond as deterministic_respond
+from healthia_one.language import current_requested_locale, normalize_locale
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
 from healthia_one.safety import assess_text
 
@@ -82,6 +83,20 @@ _CONCRETE_CLINICAL_SIGNALS = (
     "shortness of breath", "difficulty breathing", "rash", "swelling", "palpitations",
 )
 
+_ENGLISH_MISSION_TITLES = {
+    "clinical_interview": "Understand the current health problem and guide the next step",
+    "result_explanation": "Understand a health result",
+    "medication_management": "Organize treatment and adherence",
+    "consultation_preparation": "Prepare the next appointment",
+    "timeline_review": "Review the health timeline",
+    "family_history": "Review family health history",
+    "document_management": "Organize patient documents",
+    "weight_followup": "Understand a weight change",
+    "blood_pressure": "Review blood pressure",
+    "activity_plan": "Review activity and movement",
+    "device_connection": "Connect and review a health device",
+}
+
 
 def _append_aliases(text: str, aliases: tuple[tuple[tuple[str, ...], str], ...]) -> str:
     if text.startswith(ANSWER_PREFIX):
@@ -126,14 +141,6 @@ def _explicit_clinical_request(text: str) -> bool:
 
 
 def _automatic_structured_intake(text: str) -> bool:
-    """Require concrete clinical evidence before launching the five-question UI.
-
-    Generic words such as "siento", "presento" or a bare time expression used in
-    ordinary app conversation are deliberately insufficient. This keeps the
-    adaptive interview for a real symptom narrative while letting normal chat
-    and Health OS commands remain conversational.
-    """
-
     normalized = text.lower().strip()
     if not normalized or text.startswith(ANSWER_PREFIX):
         return False
@@ -149,12 +156,20 @@ def _automatic_structured_intake(text: str) -> bool:
     return concrete >= 2 or (concrete >= 1 and (has_duration or has_case_language))
 
 
+def _contains_command_phrase(text: str, phrase: str) -> bool:
+    return bool(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text, flags=re.IGNORECASE))
+
+
+def _has_any_command_phrase(text: str, phrases: tuple[str, ...]) -> bool:
+    return any(_contains_command_phrase(text, phrase) for phrase in phrases)
+
+
 def _requested_ui_action(text: str) -> dict[str, str] | None:
     normalized = text.lower().strip()
     if not normalized:
         return None
 
-    wants_record = any(verb in normalized for verb in _UI_RECORD_VERBS)
+    wants_record = _has_any_command_phrase(normalized, _UI_RECORD_VERBS)
     if wants_record and any(term in normalized for term in ("presión", "presion", "tensión", "tension", "blood pressure", "vital", "signos vitales")):
         return {"type": "open_dialog", "view": "measurements", "dialog": "vital"}
     if wants_record and any(term in normalized for term in ("peso", "weight")):
@@ -162,11 +177,11 @@ def _requested_ui_action(text: str) -> dict[str, str] | None:
     if wants_record and any(term in normalized for term in ("actividad", "pasos", "ejercicio", "activity", "steps", "exercise")):
         return {"type": "open_dialog", "view": "measurements", "dialog": "activity"}
 
-    wants_upload = any(verb in normalized for verb in _UI_UPLOAD_VERBS)
+    wants_upload = _has_any_command_phrase(normalized, _UI_UPLOAD_VERBS)
     if wants_upload and any(term in normalized for term in ("resultado", "laboratorio", "analítica", "analitica", "imagen", "result", "lab", "scan", "image")):
         return {"type": "pick_file", "view": "results", "picker": "result"}
 
-    wants_open = any(verb in normalized for verb in _UI_OPEN_VERBS)
+    wants_open = _has_any_command_phrase(normalized, _UI_OPEN_VERBS)
     if wants_open:
         for view, terms in _UI_VIEW_TERMS:
             if any(term in normalized for term in terms):
@@ -227,15 +242,7 @@ def _human_clinical_conversation(state: PatientState, patient_text: str) -> Chat
     )
 
 
-def respond(state: PatientState, patient_text: str) -> ChatResponse:
-    """Route safety, app control and conversation before structured intake.
-
-    Explicit Health OS commands win over medical keywords. Ordinary symptom talk
-    remains a human conversation unless the message contains enough concrete
-    clinical information (or the patient explicitly asks for a structured
-    consultation). Existing structured answers still resume their interview.
-    """
-
+def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
     social_response = respond_to_social_small_talk(state, _clinical_text(patient_text))
     if social_response is not None:
         frame = build_frame(state, patient_text)
@@ -278,3 +285,67 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
 
     response = deterministic_respond(state, _router_text(routed_text))
     return _attach_conversation_frame(response, frame)
+
+
+def _mission_status_value(mission) -> str:
+    value = getattr(mission.status, "value", mission.status)
+    return str(value or "")
+
+
+def _english_next_action(mission) -> str | None:
+    status = _mission_status_value(mission)
+    mission_type = str(mission.mission_type or "")
+    if mission_type == "clinical_interview":
+        if status == "waiting_professional":
+            return "Complete the clinical orientation and confirm the appropriate level of care"
+        return "Answer the adaptive questions generated for this case"
+    if mission_type == "result_explanation":
+        if status == "completed":
+            return "Mission closed: result retrieved, explained, and linked to its persisted evidence"
+        return "Upload the result you want to review"
+    defaults = {
+        "medication_management": "Record a dose, omission, or question without changing the prescribed plan",
+        "consultation_preparation": "Review the summary and confirm documents and questions",
+        "timeline_review": "Open the timeline and select an event",
+        "family_history": "Confirm relationships, conditions, and age at diagnosis",
+        "document_management": "Upload or select the document you need",
+        "weight_followup": "Record weight and answer the context questions",
+        "blood_pressure": "Review the measurement and any associated symptoms",
+        "activity_plan": "Review the activity trend and choose the next realistic step",
+        "device_connection": "Open Devices and review permissions or connection status",
+    }
+    return defaults.get(mission_type)
+
+
+def _localize_state_missions(state: PatientState) -> None:
+    locale = normalize_locale(current_requested_locale(), fallback="es")
+    if locale != "en":
+        return
+    for mission in state.missions:
+        title = _ENGLISH_MISSION_TITLES.get(str(mission.mission_type or ""))
+        next_action = _english_next_action(mission)
+        if title:
+            mission.title = title
+        if next_action:
+            mission.next_action = next_action
+
+
+def _persist_response_mission(state: PatientState, response: ChatResponse) -> ChatResponse:
+    mission = response.mission
+    if mission is None:
+        return response
+    mission.patient_id = state.profile.id
+    response.message.mission_id = mission.id
+    for index, existing in enumerate(state.missions):
+        if existing.id == mission.id:
+            state.missions[index] = mission
+            break
+    else:
+        state.missions.append(mission)
+    return response
+
+
+def respond(state: PatientState, patient_text: str) -> ChatResponse:
+    response = _persist_response_mission(state, _route_response(state, patient_text))
+    _localize_state_missions(state)
+    return response

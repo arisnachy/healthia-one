@@ -35,6 +35,26 @@ def test_result_pronoun_keeps_prior_verified_topic_without_rewriting_patient_wor
     assert frame.last_action_target == "results"
 
 
+def test_explicit_current_result_outranks_stale_treatment_context_even_with_pronoun() -> None:
+    frame = build_frame(
+        _state("treatment", "medication_management"),
+        "Explain the result I just uploaded and confirm it was saved with the original file.",
+    )
+
+    assert frame.ambiguous_reference is True
+    assert frame.last_action_target == "treatment"
+    assert frame.routing_text == "Explain the result I just uploaded and confirm it was saved with the original file."
+    assert "CONTEXTUAL_ROUTING_HINT" not in frame.routing_text
+
+
+def test_explicit_current_pressure_outranks_stale_result_context() -> None:
+    frame = build_frame(_state("results", "result_explanation"), "No, I mean my blood pressure; is it improving?")
+
+    assert frame.correction is True
+    assert frame.routing_text == "No, I mean my blood pressure; is it improving?"
+    assert "CONTEXTUAL_ROUTING_HINT" not in frame.routing_text
+
+
 def test_blood_pressure_followup_uses_measurement_context() -> None:
     frame = build_frame(_state("measurements", "blood_pressure"), "¿Y mañana?")
     assert frame.ambiguous_reference is True
@@ -45,6 +65,7 @@ def test_correction_is_marked_but_explicit_current_words_are_preserved() -> None
     frame = build_frame(_state("results", "result_explanation"), "No, me refería a mi presión")
     assert frame.correction is True
     assert frame.routing_text.startswith("No, me refería a mi presión")
+    assert "CONTEXTUAL_ROUTING_HINT" not in frame.routing_text
 
 
 def test_selective_memory_does_not_dump_hidden_clinical_payloads() -> None:

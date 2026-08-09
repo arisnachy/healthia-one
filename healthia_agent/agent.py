@@ -7,7 +7,7 @@ from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
 
-MODEL = os.getenv("HEALTHIA_MODEL", "gemini-3.6-flash")
+MODEL = os.getenv("HEALTHIA_MODEL", "gemini-3.5-flash")
 
 
 def model() -> Gemini:

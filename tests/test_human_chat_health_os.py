@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from healthia_one.language import bind_requested_locale, reset_requested_locale
+from healthia_one.models import ChatMessage
 from healthia_one.orchestrator import respond
 from healthia_one.patient_control import maybe_control_response
 from healthia_one.service import seed_state
@@ -26,6 +28,8 @@ def test_detailed_symptom_narrative_can_still_start_adaptive_interview() -> None
     assert response.message.metadata["intent"] == "clinical_consultation"
     assert response.message.metadata["clinical_interview"]["status"] == "awaiting_answers"
     assert response.mission is not None
+    assert response.message.mission_id == response.mission.id
+    assert any(item.id == response.mission.id for item in state.missions)
 
 
 def test_chat_open_results_command_is_not_hijacked_by_clinical_intake() -> None:
@@ -59,6 +63,73 @@ def test_chat_can_open_result_upload_picker() -> None:
         "view": "results",
         "picker": "result",
     }
+
+
+def test_past_tense_upload_narration_is_not_mistaken_for_file_picker_command() -> None:
+    state = seed_state()
+    response = respond(
+        state,
+        "Explain the result I just uploaded and confirm that it was saved with the original file.",
+    )
+
+    assert "ui_action" not in response.message.metadata
+    assert response.mission is not None
+    assert response.mission.mission_type == "result_explanation"
+    assert response.message.metadata["mission_type"] == "result_explanation"
+    assert response.message.mission_id == response.mission.id
+    assert any(
+        item.id == response.mission.id and item.mission_type == "result_explanation"
+        for item in state.missions
+    )
+
+
+def test_explicit_result_explanation_outranks_stale_treatment_context() -> None:
+    state = seed_state()
+    state.messages.append(
+        ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content="We were reviewing your treatment.",
+            metadata={"action_target": "treatment", "mission_type": "medication_management"},
+        )
+    )
+
+    response = respond(
+        state,
+        "Explain the result synthetic-final-lab.pdf I just uploaded and confirm that it was saved with the original file.",
+    )
+
+    assert response.mission is not None
+    assert response.mission.mission_type == "result_explanation"
+    assert response.message.metadata["action_target"] == "results"
+    assert response.message.metadata["mission_type"] == "result_explanation"
+    assert response.message.mission_id == response.mission.id
+    assert any(item.id == response.mission.id for item in state.missions)
+
+
+def test_english_request_localizes_durable_mission_copy() -> None:
+    token = bind_requested_locale("en-US")
+    try:
+        state = seed_state()
+        clinical = respond(
+            state,
+            "I have burning pain when I urinate since yesterday and I want to discuss a health problem.",
+        )
+        assert clinical.mission is not None
+        assert clinical.mission.title == "Understand the current health problem and guide the next step"
+        assert clinical.mission.next_action == "Answer the adaptive questions generated for this case"
+
+        result = respond(
+            state,
+            "Explain the result I just uploaded and confirm that it was saved with the original file.",
+        )
+        assert result.mission is not None
+        assert result.mission.title == "Understand a health result"
+        assert result.mission.next_action == "Upload the result you want to review"
+        assert all("Comprender" not in item.title for item in state.missions)
+        assert all("Cargar el resultado" not in item.next_action for item in state.missions)
+    finally:
+        reset_requested_locale(token)
 
 
 def test_chat_can_navigate_profile_and_devices() -> None:
