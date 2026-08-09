@@ -67,6 +67,8 @@ def test_android_bridge_uses_supported_compose_toolchain() -> None:
     assert "compileSdk = 36" in app_gradle
     assert "targetSdk = 36" in app_gradle
     assert "minSdk = 28" in app_gradle
+    assert "JavaVersion.VERSION_17" in app_gradle
+    assert "jvmToolchain(17)" in app_gradle
     assert "composeOptions" not in app_gradle
 
 
