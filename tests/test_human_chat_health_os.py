@@ -61,6 +61,19 @@ def test_chat_can_open_result_upload_picker() -> None:
     }
 
 
+def test_past_tense_upload_narration_is_not_mistaken_for_file_picker_command() -> None:
+    state = seed_state()
+    response = respond(
+        state,
+        "Explain the result I just uploaded and confirm that it was saved with the original file.",
+    )
+
+    assert "ui_action" not in response.message.metadata
+    assert response.mission is not None
+    assert response.mission.mission_type == "result_explanation"
+    assert response.message.metadata["mission_type"] == "result_explanation"
+
+
 def test_chat_can_navigate_profile_and_devices() -> None:
     state = seed_state()
     profile = respond(state, "Abre mi perfil")
