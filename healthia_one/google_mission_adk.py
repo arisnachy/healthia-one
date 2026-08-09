@@ -25,10 +25,10 @@ class GoogleMissionToolResult(BaseModel):
 class GoogleMissionToolFacade:
     """Narrow ADK tool surface over the deterministic mission coordinator.
 
-    The facade intentionally exposes no grant creation, OAuth connection,
-    authorization creation, Gmail raw send, Calendar raw insert, Drive raw write,
-    or Tasks raw write tool. A model can plan/advance an already authorized
-    mission, but it cannot manufacture consent.
+    This facade exposes no grant creation, OAuth connection, authorization
+    creation, Gmail raw send, Calendar raw insert, Drive raw write or Tasks raw
+    write. Gemini can plan and advance an already authorized mission; it cannot
+    manufacture consent.
     """
 
     def __init__(
@@ -128,7 +128,10 @@ class GoogleMissionToolFacade:
             lat=float(lat),
             lng=float(lng),
         )
-        return self._result(mission, summary="Created a patient-scoped navigation mission from authorized location evidence.")
+        return self._result(
+            mission,
+            summary="Created a patient-scoped navigation mission from authorized location evidence.",
+        )
 
     def discover_care_options(self, mission_id: str, radius_m: int = 10000) -> dict:
         mission = self._load(mission_id)
@@ -170,9 +173,6 @@ class GoogleMissionToolFacade:
                 next_action="choose_a_candidate_index_returned_by_discover_care_options",
                 public_summary="The requested candidate index is not part of this mission's discovery results.",
             ).model_dump(mode="json")
-        # Places does not provide a trustworthy provider email field. Selection
-        # therefore stores only the exact Places candidate; a verified/entered
-        # email must be attached by deterministic resource/contact resolution.
         mission = self.constellation.coordinator.select_provider(
             mission,
             place=candidates[candidate_index],
@@ -233,7 +233,10 @@ class GoogleMissionToolFacade:
                 public_summary="The requested slot was not explicitly offered in the mission-linked provider reply.",
             ).model_dump(mode="json")
         mission = self.constellation.coordinator.choose_slot(mission, mission.offered_slots[slot_index])
-        return self._result(mission, summary="Selected one exact provider-offered appointment slot; no calendar mutation occurred.")
+        return self._result(
+            mission,
+            summary="Selected one exact provider-offered appointment slot; no calendar mutation occurred.",
+        )
 
     def finalize_selected_appointment(
         self,
@@ -268,7 +271,10 @@ class GoogleMissionToolFacade:
 MISSION_PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "intent": {"type": "string", "enum": ["navigate_care", "continue_mission", "inspect_only", "not_applicable"]},
+        "intent": {
+            "type": "string",
+            "enum": ["navigate_care", "continue_mission", "inspect_only", "not_applicable"],
+        },
         "mission_id": {"type": "string"},
         "state": {"type": "string"},
         "next_action": {"type": "string"},
@@ -321,6 +327,7 @@ class AdkGoogleMissionRuntime:
             async with self._lock:
                 if self._session_service is None:
                     from google.adk.sessions import InMemorySessionService
+
                     self._session_service = InMemorySessionService()
         return self._session_service
 
@@ -334,7 +341,9 @@ class AdkGoogleMissionRuntime:
     ) -> dict | None:
         if not self.ready:
             return None
+
         from google.adk.agents import LlmAgent
+        from google.adk.models.google_llm import Gemini
         from google.adk.runners import Runner
         from google.genai import types
 
@@ -360,40 +369,69 @@ Hard boundaries:
 - Clinical emergencies are handled before this runtime; do not reinterpret safety decisions here.
 Return only the requested JSON planning object after using tools as needed.
 """.strip()
+
         agent = LlmAgent(
             name="healthia_google_mission_planner",
-            model=self.settings.model,
+            model=Gemini(
+                model=self.settings.model,
+                retry_options=types.HttpRetryOptions(attempts=2),
+            ),
             description="Plans and advances patient-authorized Google health navigation missions.",
             instruction=instruction,
             tools=tools,
-            output_schema=MISSION_PLAN_SCHEMA,
+            generate_content_config=types.GenerateContentConfig(
+                temperature=0,
+                max_output_tokens=min(int(self.settings.ai_max_output_tokens), 1400),
+                thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+                response_mime_type="application/json",
+                response_json_schema=MISSION_PLAN_SCHEMA,
+            ),
         )
+
         session_service = await self._sessions()
+        app_name = "healthia_google_mission"
         session_id = f"gmission-{uuid4().hex}"
         await session_service.create_session(
-            app_name="healthia_google_mission",
+            app_name=app_name,
             user_id=patient_id,
             session_id=session_id,
         )
-        runner = Runner(agent=agent, app_name="healthia_google_mission", session_service=session_service)
+        runner = Runner(agent=agent, app_name=app_name, session_service=session_service)
         prompt = {
             "patient_message": patient_text,
             "conversation_context": conversation_context[:6000],
-            "location_available": bool(authorized_location and authorized_location.get("lat") is not None and authorized_location.get("lng") is not None),
+            "location_available": bool(
+                authorized_location
+                and authorized_location.get("lat") is not None
+                and authorized_location.get("lng") is not None
+            ),
             "policy": "Use mission tools, not raw Google APIs. Never authorize an action yourself.",
         }
+
         final_text = ""
+        last_text = ""
+        message = types.Content(
+            role="user",
+            parts=[types.Part(text=json.dumps(prompt, ensure_ascii=False, default=str))],
+        )
         async for event in runner.run_async(
             user_id=patient_id,
             session_id=session_id,
-            new_message=types.Content(role="user", parts=[types.Part(text=json.dumps(prompt, ensure_ascii=False))]),
+            new_message=message,
         ):
-            if getattr(event, "is_final_response", lambda: False)():
-                content = getattr(event, "content", None)
-                for part in getattr(content, "parts", []) if content else []:
-                    text = getattr(part, "text", None)
-                    if text:
-                        final_text += text
+            content = getattr(event, "content", None)
+            text_parts = [
+                str(getattr(part, "text", "") or "")
+                for part in (getattr(content, "parts", None) or [])
+                if getattr(part, "text", None) and not getattr(part, "thought", False)
+            ]
+            if text_parts:
+                last_text = "".join(text_parts).strip()
+            is_final = getattr(event, "is_final_response", None)
+            if callable(is_final) and is_final() and text_parts:
+                final_text = "".join(text_parts).strip()
+
+        final_text = final_text or last_text
         if not final_text.strip():
             return None
         try:
