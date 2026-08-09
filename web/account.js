@@ -183,13 +183,23 @@ if (!window.__HEALTHIA_ACCOUNT__) {
       if (session?.authenticated) button.dataset.recordPreserving = "true";
     }
 
+    async function openGoogleConnectionSurface() {
+      ensureDialog();
+      renderSession();
+      await loadGoogleState();
+      const dialog = $("#accountDialog");
+      if (dialog && !dialog.open) dialog.showModal();
+      requestAnimationFrame(() => {
+        $("#googleAccountConnection")?.scrollIntoView({block:"center", behavior:"smooth"});
+      });
+    }
+
     function handleGoogleReturn() {
       const params = new URLSearchParams(window.location.search);
       if (params.get("google") !== "connected") return;
       history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
       setTimeout(async () => {
-        await loadGoogleState();
-        $("#accountDialog")?.showModal();
+        await openGoogleConnectionSurface();
         toast(text("Google connected to HealthIA for authorized missions.", "Google fue conectado a HealthIA para misiones autorizadas."));
       }, 0);
     }
@@ -208,6 +218,12 @@ if (!window.__HEALTHIA_ACCOUNT__) {
         $("#accountDialog")?.showModal();
       });
     }
+
+    document.addEventListener("healthia:open-google-connection", () => {
+      openGoogleConnectionSurface().catch(error => {
+        toast(error.message || text("Could not open Google connection controls.", "No se pudieron abrir los controles de conexión de Google."));
+      });
+    });
 
     document.addEventListener("healthia:locale-changed", () => {
       renderSession();
