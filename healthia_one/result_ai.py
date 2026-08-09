@@ -110,9 +110,41 @@ MULTIMODAL_TIMEOUT_SECONDS = 45
 
 
 def _result_locale(state: PatientState | None = None, analysis: dict[str, Any] | None = None) -> str:
+    """Resolve patient-facing result language without rewriting legacy payloads.
+
+    A locale explicitly carried by the analysis wins, then the current request,
+    then the patient profile. Only when none exists do we infer a conservative
+    fallback from the already-produced payload. This lets older Spanish result
+    objects remain Spanish while an English browser request remains English end
+    to end.
+    """
+
     explicit = str((analysis or {}).get("response_locale") or "").strip()
+    if explicit:
+        return normalize_locale(explicit, fallback="en")
+
+    requested = current_requested_locale()
+    if requested:
+        return normalize_locale(requested, fallback="en")
+
     profile_locale = state.profile.locale if state is not None else None
-    return normalize_locale(explicit or current_requested_locale() or profile_locale, fallback="en")
+    if profile_locale:
+        return normalize_locale(profile_locale, fallback="en")
+
+    payload = analysis or {}
+    sample_parts: list[str] = [
+        str(payload.get("panel") or ""),
+        str(payload.get("modality") or ""),
+        str(payload.get("patient_explanation") or ""),
+        str(payload.get("impression") or ""),
+    ]
+    sample_parts.extend(str(item) for item in payload.get("anatomical_regions") or [])
+    sample_parts.extend(str(item) for item in payload.get("findings") or [])
+    sample_parts.extend(str(item) for item in payload.get("limitations") or [])
+    sample = " ".join(sample_parts).lower()
+    if any(char in sample for char in "¿¡ñáéíóú"):
+        return "es"
+    return "en"
 
 
 def infer_result_kind(filename: str, mime_type: str = "") -> str:
