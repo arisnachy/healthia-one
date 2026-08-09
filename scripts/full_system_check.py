@@ -93,7 +93,7 @@ def run() -> dict:
         pending_result = check(
             client.post(
                 "/api/results/upload",
-                files={"file": ("scan.pdf", BytesIO(b"%PDF synthetic"), "application/pdf")},
+                files={"file": ("scan.pdf", BytesIO(b"%PDF-1.7 synthetic"), "application/pdf")},
             ),
             "unread pdf",
         )
