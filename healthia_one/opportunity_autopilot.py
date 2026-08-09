@@ -319,11 +319,17 @@ def therapeutic_comparison(state: PatientState, discovery: Discovery) -> dict[st
     }
 
 
-def _locale_country(state: PatientState) -> str:
-    locale = str(state.profile.locale or "")
-    if "-" in locale:
-        return locale.rsplit("-", 1)[-1].upper()
-    return ""
+def _explicit_address_country_match(state: PatientState, expected: Any) -> bool | None:
+    """Use only an explicit country name in the patient-entered address.
+
+    Locale/language is never treated as residence. Short country codes such as
+    "DO" are intentionally UNKNOWN because they can collide with ordinary text.
+    """
+    expected_text = _normalize(str(expected or ""))
+    address = _normalize(state.profile.address)
+    if not address or len(expected_text) < 4:
+        return None
+    return expected_text in address
 
 
 def _condition_set(state: PatientState) -> set[str]:
@@ -359,7 +365,6 @@ def evaluate_program_eligibility(state: PatientState, program: AssistanceProgram
     unknown: list[str] = []
     conditions = _condition_set(state)
     family_conditions = _family_condition_map(state)
-    country = _locale_country(state)
     age = max((date.today() - state.profile.birth_date).days // 365, 0)
 
     for requirement in program.requirements:
@@ -371,7 +376,7 @@ def evaluate_program_eligibility(state: PatientState, program: AssistanceProgram
         if kind == "condition":
             result = _normalize(str(expected)) in conditions
         elif kind == "country":
-            result = country == str(expected or "").upper()
+            result = _explicit_address_country_match(state, expected)
         elif kind == "age_min":
             result = age >= int(expected)
         elif kind == "age_max":
@@ -423,7 +428,7 @@ def evaluate_program_eligibility(state: PatientState, program: AssistanceProgram
 
 def _profile_fields(state: PatientState) -> list[ApplicationField]:
     values = [
-        ("legal_name", "Legal name", state.profile.legal_name or state.profile.display_name, "patient_profile"),
+        ("legal_name", "Legal name", state.profile.legal_name, "patient_profile"),
         ("email", "Email", state.profile.email, "patient_profile"),
         ("phone", "Phone", state.profile.phone, "patient_profile"),
         ("address", "Address", state.profile.address, "patient_profile"),
