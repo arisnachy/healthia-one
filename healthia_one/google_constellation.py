@@ -32,6 +32,7 @@ class GoogleService(StrEnum):
 
 class GoogleAction(StrEnum):
     MAPS_SEARCH_NEARBY = "maps.search_nearby"
+    MAPS_TEXT_SEARCH = "maps.text_search"
     MAPS_PLACE_DETAILS = "maps.place_details"
     MAPS_ROUTE = "maps.route"
 
@@ -88,6 +89,10 @@ class GoogleActionPolicy(BaseModel):
 
 ACTION_POLICIES: dict[GoogleAction, GoogleActionPolicy] = {
     GoogleAction.MAPS_SEARCH_NEARBY: GoogleActionPolicy(
+        service=GoogleService.MAPS,
+        required_grants={GrantBundle.MAPS_LOCATION},
+    ),
+    GoogleAction.MAPS_TEXT_SEARCH: GoogleActionPolicy(
         service=GoogleService.MAPS,
         required_grants={GrantBundle.MAPS_LOCATION},
     ),
