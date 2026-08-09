@@ -24,6 +24,9 @@ jobs:
       BASE_SERVICE: healthia-one-demo
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -40,6 +43,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist/google-live-proof
           proof="dist/google-live-proof/proof.md"
+          source_sha="$(git rev-parse HEAD)"
           run_suffix="${GITHUB_RUN_ID}"
           service="healthia-gmail-proof-${run_suffix}"
           topic="healthia-gmail-proof-${run_suffix}"
@@ -47,7 +51,7 @@ jobs:
           full_topic="projects/${PROJECT_ID}/topics/${topic}"
           repo="cloud-run-source-deploy"
           image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/${repo}/healthia-gmail-proof"
-          image="${image_package}:${GITHUB_SHA}"
+          image="${image_package}:${source_sha}"
           active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
           runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
@@ -67,9 +71,9 @@ jobs:
           }
           trap cleanup EXIT
 
-          # A previous proof may have completed Cloud Build after the GitHub job
-          # had already failed on log streaming. Remove only this dedicated proof
-          # package before building the new exact checkout.
+          # Previous proof builds may finish after their GitHub job has already
+          # failed. Remove only the dedicated proof package before this attempt;
+          # EXIT cleanup removes it again after the proof.
           gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
 
           {
@@ -77,24 +81,37 @@ jobs:
             echo
             echo "Project: $PROJECT_ID"
             echo "Region: $REGION"
-            echo "Source head: ${{ github.event.pull_request.head.sha || github.sha }}"
-            echo "Workflow checkout: $GITHUB_SHA"
+            echo "Exact source head: $source_sha"
             echo "Mode: temporary/reversible infrastructure proof"
             echo "Production identity separation: NOT claimed by this temporary proof"
             echo
           } > "$proof"
 
-          echo "Building exact workflow checkout into Artifact Registry without log streaming..."
-          gcloud builds submit . \
+          echo "Submitting exact branch HEAD to Cloud Build asynchronously..."
+          build_id="$(gcloud builds submit . \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --tag "$image" \
-            --suppress-logs \
-            --quiet
+            --async \
+            --format='value(id)' \
+            --quiet)"
+          test -n "$build_id"
 
-          # Artifact Registry is our independently readable build artifact truth.
-          image_digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
-          test -n "$image_digest"
+          # Do not require Cloud Build log/viewer permission. Artifact Registry is
+          # independently readable and is the proof that this tagged build became
+          # an immutable image. Poll only image metadata, never build logs.
+          image_digest=""
+          for _ in $(seq 1 48); do
+            image_digest="$(gcloud artifacts docker images describe "$image" \
+              --project "$PROJECT_ID" \
+              --format='value(image_summary.digest)' 2>/dev/null || true)"
+            if [[ -n "$image_digest" ]]; then break; fi
+            sleep 5
+          done
+          if [[ -z "$image_digest" ]]; then
+            echo "Cloud Build did not publish the expected Artifact Registry image within the bounded proof window. Build id: $build_id"
+            exit 1
+          fi
 
           echo "Deploying private worker..."
           gcloud run deploy "$service" \
@@ -136,9 +153,6 @@ jobs:
           gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
 
           # Pub/Sub must be able to mint an OIDC token as the temporary push SA.
-          # This binding is on the reused proof identity and is removed after the
-          # subscription/service are deleted only if the binding did not already
-          # exist. We record whether we added it before cleanup.
           binding_added="false"
           if ! gcloud iam service-accounts get-iam-policy "$runtime_sa" --project "$PROJECT_ID" \
               --flatten='bindings[].members' \
@@ -175,8 +189,8 @@ jobs:
           message_id="$(gcloud pubsub topics publish "$topic" --project "$PROJECT_ID" --message "$payload" --format='value(messageIds[0])')"
           test -n "$message_id"
 
-          # Pub/Sub push is asynchronous. Poll Cloud Run request logs only; this
-          # does not poll Gmail and does not read patient content.
+          # Pub/Sub push is asynchronous. Poll only Cloud Run request metadata;
+          # this never polls Gmail or reads patient message content.
           push_status=""
           for _ in $(seq 1 12); do
             push_status="$(gcloud logging read \
@@ -189,7 +203,7 @@ jobs:
 
           {
             echo "## Proven"
-            echo "- Cloud Build completed for the exact workflow checkout."
+            echo "- Cloud Build submitted for exact branch head: $build_id"
             echo "- Artifact Registry image digest: $image_digest"
             echo "- Private Cloud Run revision: $revision"
             echo "- Unauthenticated /healthz status: $unauth_status"
