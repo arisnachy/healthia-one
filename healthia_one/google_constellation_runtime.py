@@ -45,6 +45,7 @@ from healthia_one.google_mission_runtime import (
     GoogleHealthMissionCoordinator,
     MemoryMissionStore,
 )
+from healthia_one.google_navigation_coordinator import HealthIAGoogleMissionCoordinator
 from healthia_one.google_oauth_credentials import (
     FirestoreOAuthConnectionStore,
     MemoryOAuthConnectionStore,
@@ -244,7 +245,7 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
         authorization_store=authorization_store,
         receipt_store=receipt_store,
     )
-    coordinator = GoogleHealthMissionCoordinator(
+    coordinator = HealthIAGoogleMissionCoordinator(
         GuardedMissionExecutorAdapter(guard),
         store=mission_store,
     )
