@@ -4,6 +4,7 @@ import os
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 from healthia_one.google_action_guard import GuardedGoogleActionExecutor, GuardedMissionExecutorAdapter
 from healthia_one.google_connector_runtime import (
@@ -15,7 +16,13 @@ from healthia_one.google_connector_runtime import (
     PeopleConnector,
     TasksConnector,
 )
-from healthia_one.google_constellation import GrantBundle, GoogleAction, GoogleGrant, GoogleService
+from healthia_one.google_constellation import (
+    GrantBundle,
+    GoogleAction,
+    GoogleActionRequest,
+    GoogleGrant,
+    GoogleService,
+)
 from healthia_one.google_constellation_store import (
     FirestoreGoogleAuthorizationStore,
     FirestoreGoogleGrantStore,
@@ -24,6 +31,7 @@ from healthia_one.google_constellation_store import (
     MemoryGoogleAuthorizationStore,
     MemoryGoogleGrantStore,
     MemoryGoogleReceiptStore,
+    build_action_intent_key,
     utc_now,
 )
 from healthia_one.google_mission_runtime import (
@@ -82,15 +90,23 @@ class GoogleConstellationService:
         mission_id: str,
         action: GoogleAction,
         *,
+        payload: dict[str, Any],
         ttl_minutes: int = 15,
         one_time: bool = True,
     ) -> GoogleActionAuthorization:
         mission = self.load_mission(patient_id, mission_id)
+        exact_request = GoogleActionRequest(
+            patient_id=patient_id,
+            mission_id=mission_id,
+            action=action,
+            payload=dict(payload),
+        )
         ttl = min(max(int(ttl_minutes), 1), 1440)
         authorization = GoogleActionAuthorization(
             patient_id=patient_id,
             mission_id=mission_id,
             action=action,
+            intent_key=build_action_intent_key(exact_request),
             one_time=one_time,
             expires_at=utc_now() + timedelta(minutes=ttl),
         )
@@ -136,9 +152,6 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     if maps_key:
         connectors[GoogleService.MAPS] = MapsConnector(maps_key)
 
-    # OAuth connector classes keep the patient identity on the instance. The
-    # proxy obtains that identity from a request-scoped ContextVar set by the
-    # executor. It never appears in the tool payload or idempotency material.
     class PatientBoundOAuthProxy:
         def __init__(self, service, connector_type):
             self.service = service
