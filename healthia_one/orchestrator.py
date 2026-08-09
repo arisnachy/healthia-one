@@ -243,14 +243,8 @@ def _human_clinical_conversation(state: PatientState, patient_text: str) -> Chat
     )
 
 
-def respond(state: PatientState, patient_text: str) -> ChatResponse:
-    """Route safety, app control and conversation before structured intake.
-
-    Explicit Health OS commands win over medical keywords. Ordinary symptom talk
-    remains a human conversation unless the message contains enough concrete
-    clinical information (or the patient explicitly asks for a structured
-    consultation). Existing structured answers still resume their interview.
-    """
+def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
+    """Route safety, app control and conversation before structured intake."""
 
     social_response = respond_to_social_small_talk(state, _clinical_text(patient_text))
     if social_response is not None:
@@ -294,3 +288,31 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
 
     response = deterministic_respond(state, _router_text(routed_text))
     return _attach_conversation_frame(response, frame)
+
+
+def _persist_response_mission(state: PatientState, response: ChatResponse) -> ChatResponse:
+    """Make the mission returned by routing part of canonical patient state.
+
+    The service saves this same mutable PatientState after Gemini enhancement, so
+    persisting here keeps mission creation in the same chat mutation without a
+    second store write. Existing IDs are replaced rather than duplicated.
+    """
+
+    mission = response.mission
+    if mission is None:
+        return response
+    mission.patient_id = state.profile.id
+    response.message.mission_id = mission.id
+    for index, existing in enumerate(state.missions):
+        if existing.id == mission.id:
+            state.missions[index] = mission
+            break
+    else:
+        state.missions.append(mission)
+    return response
+
+
+def respond(state: PatientState, patient_text: str) -> ChatResponse:
+    """Return the routed response with its Taskmaster mission durably staged."""
+
+    return _persist_response_mission(state, _route_response(state, patient_text))
