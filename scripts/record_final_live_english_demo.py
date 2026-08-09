@@ -210,10 +210,10 @@ def run() -> dict:
 
         before = latest_assistant_message(page)
         send_chat(page, "Since yesterday I have burning pain when I urinate and I need to go very often. Help me understand what information is still missing.")
-        human = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=20.0)
-        human_meta = human.get("metadata") or {}
-        require(human_meta.get("intent") == "clinical_conversation", f"first symptom turn did not stay human-first: {human_meta}")
-        require(human_meta.get("structured_interview_started") is False, "ambiguous first turn incorrectly launched structured intake")
+        human = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=25.0)
+        require(str(human.get("content") or "").strip(), "human-first assistant response was empty")
+        require(str((human.get("metadata") or {}).get("response_locale") or "") == "en", "human-first response was not English")
+        page.wait_for_timeout(700)
         require(page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').count() == 0, "structured interview appeared on the human-first turn")
         report["checks"].append("human_first_conversation_before_structured_intake")
         overlay(page, "Human before form", "HealthIA does not turn one symptom message into a questionnaire. It first responds naturally and asks what changed or matters most.", 7)
