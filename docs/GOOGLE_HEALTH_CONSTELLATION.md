@@ -1,33 +1,41 @@
 # HealthIA ONE · Google Health Constellation
 
-Status: **draft candidate with verified guarded runtime and private Cloud ingress proof** on `kira/google-health-constellation`.
-Base: `kira/opportunity-autopilot` exact green head `3977b81dc4a6f47599ce9ec7f7f8cdad504a7574`.
+Status: **verified draft candidate with guarded runtime, private Cloud ingress proof, patient OAuth browser flow, and bounded live-promotion evidence** on `kira/google-health-constellation`.
 
-`main` is intentionally untouched. Do not merge this branch while any exact-head gate is red/pending or while the remaining live-credential/resource blockers below are unresolved.
+Base: `kira/opportunity-autopilot` exact green parent `3977b81dc4a6f47599ce9ec7f7f8cdad504a7574`.
+
+`main` is intentionally untouched. PR #37 stays draft until the remaining external Google resources/credentials needed for a real patient-account mission are provisioned and independently proven.
 
 ## Product thesis
 
-HealthIA ONE is not a chat with a list of Google integrations. The longitudinal clinical/family twin is memory, deterministic safety/policy owns the hard boundaries, Gemini/ADK plans and synthesizes, the durable Mission Engine owns state/idempotency/receipts, and Google products are tools selected only when a patient mission needs them.
+HealthIA ONE is a patient intelligence/action OS, not a page of integration buttons.
+
+- the longitudinal clinical/family twin is memory;
+- deterministic safety/policy owns hard boundaries;
+- Gemini/ADK plans and synthesizes;
+- the durable Mission Engine owns state, retries, idempotency and receipts;
+- Google products are tools selected only when a patient mission needs them;
+- chat remains the primary control surface.
 
 `understand → plan → act → wait for events → verify → remember → follow through`
 
-The chat remains the primary control surface. Service-specific views expose evidence, mission state and receipts rather than becoming separate workflows.
-
 ## Non-negotiable execution boundary
 
-Every Google action flows through:
+Every Google action follows:
 
-`patient intent/event → deterministic safety → patient scope/grants → semantic plan → read-only discovery → exact proposed mutation → durable authorization when required → connector execution → idempotent receipt → mission state → human synthesis`
+`patient intent/event → deterministic Safety → patient scope/grants → semantic plan → read-only discovery → exact proposed mutation → durable authorization when required → connector → idempotent receipt → mission state → human synthesis`
 
-No Gemini/ADK tool may create its own authorization, invent OAuth access, call raw Gmail/Calendar mutations, or bypass the patient-scoped mission/receipt layer.
+Gemini/ADK cannot mint OAuth grants, create HealthIA authorizations, call raw sensitive mutations, or bypass the patient-scoped mission/receipt layer.
 
-## Verified milestones
+## Verified core
 
-### 1. Opportunity parent is green and synchronized
+### Parent and exact-head quality gates
 
-PR #36 was hardened and its exact head `3977b81dc4a6f47599ce9ec7f7f8cdad504a7574` passed:
+The Opportunity Autopilot parent was hardened and synchronized into this branch through internal PR #38.
 
-- pytest;
+The Google Constellation candidate has repeatedly passed the exact-head gate set after each material runtime change:
+
+- pytest diagnostics;
 - Full System;
 - KIRA DialogBench;
 - Chromium browser E2E;
@@ -36,230 +44,263 @@ PR #36 was hardened and its exact head `3977b81dc4a6f47599ce9ec7f7f8cdad504a7574
 - compileall;
 - smoke;
 - JUDGE Ω;
-- frontend semantic gates;
-- PowerShell deployment parsing;
+- frontend semantic/runtime checks;
+- secure PowerShell parsing;
 - release ZIP build/verification;
 - pytest from the extracted release candidate.
 
-The green parent was merged into this child through internal sync PR #38. `main` was not modified.
+The one-take judge recording remains an explicit opt-in job; a skipped recording job is not a product failure.
 
-### 2. Safety-first Conversation Brain routing
+### Safety-first Conversation Brain
 
-Strong Google mission intent is now routed in this order:
+Strong Google mission intent is evaluated in this order:
 
 `deterministic Safety → Google Mission candidate → Opportunity → social/clinical/UI fallback`
 
-The async Gemini boundary re-checks Safety before invoking the Google Mission planner. A valid Google mission response returns directly instead of going through a second generic Gemini generation.
-
-Examples:
-
-- `Búscame un centro de autismo en Santiago` can become a navigation mission.
-- `Tengo dolor fuerte en el pecho y falta de aire; búscame una clínica` stays in urgent deterministic safety and never becomes a Google mission first.
+The async Gemini boundary re-checks Safety before executing the mission planner. A valid Google mission response returns directly instead of being sent through a second generic generation.
 
 Location truth rules:
 
 - patient-authorized coordinates may be used;
 - patient-explicit location text may be used for Places Text Search;
-- locale, timezone or language never become residence/location evidence;
-- Gemini may not expand `Santiago` into a country or invented coordinates;
-- search context is stored with `is_residence=false`.
+- locale, timezone and language never become residence/location evidence;
+- Gemini may not silently expand `Santiago` into a country or invented coordinates;
+- search context is stored as search context, not residence.
 
-### 3. Shared Google Constellation runtime
+### Shared Constellation runtime
 
-FastAPI, chat/ADK and event surfaces use the same process-local Constellation singleton in memory mode. Firestore remains authoritative across Cloud Run processes.
+FastAPI, chat/ADK and event surfaces share one process-local Constellation in memory mode. Firestore is authoritative across Cloud Run processes.
 
-The shared runtime owns:
+The runtime owns:
 
-- patient-scoped grants;
+- patient grants;
 - exact action authorizations;
-- completed/blocked receipts;
+- receipts;
 - mission state;
 - OAuth connection metadata;
 - provider/tool connectors.
 
-OAuth refresh/client secrets are not stored in the clinical twin. Firestore retains only connection metadata and an opaque Secret Manager version reference; short-lived access tokens are obtained lazily when an authorized user-API action needs them.
+OAuth token material never enters the clinical twin, prompts or public receipts.
 
-### 4. Exact-payload authorization
+## Patient Google OAuth connection flow
 
-A durable authorization is bound to:
+The browser flow now exists end-to-end in code:
 
-`patient + mission + action + material payload fingerprint + expiry`
+`authenticated HealthIA patient → /oauth/connect → Google consent → signed state + PKCE S256 → callback under the same patient session → authorization-code exchange → stable Google sub/email check → refresh-token Secret Manager version → Firestore connection metadata`
 
-Examples:
+Implemented protections:
 
-- authorizing one Gmail recipient/subject/body cannot authorize a changed message;
-- authorizing a Calendar slot cannot authorize a different time/location;
-- authorization is one-time by default and consumed transactionally;
-- duplicate completed requests return the existing receipt rather than repeating the side effect.
+- `state` is HMAC signed and expires quickly;
+- PKCE verifier is stored only in a short-lived HttpOnly cookie;
+- callback must match the same HealthIA patient session;
+- `access_type=offline` is requested for refresh-token capability;
+- incremental scopes are supported;
+- scopes are requested by bounded HealthIA grant bundle rather than all-at-login;
+- Google `sub` is persisted as stable provider identity;
+- switching silently to a different Google account is rejected until explicit disconnect;
+- access tokens are never persisted;
+- refresh/client secrets live only in Secret Manager;
+- Firestore stores only account/scopes/stable subject + opaque secret version reference;
+- missing OAuth configuration reports `readiness=false` and `/connect` fails closed instead of breaking HealthIA startup;
+- Secret Manager clients are lazy and are not initialized just to render readiness/UI.
 
-### 5. Executable Workspace/Maps mission tools
+Default connect bundles cover the appointment mega-loop only:
 
-Implemented behind the shared action policy/receipt boundary:
+- Gmail relevant-read;
+- Gmail send;
+- Calendar free/busy;
+- Calendar event write;
+- Tasks write.
 
-- Google Maps Platform Places Nearby;
-- Places Text Search (New) with explicit `textQuery`, bounded `pageSize` and FieldMask;
-- Routes;
-- Calendar Free/Busy;
-- Calendar create/update/cancel with deterministic event ID recovery;
-- Gmail read/watch/draft/send/reply;
-- deterministic sent-message recovery before re-send;
-- People contact candidate resolution;
-- Drive export-container metadata slice;
-- Tasks create/update/complete.
+Contacts, Drive and YouTube upload remain incremental permissions.
 
-Contacts never become genogram relationships from labels alone. Places candidates never become clinical referrals from proximity alone.
+### OAuth deployment contract
 
-### 6. Durable Gmail event worker and watch renewal
+`deployment/configure-google-oauth.ps1` configures an existing Cloud Run service only after `-Confirmed`.
+
+It does **not**:
+
+- create a Google OAuth Client ID;
+- register redirect URIs in Google Auth Platform;
+- enable APIs;
+- print secret payloads;
+- grant project-wide Secret Manager access.
+
+It requires two existing Secret Manager versions:
+
+1. OAuth application client JSON in the exact shape:
+
+```json
+{"client_id":"...apps.googleusercontent.com","client_secret":"..."}
+```
+
+2. a random OAuth state-signing secret of at least 32 bytes.
+
+It grants the Cloud Run runtime identity `roles/secretmanager.secretAccessor` only on those specific secrets, injects the state secret as `HEALTHIA_GOOGLE_OAUTH_STATE_SECRET`, and stores only the client-secret **resource name** in `HEALTHIA_GOOGLE_OAUTH_CLIENT_SECRET_RESOURCE`.
+
+For a known HealthIA patient ID the script can also precreate the deterministic empty token-secret shell `healthia-google-oauth-<sha256(patient_id)[:24]>` and grant the runtime identity only:
+
+- Secret Version Adder;
+- Secret Accessor;
+- Secret Manager Viewer metadata on that one secret.
+
+The token secret contains no refresh token until that patient actually approves Google consent.
+
+The configured OAuth redirect path is always:
+
+`/api/google-constellation/oauth/callback`
+
+Cloud uses HTTPS; localhost HTTP is accepted only by local development code.
+
+## Gmail event runtime and disconnect semantics
 
 Implemented:
 
-- mailbox watch state in Memory/Firestore;
+- durable mailbox watch state in Memory/Firestore;
 - reverse lookup by connected mailbox;
-- watch renewal based on expiration metadata, not mailbox polling;
-- account change invalidates the old cursor;
-- Gmail Pub/Sub notification decode (`emailAddress` + `historyId`);
+- watch renewal by expiration metadata, never mailbox polling;
+- Gmail Pub/Sub decode (`emailAddress` + `historyId`);
 - `users.history.list` bridge;
 - exact mission `threadId` matching;
 - unrelated mail ignored;
-- history cursor advances only after successful processing;
-- ambiguous/low-confidence administrative reply does not advance mission state;
-- private FastAPI worker with lazy Cloud client initialization;
-- fail-closed deployment contract with authenticated Pub/Sub push and Scheduler OIDC.
+- cursor advances only after successful processing;
+- ambiguous/low-confidence administrative replies do not advance mission state;
+- private Cloud Run worker with authenticated Pub/Sub OIDC;
+- private Scheduler/bootstrap endpoints;
+- deployment contract for renewal scheduling.
 
-`GOOGLE_CLOUD_PROJECT` is now an explicit required worker environment variable in both production deployment and live-proof workflow. A Cloud proof exposed this missing variable and the production script was corrected before promotion.
+Disconnect is immediate from HealthIA's point of view:
 
-### 7. Production-shaped guarded mega-loop
+- OAuth connection becomes disabled;
+- renewal scans retire watches for disabled/mismatched accounts without calling Gmail or Secret Manager;
+- an already-in-flight Pub/Sub push for a disconnected or replaced mailbox is ACKed with 204, the stale watch is disabled, and Gmail history is not read.
 
-The deterministic integration laboratory proves:
+Provider-side Google grant revocation remains a separate explicit provider action; HealthIA does not falsely claim it from a local disconnect.
 
-`Maps → selection → Calendar Free/Busy → exact Gmail authorization → Gmail receipt → Pub/Sub reply → offered slot → exact Calendar authorization → Calendar receipt → exact Tasks authorization → Tasks receipt → mission COMPLETED`
+## Guarded appointment mega-loop
 
-The test uses the real Constellation service/store/guard architecture with synthetic connector transport. It proves:
+The production-shaped deterministic laboratory proves:
 
-- mission reload across request/process boundaries;
+`Maps → candidate selection → Calendar Free/Busy → exact Gmail authorization → Gmail receipt → Pub/Sub reply → offered slot → exact Calendar authorization → Calendar receipt → exact Tasks authorization → Tasks receipt → mission COMPLETED`
+
+It exercises the real mission/guard/store architecture with synthetic connector transport and proves:
+
+- mission reload across requests;
 - one-time authorization persistence/consumption;
-- duplicate Pub/Sub history is a no-op;
+- changed payload requires a new authorization;
+- duplicate Pub/Sub delivery is a no-op;
 - no duplicate Gmail/Calendar/Tasks side effects;
-- completed receipts for every executed tool;
-- final public `mission.completed` trace.
+- durable public receipts for executed tools.
 
-### 8. Private Google Cloud live proof
+## Private Cloud ingress proof
 
-A reversible exact-head proof succeeded for source head:
+The Gmail worker path has been repeatedly proven from exact branch heads using reversible Cloud resources:
 
-`28c5b24797a8bdf72f60a21c171a35cd7aff07de`
+`exact source → Cloud Build → immutable Artifact Registry image → private Cloud Run → authenticated Pub/Sub OIDC → /events/gmail-push → Firestore-backed worker → fail-closed 204`
 
-Evidence:
+A post-OAuth-hardening proof on source `181c9fb63380b7400aa61645df73eaa1848309d5` produced:
 
-- Cloud Build ID: `cd6225d5-da32-43fd-a52f-b14d47de555a`;
-- Artifact Registry image digest: `sha256:bebeed8ce95d23c2972f930bbee0306a74953d60f7875a520f81eb9d089f03cc`;
-- private Cloud Run revision: `healthia-gmail-proof-31333013858-00001-7ww`;
-- unauthenticated `/healthz` did not receive a 2xx response;
-- authenticated Pub/Sub OIDC subscription was created using an already-authorized project identity;
-- a synthetic Gmail-shaped Pub/Sub message was published;
-- private `/events/gmail-push` returned HTTP `204`;
-- the Firestore-backed worker initialized and failed closed for an unknown mailbox;
-- the proof performed no IAM policy mutation;
-- temporary service/topic/subscription/image were removed by the workflow cleanup path.
+- Cloud Build `ecc3d226-5a14-49c6-805e-24a7952c2f61`;
+- image digest `sha256:c8256e765b4f13c113580e9c5899124a9769702cf6181b22f3bafd15fa0c3ceb`;
+- private revision `healthia-gmail-proof-31338708081-00001-wq4`;
+- unauthenticated `/healthz`: non-2xx (`404`);
+- authenticated Pub/Sub message `20954778993306324`;
+- `/events/gmail-push`: `204`;
+- no IAM mutation by the proof workflow;
+- temporary proof resources cleaned up.
 
-This proves the implemented infrastructure path:
+This does **not** equal a real patient Gmail proof because no patient Google OAuth consent/refresh secret has been provisioned yet.
 
-`exact branch head → Cloud Build → Artifact Registry → private Cloud Run → authenticated Pub/Sub OIDC → Gmail worker → Firestore-aware fail-closed handling`
+## Clinical Google Cloud connector layer
 
-It does **not** prove a real patient Gmail mailbox because no patient OAuth refresh secret is provisioned in Secret Manager.
+Server-side clinical cloud connectors use Application Default Credentials/workload identity. Patient grants/action policy remain an independent HealthIA consent boundary above cloud IAM.
 
-## Clinical Google Cloud capability layer
+### Document AI — executable, live-blocked
 
-The following server-side connectors use **Application Default Credentials (workload identity)**, not patient OAuth refresh tokens. Patient grants/action policy remain an independent HealthIA consent boundary above them.
+Guarded code supports configured processor + private `gs://` evidence, returning structured internal extraction without copying patient text into receipt summaries.
 
-### Document AI — executable guarded slice
+Current live blocker: `documentai.googleapis.com` is not enabled in the audited project and no HealthIA processor resource is configured. Finalization workflows intentionally do not enable it silently.
 
-Implemented:
+### Cloud Healthcare FHIR/DICOM — executable, live-blocked
 
-- configured processor resource only;
-- private `gs://` evidence URI only;
-- synchronous `:process` request;
-- text/entities/pages/form fields/tables returned to the internal connector result;
-- evidence ID linkage;
-- patient text is not copied into public receipt summaries.
+Guarded code supports configured stores, bounded FHIR read/search/create/update and DICOM study metadata with path/identifier validation.
 
-Truth boundary: connector/policy/tests exist; no live HealthIA Document AI processor invocation is claimed yet.
+HealthIA's internal twin remains canonical; FHIR/DICOM is an interoperability gateway.
 
-### Cloud Healthcare FHIR/DICOM — executable guarded slice
+Current live blocker: `healthcare.googleapis.com` is not enabled and no HealthIA FHIR/DICOM stores are configured.
 
-Implemented:
+### Firebase Cloud Messaging — executable, IAM/device-blocked
 
-- configured FHIR/DICOM stores only;
-- FHIR read;
-- FHIR bounded search;
-- FHIR create/update with exact patient authorization;
-- DICOM study metadata retrieval;
-- resource type/ID/query/UID validation against path injection.
+The HTTP v1 connector uses PHI-neutral lock-screen text; caller-supplied sensitive notification title/body are ignored.
 
-Truth boundary: no live HealthIA FHIR/DICOM store is claimed. HealthIA's internal longitudinal twin remains canonical; this is an interoperability gateway.
+Live promotion probe result:
 
-### Firebase Cloud Messaging — executable guarded slice
+- FCM API is enabled;
+- CI proof identity receives `PERMISSION_DENIED` on send;
+- the probe uses an intentionally invalid registration token, so no device can receive it.
 
-Implemented:
+Remaining live requirements: runtime FCM send permission + a real HealthIA device registration token.
 
-- HTTP v1 mission notification connector;
-- exact patient authorization before send;
-- caller-supplied title/body are ignored;
-- lock-screen copy is fixed and PHI-neutral;
-- notification data contains only bounded mission routing metadata.
+### Speech-to-Text — executable, API-blocked
 
-Truth boundary: no real device registration token send is claimed yet.
+Guarded synchronous recognition accepts only patient-authorized private GCS audio and keeps transcript content out of public receipt summaries.
 
-### Speech-to-Text — executable guarded slice
+Current blocker: `speech.googleapis.com` is not enabled. Streaming/Gemini Live remains a separate contract.
 
-Implemented:
+### Text-to-Speech — executable and live-proven synthetic
 
-- synchronous recognition for patient-authorized private audio in Cloud Storage;
-- language configuration;
-- transcript returned internally, not exposed in receipt summary.
+A bounded authenticated live probe succeeded against the project Text-to-Speech API using only synthetic text:
 
-Truth boundary: streaming voice/Gemini Live input is not implied by this slice and remains contract-only.
+- HTTP synthesis returned MP3 data;
+- audio bytes: `22848`;
+- audio SHA-256: `d412fd495192a3b35f732c45faddaa1ed1f24ed01757631d3be81fe4daa9467a`;
+- generated bytes were deleted immediately and were not uploaded as an artifact;
+- no patient content was used.
 
-### Text-to-Speech — executable guarded slice
+Bidirectional Gemini Live voice remains separate and is not implied by this proof.
 
-Implemented:
+### Veo private education — executable, cost-gated
 
-- bounded patient-facing text synthesis;
-- private audio payload returned internally;
-- source text stays out of public receipt summary.
+The connector constrains model allowlist, duration/resolution, one output, `personGeneration=dont_allow`, exact authorization, and private GCS output.
 
-Truth boundary: bidirectional Gemini Live voice is separate and not claimed.
+Vertex AI API is enabled, but CI never auto-triggers a billable Veo generation. Live Veo stays behind explicit cost/authorization + private output-resource gates. Public YouTube remains separate.
 
-### Veo private education — executable guarded slice
+## Live Promotion Matrix
 
-Implemented:
+`.github/workflows/google-live-finalization.yml` runs only bounded synthetic/read-only probes and explicitly forbids:
 
-- allowlisted Veo models only;
-- exactly authorized generation action;
-- long-running operation submission;
-- output constrained under a private GCS prefix;
-- one sample, bounded duration/resolution;
-- `personGeneration=dont_allow`;
-- no public YouTube output.
+- API enablement;
+- IAM mutation;
+- patient data;
+- real FCM device delivery;
+- automatic Veo generation.
 
-Truth boundary: no live Veo generation is claimed until the project has the required private output prefix/API/IAM and the exact action is explicitly authorized. YouTube public search/upload remains a separate contract.
+Current matrix truth:
+
+- Text-to-Speech: **LIVE PASS**;
+- FCM: **BLOCKED_IAM**;
+- Speech-to-Text: **BLOCKED_DISABLED_API**;
+- Document AI: **BLOCKED_DISABLED_API**;
+- Cloud Healthcare: **BLOCKED_DISABLED_API**;
+- Veo: **COST_GATED**;
+- Cloud Scheduler inventory: **BLOCKED_IAM** for the current GitHub audit identity (`cloudscheduler.jobs.list`).
 
 ## Capability truth registry
 
-`existing` means already part of the verified HealthIA foundation.
+`existing` = verified HealthIA foundation.
 
-`executable` means a guarded connector/runtime slice exists behind grants/policy/receipts and has deterministic tests. **It does not mean the required external Google resource/account is configured or live-proven.**
+`executable` = guarded connector/runtime slice exists behind grants/policy/receipts and deterministic tests. It does not automatically mean external Google resources are configured.
 
-`contract` means architecture/policy is reserved but an executable connector slice is not yet promoted.
+`contract` = architecture/policy reserved but not promoted to executable connector.
 
-`deferred` means intentionally outside the current winning path.
+`deferred` = intentionally outside the current winning path.
 
 ### Existing
 
 - Vertex AI / Gemini;
 - Google ADK;
 - Firestore;
-- Cloud Storage;
+- private Cloud Storage;
 - Android Health Connect.
 
 ### Executable guarded slices
@@ -267,15 +308,16 @@ Truth boundary: no live Veo generation is claimed until the project has the requ
 - Maps/Places/Routes;
 - Calendar;
 - Gmail + Pub/Sub mission bridge;
-- People contact candidates;
+- patient Google OAuth browser connection flow;
+- People contact candidate resolution;
 - Drive export-container metadata;
 - Tasks;
 - Document AI private-GCS processing;
 - Cloud Healthcare FHIR/DICOM gateway;
-- FCM PHI-neutral mission notifications;
+- FCM neutral mission notification;
 - Speech-to-Text private-GCS recognition;
-- Text-to-Speech;
-- private Veo LRO generation.
+- Text-to-Speech (**live-proven synthetic**);
+- private Veo long-running generation.
 
 ### Contract only
 
@@ -289,55 +331,56 @@ Truth boundary: no live Veo generation is claimed until the project has the requ
 
 - BigQuery population intelligence;
 - Google Forms follow-up;
-- Google Wallet passes/credentials.
+- Google Wallet.
 
-## Remaining live blockers
+## Remaining real promotion blockers
 
-1. **Real Gmail mailbox:** provision a patient-authorized Google OAuth connection/refresh secret and granted Gmail scopes; only then can `users.watch`, `users.history.list` and a real provider thread be live-proven.
-2. **Scheduler renewal:** code/deployment contract exists, but the current GitHub audit principal cannot list Cloud Scheduler jobs; do not claim live watch renewal until the job is independently verified.
-3. **Document AI:** configure a processor resource and private evidence path before live invocation.
-4. **Cloud Healthcare:** configure HealthIA FHIR/DICOM stores and least-privilege IAM before live interoperability proof.
-5. **FCM:** register a real HealthIA device token before a live neutral notification proof.
-6. **Speech/TTS:** APIs/runtime access must be verified with synthetic/private evidence before claiming live calls.
-7. **Veo:** configure private GCS output prefix and verify API/IAM/cost guard before a live generation proof.
-8. **Real external patient side effects:** no real provider Gmail message, Calendar event or Tasks item was created in the infrastructure proof; the guarded mega-loop is production-shaped/synthetic until a patient OAuth account is connected.
-9. **Assistance document delivery:** a real external application submission still requires a verifiable external delivery receipt.
+1. **Google OAuth external configuration:** create/configure a Google OAuth Web Client outside the repo, register the exact HTTPS callback, store the client JSON + state secret in Secret Manager, and run the confirmed least-privilege provisioning contract.
+2. **Real patient OAuth consent:** connect a test patient Google account and obtain a real refresh-token version; only then can real Gmail/Calendar/Tasks actions be promoted.
+3. **Real Gmail watch:** execute `users.watch`, receive a real mailbox Pub/Sub event, call `users.history.list`, and prove exact mission-thread resumption.
+4. **Scheduler renewal:** current GitHub audit principal cannot independently list Scheduler jobs; no live renewal claim yet.
+5. **Document AI:** API + processor resource still need provisioning.
+6. **Cloud Healthcare:** API + FHIR/DICOM stores + least-privilege IAM still need provisioning.
+7. **FCM:** runtime send IAM + real device registration token are missing.
+8. **Speech-to-Text:** API is disabled; no live audio recognition claim.
+9. **Veo:** explicit cost gate/private output setup is still required before a live generation.
+10. **External assistance delivery:** an assistance application cannot become `SUBMITTED` without a verifiable external delivery receipt.
 
-## Demo target
+## Judge-visible target
 
-The strongest judge-visible mission remains:
+The strongest end-to-end mission remains:
 
 > `My son has autism. Find help near us and help me get an appointment.`
 
 Desired trace:
 
-1. HealthIA preserves the son's condition as family context, not the patient's diagnosis.
-2. Opportunity source/requisites are verified.
-3. Places finds relevant candidates from explicit location evidence.
-4. Patient selects a center.
-5. Calendar read finds feasible windows.
-6. HealthIA prepares the exact inquiry.
-7. Patient authorizes that exact Gmail payload.
-8. Gmail receipt is stored.
-9. Gmail Pub/Sub wakes the private worker when a mission-linked reply arrives.
-10. Only the exact thread is read/interpreted.
-11. Offered slots are presented.
-12. Patient selects one.
-13. Exact Calendar/Tasks actions are authorized.
-14. Calendar/Tasks receipts close the mission.
-15. Optional private education can use Document AI/STT/TTS/Veo without publishing patient-specific content.
-16. The Mission Flight Recorder shows Event → Evidence → Decision → Tool → Authorization → Receipt → Outcome, never private chain-of-thought.
+1. preserve the son's condition as family context, not the patient's diagnosis;
+2. verify the Opportunity source and requirements;
+3. Maps finds candidates from explicit location evidence;
+4. patient selects a center;
+5. Calendar read finds feasible windows;
+6. HealthIA prepares the exact inquiry;
+7. patient authorizes the exact Gmail payload;
+8. Gmail receipt is stored;
+9. Gmail Pub/Sub wakes the private worker on a mission-linked reply;
+10. only the exact thread is read/interpreted;
+11. offered slots are presented;
+12. patient chooses;
+13. exact Calendar/Tasks actions are authorized;
+14. receipts close the mission;
+15. optional private education uses guarded cloud tools without publishing patient-specific content;
+16. Mission Flight Recorder shows Event → Evidence → Decision → Tool → Authorization → Receipt → Outcome, never private chain-of-thought.
 
-The winning story is not “we integrated many Google APIs.” It is:
+The winning story is:
 
-**HealthIA completed one real patient mission across multiple systems without losing clinical safety, patient/family context, consent, idempotency or proof.**
+**HealthIA completes one real patient mission across multiple systems without losing clinical safety, patient/family context, consent, idempotency or proof.**
 
 ## Merge rule
 
 Keep PR #37 **draft** and keep `main` untouched until:
 
-- its exact final head passes pytest + Full System + DialogBench + Chromium + LAB Ω Core/Secondary + JUDGE + release verification;
-- all documentation reflects the exact candidate;
-- any Google product described as live has independent live evidence;
-- real patient OAuth/resource configuration is not confused with executable connector code;
-- no red/pending required gate remains.
+- the exact final head passes pytest + Full System + DialogBench + Chromium + LAB Ω Core/Secondary + JUDGE + release verification;
+- Cloud ingress proof and Live Promotion Matrix are green on that exact head;
+- documentation matches the candidate;
+- anything described as live has independent live evidence;
+- the real patient OAuth/resource gate is not confused with executable connector code.
