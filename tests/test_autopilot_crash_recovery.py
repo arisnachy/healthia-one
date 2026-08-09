@@ -47,6 +47,7 @@ def test_failed_event_is_retryable_and_only_completion_becomes_duplicate():
         id="event_crash_retry",
         patient_id=state.profile.id,
         event_type="manual.discovery_refresh",
+        subject_id=state.profile.id,
         condition="Hipertensión arterial",
     )
     claim_id = event_key(event)

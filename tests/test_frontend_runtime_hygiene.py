@@ -35,6 +35,7 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
         "runtime-integrations.js",
         "provider-integrations.js",
         "cost-control.js",
+        "opportunities-ui.js",
         "icons.js",
     )
     assert html.count("<script ") == len(expected)

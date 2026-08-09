@@ -9,16 +9,11 @@ from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
 from healthia_one.google_ai_transport import build_google_ai_client
-from healthia_one.opportunity_autopilot import (
-    AssistanceProgram,
-    ProgramRequirement,
-    RequiredDocument,
-)
+from healthia_one.opportunity_autopilot import AssistanceProgram, ProgramRequirement, RequiredDocument
 from healthia_one.research_radar import OFFICIAL_RESOURCE_DOMAINS, _extract_json_object, _host_allowed
 
 
@@ -89,11 +84,8 @@ class ProgramSourceVerification(BaseModel):
 
 
 class ProgramVerificationStore(Protocol):
-    def get(self, patient_id: str, program_id: str) -> ProgramSourceVerification | None:
-        ...
-
-    def save(self, verification: ProgramSourceVerification) -> None:
-        ...
+    def get(self, patient_id: str, program_id: str) -> ProgramSourceVerification | None: ...
+    def save(self, verification: ProgramSourceVerification) -> None: ...
 
 
 class MemoryProgramVerificationStore:
@@ -145,25 +137,17 @@ class FirestoreProgramVerificationStore:
 
     def __init__(self, project: str | None = None) -> None:
         from google.cloud import firestore
-
         self.client = firestore.Client(project=project)
 
     def _doc(self, patient_id: str, program_id: str):
-        return (
-            self.client.collection(self.COLLECTION)
-            .document(patient_id)
-            .collection("programs")
-            .document(program_id)
-        )
+        return self.client.collection(self.COLLECTION).document(patient_id).collection("programs").document(program_id)
 
     def get(self, patient_id: str, program_id: str) -> ProgramSourceVerification | None:
         snapshot = self._doc(patient_id, program_id).get()
         return ProgramSourceVerification.model_validate(snapshot.to_dict()) if snapshot.exists else None
 
     def save(self, verification: ProgramSourceVerification) -> None:
-        self._doc(verification.patient_id, verification.program_id).set(
-            verification.model_dump(mode="json")
-        )
+        self._doc(verification.patient_id, verification.program_id).set(verification.model_dump(mode="json"))
 
 
 def build_program_verification_store(settings) -> ProgramVerificationStore:
@@ -171,7 +155,6 @@ def build_program_verification_store(settings) -> ProgramVerificationStore:
         return MemoryProgramVerificationStore()
     if settings.store_backend == "firestore":
         import os
-
         return FirestoreProgramVerificationStore(project=os.getenv("GOOGLE_CLOUD_PROJECT"))
     data_path = Path(settings.data_path)
     return JsonProgramVerificationStore(data_path.parent / "program-verifications.json")
@@ -202,13 +185,7 @@ class _TextExtractor(HTMLParser):
 
 
 class ProgramSourceLoader:
-    def __init__(
-        self,
-        *,
-        max_bytes: int = 5 * 1024 * 1024,
-        timeout_seconds: int = 15,
-        allowed_domains: set[str] | None = None,
-    ) -> None:
+    def __init__(self, *, max_bytes: int = 5 * 1024 * 1024, timeout_seconds: int = 15, allowed_domains: set[str] | None = None) -> None:
         self.max_bytes = max_bytes
         self.timeout_seconds = timeout_seconds
         self.allowed_domains = allowed_domains or set(OFFICIAL_RESOURCE_DOMAINS)
@@ -266,10 +243,7 @@ PROGRAM_SOURCE_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "label": {"type": "string", "maxLength": 220},
-                    "rule_type": {
-                        "type": "string",
-                        "enum": ["condition", "country", "age_min", "age_max", "caregiver_of_condition", "document_present", "unknown"],
-                    },
+                    "rule_type": {"type": "string", "enum": ["condition", "country", "age_min", "age_max", "caregiver_of_condition", "document_present", "unknown"]},
                     "value": {},
                     "required": {"type": "boolean"},
                     "evidence_excerpt": {"type": "string", "maxLength": 320},
@@ -300,8 +274,7 @@ PROGRAM_SOURCE_SCHEMA: dict[str, Any] = {
 
 
 class ProgramSourceExtractor(Protocol):
-    def extract(self, artifact: ProgramSourceArtifact, program: AssistanceProgram) -> dict[str, Any]:
-        ...
+    def extract(self, artifact: ProgramSourceArtifact, program: AssistanceProgram) -> dict[str, Any]: ...
 
 
 class GeminiProgramSourceExtractor:
@@ -315,9 +288,7 @@ class GeminiProgramSourceExtractor:
         if not self.enabled or self.calls >= self.max_calls:
             raise PermissionError("Program source verification AI call is not enabled")
         self.calls += 1
-
         from google.genai import types
-
         client = build_google_ai_client(self.settings)
         instruction = {
             "task": "extract_assistance_program_requirements_from_original_source",
@@ -337,7 +308,6 @@ class GeminiProgramSourceExtractor:
             contents.append(types.Part.from_bytes(data=artifact.body, mime_type="application/pdf"))
         else:
             contents.append(artifact.text)
-
         response = client.models.generate_content(
             model=self.settings.model,
             contents=contents,
@@ -357,13 +327,7 @@ def _normalized_excerpt(value: str) -> str:
 
 
 class OfficialProgramVerifier:
-    def __init__(
-        self,
-        *,
-        loader: ProgramSourceLoader,
-        extractor: ProgramSourceExtractor,
-        store: ProgramVerificationStore,
-    ) -> None:
+    def __init__(self, *, loader: ProgramSourceLoader, extractor: ProgramSourceExtractor, store: ProgramVerificationStore) -> None:
         self.loader = loader
         self.extractor = extractor
         self.store = store
@@ -385,12 +349,9 @@ class OfficialProgramVerifier:
                 rule_type = "unknown"
             excerpt = str(raw.get("evidence_excerpt") or "").strip()[:320]
             needs_more = rule_type == "unknown" or not excerpt
-            if artifact.content_type in {"text/html", "text/plain"} and excerpt:
-                if _normalized_excerpt(excerpt) not in source_text:
-                    # HTML/text lets us verify the model's quote locally. A quote
-                    # not present in the source cannot create an eligibility rule.
-                    needs_more = True
-                    rule_type = "unknown"
+            if artifact.content_type in {"text/html", "text/plain"} and excerpt and _normalized_excerpt(excerpt) not in source_text:
+                needs_more = True
+                rule_type = "unknown"
             requirements.append(
                 VerifiedRequirement(
                     key=f"verified_req_{index + 1}",
@@ -400,6 +361,19 @@ class OfficialProgramVerifier:
                     required=bool(raw.get("required", True)),
                     evidence_excerpt=excerpt,
                     source_verification_required=needs_more,
+                )
+            )
+
+        if not requirements:
+            requirements.append(
+                VerifiedRequirement(
+                    key="verified_req_unknown",
+                    label="Verify official program requirements manually",
+                    rule_type="unknown",
+                    value=None,
+                    required=True,
+                    evidence_excerpt="",
+                    source_verification_required=True,
                 )
             )
 
@@ -430,6 +404,14 @@ class OfficialProgramVerifier:
         if method not in {"portal", "email", "in_person", "mail", "unknown"}:
             method = "unknown"
 
+        destination = str(payload.get("submission_destination") or "")[:500].strip()
+        caveats = [str(item)[:300] for item in (payload.get("caveats") or [])[:10]]
+        if method == "portal" and destination:
+            allowed_domains = set(getattr(self.loader, "allowed_domains", None) or OFFICIAL_RESOURCE_DOMAINS)
+            if not _host_allowed(destination, allowed_domains):
+                destination = ""
+                caveats.append("Submission destination is outside the approved official-domain boundary and was discarded.")
+
         verification = ProgramSourceVerification(
             patient_id=patient_id,
             program_id=program.id,
@@ -441,8 +423,8 @@ class OfficialProgramVerifier:
             required_documents=documents,
             deadline=deadline,
             submission_method=method,
-            submission_destination=str(payload.get("submission_destination") or "")[:500],
-            caveats=[str(item)[:300] for item in (payload.get("caveats") or [])[:10]],
+            submission_destination=destination,
+            caveats=caveats[:10],
         )
         self.store.save(verification)
         return verification
