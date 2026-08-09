@@ -1,175 +1,116 @@
 # HealthIA ONE — Hackathon Victory Plan
 
-## Strategic position
+## Final competitive position
 
-HealthIA ONE should enter **The Taskmaster** as its primary track.
+HealthIA ONE enters **The Taskmaster** with one memorable thesis:
 
-The winning story is not “a medical chatbot.” It is:
+> **HealthIA does not finish when the model talks. It finishes when the evidence-backed patient task actually exists, remains auditable, and is available for the next conversation.**
 
-> A patient-owned health mission autopilot that continuously converts authorized device data, documents, appointments and treatment check-ins into safe, auditable next actions until the patient reaches a verified next step.
+The product is no longer in feature-discovery mode. The remaining work is submission hardening: make the latest green product, its real Google ADK/Gemini execution, and its durable Taskmaster loop unmistakable to a judge in one live English demonstration.
 
-Secondary award targets:
+## Proven product foundation
 
-1. Best Architectural Design.
-2. Best Multimodal UX.
-3. Individual/Hobbyist.
+- Demand-driven Google ADK clinical runtime with real function-tool execution.
+- Gemini 3.5 Flash through Vertex AI/service identity in the proof deployment.
+- Deterministic safety boundary before routine model behavior.
+- Human-first adaptive clinical conversation: five-question contract preserved internally, one useful question shown at a time.
+- Free-text answers, optional suggestions, “I don’t know,” and prior-answer memory.
+- Chat-driven Health OS navigation/actions through a deterministic allowlist rather than arbitrary model DOM control.
+- Evidence-first multimodal result ingestion: original bytes stored before model interpretation.
+- Patient-scoped Firestore state and private GCS original evidence.
+- Clinical-twin provenance back to result/document evidence.
+- Closed-loop `result_explanation` mission that reaches `COMPLETED` only when persisted evidence exists.
+- Authenticated patient isolation and cross-patient document denial.
+- Logout/login and genuine Cloud Run cross-revision continuity proof.
+- CI, Chromium, LAB OMEGA, JUDGE Ω, release and public-video verification gates.
 
-The Fortified Enterprise Fleet is a future expansion. Entering that track now would require production-grade identity, tenant isolation, durable agent runtime, registry, gateway, security controls and observability that are not yet demonstrated end to end.
+Canonical evidence: `docs/EVIDENCE.md` and `hackathon/judge_omega_scorecard.json`.
 
-## Current audit
+## The winning four-minute story
 
-### Strong foundations already present
+The final judge video must be a **continuous live application capture**, not screenshots, slides, a generated product mockup, or a montage that hides failures.
 
-- Chat-first patient experience with an integrated composer.
-- Deterministic safety gates that remain active if Gemini fails.
-- Typed longitudinal `PatientState`.
-- Consent, quiet hours, snooze, rule muting, audit and export.
-- Proactive clinical and continuity evaluators.
-- Health missions, appointments, medication check-ins and consultation briefs.
-- Google ADK specialist graph.
-- Gemini 3.6 Flash integration.
-- Cloud Run container and Firestore storage adapter.
-- Android Health Connect bridge with device pairing and provenance.
-- Synthetic hardware-free demonstration path.
-- Clean semantic frontend and regression suite.
+### 1. Promise
 
-### Critical gaps preventing a winning claim
+Show the live HealthIA login/application and state the problem in one sentence: patient context is fragmented and most AI conversations disappear when the chat ends.
 
-1. **The ADK graph is not the main production runtime.**
-   The FastAPI application uses deterministic routing plus Gemini response enhancement, while `healthia_agent/agent.py` remains a separate graph. Judges need to see ADK selecting tools and completing the workflow used by the visible product.
+### 2. Human conversation + real ADK
 
-2. **Autonomy is process-local.**
-   The background loop runs inside the web process. Cloud Run may scale down or restart, so the current loop is not durable asynchronous execution.
+Use a synthetic patient complaint in English. Prove that:
 
-3. **Most autonomous outcomes are messages, not completed external actions.**
-   The agent detects and explains gaps but does not yet prove a closed loop such as: event received → plan created → tool executed → artifact produced → patient feedback captured → mission closed.
+- Google ADK/Gemini are ready on the deployed runtime;
+- the clinical block contains exactly five adaptive questions under the runtime contract;
+- only one question is visible at a time;
+- free text and “I don’t know” remain available;
+- answered turns stay visible as conversation history;
+- a second block, if requested by Gemini, receives prior answers instead of restarting.
 
-4. **Cloud proof is incomplete.**
-   The repository contains Cloud Run and Firestore boundaries, but the submission still needs visible deployment evidence, logs, a hosted URL if possible and reproducible cloud setup.
+Do not present the internal five-question contract as a form.
 
-5. **Multimodal proof is incomplete.**
-   PDF and image uploads remain pending when verified extraction is unavailable. A winning demo should show Gemini reading a synthetic result image or PDF, extracting structured facts and preserving uncertainty/provenance.
+### 3. Chat as Health OS
 
-6. **Identity and patient isolation are demonstration boundaries.**
-   The current state store uses one synthetic patient document. A cloud demo needs at least two synthetic identities or a clearly isolated judge/demo account path.
+From chat, issue a safe workspace command such as “Open my results.” The visible application must navigate because of the assistant’s deterministic `ui_action`, demonstrating that conversation is an operating surface, not merely a text box.
 
-7. **Observability is not judge-visible.**
-   The audit log exists, but the demo needs a simple mission execution view showing trigger, selected agent/tool, public evidence, action result, retry/failure and closure without exposing private chain-of-thought.
+### 4. Evidence-first multimodal task
 
-8. **Submission evidence is not assembled.**
-   The project still needs the final four-minute unedited video, cloud console proof, architecture diagram, hosted link, concise write-up and optional public content/social post.
+Upload one synthetic laboratory PDF. Show the real result surface after parsing and explain:
 
-## Estimated readiness by judging criterion
+- original evidence is persisted first in private GCS;
+- Gemini extracts only readable evidence;
+- Firestore commits patient-scoped structured state;
+- the clinical twin retains provenance;
+- failure is fail-closed rather than fabricated.
 
-This is an internal planning estimate, not a judge score.
+### 5. Taskmaster closure
 
-- Innovation and operational utility: **strong concept, medium proof**. The system removes real continuity friction, but must demonstrate a completed autonomous workflow.
-- Architectural discipline and tech stack: **strong local architecture, incomplete cloud runtime**. Safety, state and boundaries are solid; durable event execution and ADK integration are the main gaps.
-- Demo and production readiness: **good repository, weak final evidence**. Reproducibility exists, but cloud proof and the judge-facing story need completion.
+Return to chat and ask HealthIA to explain the newly uploaded result and confirm it was saved. Show the completed mission and correlated evidence. The key sentence is:
 
-## Winning demonstration: one closed-loop mission
+> **The mission is not complete because the model answered. It is complete because the persisted result and original document actually exist.**
 
-Use one synthetic scenario from start to finish:
+### 6. Durable continuity + Cloud proof
 
-1. A Health Connect or synthetic device event reports persistently elevated blood pressure and reduced activity.
-2. A Pub/Sub or Cloud Scheduler trigger invokes the Cloud Run mission worker.
-3. The ADK coordinator receives the authorized patient state and deterministic safety result.
-4. The coordinator selects the minimum tools:
-   - longitudinal context;
-   - safety gate;
-   - mission planner;
-   - consultation brief generator;
-   - patient notification.
-5. HealthIA creates a mission with evidence IDs, a next action and a closure condition.
-6. HealthIA asks the patient for a repeat measurement using the correct technique.
-7. The patient submits the measurement or the Android bridge synchronizes it.
-8. HealthIA updates the trend, prepares a consultation brief and marks the mission ready for professional review.
-9. The execution view shows every public step, tool result, retry and final state.
-10. The demo closes with the patient controlling consent, muting the rule or exporting their data.
+Log out and back in. Confirm that the result, original document and completed mission remain. Finish on the live application with visible runtime proof for Cloud Run, Gemini/Vertex AI, ADK, Firestore and GCS.
 
-This proves autonomy, patient control, safety, memory, action and closure in one coherent story.
+## CINE Ω — temporary audiovisual strike team
 
-## Execution plan
+CINE Ω exists only for the final hackathon submission package.
 
-### P0 — Must complete before submission
+- **DIRECTOR** — judge story, pacing and narrative economy.
+- **LIVE-CAM** — one-take Playwright capture of the deployed application.
+- **NARRATOR** — English explanatory voice track and matching captions.
+- **COMPLIANCE** — truth boundary, duration and submission-language checks.
+- **CUTLOCK** — rejects static fake scenes, hidden failures, bad duration, console errors or evidence mismatch.
+- **JUDGE-EYE** — adversarial review of what a judge can actually understand and remember.
 
-- [x] Replace the fragile Windows `python -c` Gemini probe with a UTF-8 Python verifier.
-- [x] Explain Google, Samsung, Apple and OAuth connection models honestly in the device architecture.
-- [ ] Make Google ADK execute the same mission workflow used by `/api/chat` and proactive checks.
-- [ ] Add a durable cloud trigger using Pub/Sub, Cloud Scheduler or Cloud Tasks.
-- [ ] Deploy Cloud Run with Firestore and Secret Manager configuration.
-- [ ] Add a cloud verification script that records service URL, revision, project, Firestore write/read and Gemini model call.
-- [ ] Implement one verified multimodal synthetic lab-result or discharge-document flow.
-- [ ] Add a judge-visible mission execution timeline.
-- [ ] Record a single unedited four-minute demo with Cloud Run dashboard/log evidence.
-- [ ] Publish the final architecture diagram and exact spin-up instructions.
+## Hard video gates
 
-### P1 — High-value differentiators
+A replacement video is rejected unless all are true:
 
-- [ ] Native iOS HealthKit bridge prototype with synthetic/test data.
-- [ ] Samsung-specific direct adapter only for data unavailable through Health Connect.
-- [ ] Two synthetic patient identities with isolation tests.
-- [ ] Structured ADK tool-result schema and retry policy.
-- [ ] OpenTelemetry-compatible mission events and Cloud Logging correlation IDs.
-- [ ] Patient feedback score that changes future plan preferences without changing clinical safety rules.
-- [ ] Gemini multimodal comparison panel showing source image, extracted facts, uncertainty and provenance.
+1. It records the exact current candidate deployed to Cloud Run.
+2. The application is live and interactive throughout the product demonstration.
+3. English is the judge-facing language.
+4. The conversational clinical UI shows exactly one question at a time while preserving the five-question backend contract.
+5. Google ADK and Gemini readiness are verified from the live runtime.
+6. The synthetic multimodal result reaches parsed persisted state with original-document provenance.
+7. The Taskmaster result mission reaches `COMPLETED` with correlated result/document evidence.
+8. Logout/login restores the durable state.
+9. Browser console/page errors are zero.
+10. Recording duration remains within the submission limit configured by the workflow.
+11. Synthetic data only; no real patient identifiers or clinical records.
+12. No unsupported diagnosis, prescription authority, regulatory-clearance or hardware claims.
 
-### P2 — Submission bonus work
+## What not to add now
 
-- [ ] Public technical article describing the agent architecture and safety boundary.
-- [ ] Public social post with `#AllThingsAgenticHackathon`.
-- [ ] Optional Gemma component for local redaction/classification if it clearly improves the demo.
-
-## Engineering gates
-
-### Gate A — Local correctness
-
-- Complete Python tests.
-- JavaScript syntax checks.
-- PowerShell parse and Windows launch test.
-- Android debug APK build.
-- Deterministic smoke test.
-
-### Gate B — Real agent execution
-
-- ADK trace proves tool selection and execution.
-- Safety gate cannot be downgraded by the model.
-- Mission has trigger, evidence, action, result and closure state.
-- Failure path produces a retry or safe fallback.
-
-### Gate C — Google Cloud proof
-
-- Cloud Run revision visible.
-- Firestore state survives restart.
-- Secret is not committed or printed.
-- Durable trigger invokes the mission worker.
-- Cloud Logging shows one correlated end-to-end mission.
-
-### Gate D — Judge proof
-
-- Hosted URL or clearly reproducible private deployment.
-- Architecture diagram.
-- Four-minute unedited demo.
-- README spin-up steps.
-- Explicit truth boundary.
-- No unsupported clinical or hardware claims.
-
-## What not to do
-
-- Do not present planned Apple, Samsung SDK, Fitbit or Garmin routes as implemented.
-- Do not ask for Google, Samsung, Apple or wearable-provider passwords.
-- Do not call a timed loop inside one web process “durable asynchronous execution.”
-- Do not show internal chain-of-thought.
-- Do not overfill the demo with every module; prove one mission deeply.
-- Do not claim clinical diagnosis, regulatory clearance or validated medical-device performance.
+- No new feature merely to make the feature list longer.
+- No arbitrary Gemini-generated CSS selectors or silent destructive UI actions.
+- No fake autonomous swarm story when the proven architecture is intentionally demand-driven.
+- No static screenshots masquerading as a live demo.
+- No replacement of the preserved passing video until the new exact-candidate recording itself passes.
 
 ## Definition of victory
 
-HealthIA is submission-ready when a judge can watch one uninterrupted flow and answer “yes” to all of these questions:
+A judge should be able to describe HealthIA after watching once:
 
-1. Did Gemini and Google ADK make a real decision?
-2. Did the agent execute tools instead of only producing text?
-3. Did Google Cloud run and persist the workflow?
-4. Did the action remove a real patient continuity burden?
-5. Was the action safe, consent-bound and auditable?
-6. Could another developer reproduce the project from the repository?
+> **“It is the health agent that keeps working from conversation to durable evidence, and it only closes the mission when the outcome really exists.”**
+
+That clarity — combined with the already-proven Google Cloud/ADK architecture — is the final competitive objective.
