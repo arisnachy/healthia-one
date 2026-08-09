@@ -64,6 +64,13 @@ jobs:
           }
           trap cleanup EXIT
 
+          sanitize_logs() {
+            sed -E \
+              -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g' \
+              -e 's/(refresh_token|client_secret|access_token|id_token)[^[:space:]]*/[credential-field]/gi' \
+              -e 's/ya29\.[A-Za-z0-9._-]+/[token]/g'
+          }
+
           {
             echo "# Google Health Constellation live proof"
             echo
@@ -124,9 +131,6 @@ jobs:
           echo "Creating temporary Pub/Sub topic..."
           gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
 
-          # Try identities that already have project-level run.invoker. The
-          # subscription creator may still need iam.serviceAccounts.actAs; no IAM
-          # is changed here. Try the current principal first, then compute.
           push_sa=""
           subscription_error=""
           for candidate in "$active_account" "$compute_sa"; do
@@ -171,13 +175,21 @@ jobs:
           done
 
           if [[ "$push_status" != "204" ]]; then
+            stderr_log="$(gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Fstderr\"" \
+              --project "$PROJECT_ID" --limit 80 --freshness 10m --order=asc --format='value(textPayload)' 2>/dev/null \
+              | tail -n 100 | sanitize_logs || true)"
+            printf '%s\n' "$stderr_log" > dist/google-live-proof/worker-error-sanitized.txt
             {
               echo
               echo "## Pub/Sub reached"
               echo "- Authenticated push subscription created with existing identity: $push_sa"
               echo "- Synthetic message id: $message_id"
-              echo "- Request status could not be confirmed as 204 from available log visibility: ${push_status:-not_visible}."
+              echo "- Cloud Run request status: ${push_status:-not_visible}"
+              echo "- A sanitized worker stderr diagnostic was captured as a separate artifact file."
             } >> "$proof"
+            echo "--- SANITIZED WORKER STDERR ---" >&2
+            printf '%s\n' "$stderr_log" >&2
             exit 1
           fi
 
@@ -201,6 +213,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HealthIA-Google-Constellation-live-proof
-          path: dist/google-live-proof/proof.md
+          path: dist/google-live-proof
           if-no-files-found: warn
           retention-days: 30
