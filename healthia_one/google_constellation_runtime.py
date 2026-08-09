@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -36,6 +37,9 @@ from healthia_one.google_oauth_credentials import (
     MemoryOAuthConnectionStore,
     SecretManagerOAuthTokenProvider,
 )
+
+
+_CURRENT_GOOGLE_PATIENT: ContextVar[str] = ContextVar("healthia_google_patient", default="")
 
 
 @dataclass
@@ -125,7 +129,6 @@ def _stores(settings):
 
 def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     grant_store, receipt_store, authorization_store, oauth_store, mission_store = _stores(settings)
-
     token_provider = SecretManagerOAuthTokenProvider(connection_store=oauth_store)
     connectors = {}
 
@@ -133,33 +136,20 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     if maps_key:
         connectors[GoogleService.MAPS] = MapsConnector(maps_key)
 
-    # OAuth-backed connectors are safe to construct before a patient connects an
-    # account. They fail closed in the token provider until connection metadata,
-    # required scopes and Secret Manager material exist.
-    connectors.update(
-        {
-            GoogleService.CALENDAR: CalendarConnector("__patient_bound_at_execution__", token_provider),
-            GoogleService.GMAIL: GmailConnector("__patient_bound_at_execution__", token_provider),
-            GoogleService.PEOPLE: PeopleConnector("__patient_bound_at_execution__", token_provider),
-            GoogleService.DRIVE: DriveConnector("__patient_bound_at_execution__", token_provider),
-            GoogleService.TASKS: TasksConnector("__patient_bound_at_execution__", token_provider),
-        }
-    )
-
-    # OAuthConnectorBase stores patient_id on construction, so production needs
-    # patient-bound connector instances. A lazy proxy provides that binding while
-    # still keeping one shared executor/policy/receipt pipeline.
+    # OAuth connector classes keep the patient identity on the instance. The
+    # proxy obtains that identity from a request-scoped ContextVar set by the
+    # executor. It never appears in the tool payload or idempotency material.
     class PatientBoundOAuthProxy:
         def __init__(self, service, connector_type):
             self.service = service
             self.connector_type = connector_type
 
         def execute(self, action, payload, *, idempotency_key):
-            patient_id = str(payload.pop("__healthia_patient_id", ""))
+            patient_id = _CURRENT_GOOGLE_PATIENT.get()
             if not patient_id:
-                raise PermissionError("Patient-bound Google connector missing patient identity")
+                raise PermissionError("Patient-bound Google connector missing execution context")
             connector = self.connector_type(patient_id, token_provider)
-            return connector.execute(action, payload, idempotency_key=idempotency_key)
+            return connector.execute(action, dict(payload), idempotency_key=idempotency_key)
 
     connectors[GoogleService.CALENDAR] = PatientBoundOAuthProxy(GoogleService.CALENDAR, CalendarConnector)
     connectors[GoogleService.GMAIL] = PatientBoundOAuthProxy(GoogleService.GMAIL, GmailConnector)
@@ -167,20 +157,15 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     connectors[GoogleService.DRIVE] = PatientBoundOAuthProxy(GoogleService.DRIVE, DriveConnector)
     connectors[GoogleService.TASKS] = PatientBoundOAuthProxy(GoogleService.TASKS, TasksConnector)
 
-    class PatientInjectingExecutor(GoogleActionExecutor):
+    class PatientContextExecutor(GoogleActionExecutor):
         def execute(self, request_value, grants):
-            if request_value.service in {
-                GoogleService.CALENDAR,
-                GoogleService.GMAIL,
-                GoogleService.PEOPLE,
-                GoogleService.DRIVE,
-                GoogleService.TASKS,
-            }:
-                request_value = request_value.model_copy(deep=True)
-                request_value.payload["__healthia_patient_id"] = request_value.patient_id
-            return super().execute(request_value, grants)
+            token = _CURRENT_GOOGLE_PATIENT.set(request_value.patient_id)
+            try:
+                return super().execute(request_value, grants)
+            finally:
+                _CURRENT_GOOGLE_PATIENT.reset(token)
 
-    raw = PatientInjectingExecutor(connectors=connectors, receipt_store=receipt_store)
+    raw = PatientContextExecutor(connectors=connectors, receipt_store=receipt_store)
     guard = GuardedGoogleActionExecutor(
         executor=raw,
         grant_store=grant_store,
