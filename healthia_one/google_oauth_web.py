@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -288,20 +289,28 @@ class GoogleOAuthBrowserFlow:
         self.secret_reader = secret_reader or SecretManagerPayloadReader()
         self.secret_writer = secret_writer
         self.transport = transport or UrllibOAuthHttpTransport()
-        if len(self.state_secret) < 32:
-            raise GoogleOAuthFlowError("Google OAuth state secret must be at least 32 bytes")
 
     def readiness(self) -> dict[str, bool]:
-        return {
+        checks = {
             "client_secret_resource_configured": bool(self.app_secret_resource),
             "redirect_uri_configured": bool(self.redirect_uri),
             "state_secret_configured": len(self.state_secret) >= 32,
         }
+        return {**checks, "ready": all(checks.values())}
+
+    def _require_state_secret(self) -> None:
+        if len(self.state_secret) < 32:
+            raise GoogleOAuthFlowError("Google OAuth state secret is not configured")
 
     def _app_secret(self) -> GoogleOAuthAppSecret:
         if not self.app_secret_resource:
             raise GoogleOAuthFlowError("Google OAuth client secret resource is not configured")
-        raw = self.secret_reader.read(self.app_secret_resource)
+        try:
+            raw = self.secret_reader.read(self.app_secret_resource)
+        except Exception as exc:
+            raise GoogleOAuthFlowError(
+                f"Google OAuth client secret is unavailable: {type(exc).__name__}"
+            ) from exc
         try:
             return GoogleOAuthAppSecret.model_validate_json(raw)
         except Exception as exc:
@@ -317,6 +326,7 @@ class GoogleOAuthBrowserFlow:
         raise GoogleOAuthFlowError("Google OAuth redirect URI must use HTTPS outside localhost")
 
     def begin(self, patient_id: str, bundles_raw: str = "") -> tuple[str, str]:
+        self._require_state_secret()
         self._validate_redirect()
         app_secret = self._app_secret()
         bundles = _normalize_bundles(bundles_raw)
@@ -353,6 +363,8 @@ class GoogleOAuthBrowserFlow:
         return f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}", cookie
 
     def complete(self, patient_id: str, *, state: str, code: str, pkce_cookie: str) -> GoogleOAuthConnection:
+        self._require_state_secret()
+        self._validate_redirect()
         state_payload = _verify_signed_token(self.state_secret, state, "google_oauth_state")
         cookie_payload = _verify_signed_token(self.state_secret, pkce_cookie, "google_oauth_pkce")
         if state_payload.get("patient_id") != patient_id or cookie_payload.get("patient_id") != patient_id:
@@ -363,13 +375,16 @@ class GoogleOAuthBrowserFlow:
         verifier = str(cookie_payload.get("verifier") or "")
         if len(verifier) < 43:
             raise GoogleOAuthFlowError("Google OAuth PKCE verifier is invalid")
+        clean_code = str(code or "").strip()
+        if not clean_code:
+            raise GoogleOAuthFlowError("Google OAuth authorization code is missing")
         bundles = _normalize_bundles(state_payload.get("bundles") or [])
 
         app_secret = self._app_secret()
         token = self.transport.post_form(
             GOOGLE_TOKEN_ENDPOINT,
             {
-                "code": str(code or "").strip(),
+                "code": clean_code,
                 "client_id": app_secret.client_id,
                 "client_secret": app_secret.client_secret,
                 "redirect_uri": self.redirect_uri,
@@ -390,7 +405,7 @@ class GoogleOAuthBrowserFlow:
 
         existing = self.connection_store.load(patient_id)
         if existing and existing.enabled:
-            existing_subject = str(getattr(existing, "google_subject", "") or "").strip()
+            existing_subject = str(existing.google_subject or "").strip()
             if existing_subject and existing_subject != subject:
                 raise GoogleOAuthFlowError(
                     "A different Google account is already connected; disconnect it before switching accounts"
@@ -431,6 +446,7 @@ class GoogleOAuthBrowserFlow:
         if not returned_scopes:
             returned_scopes = set(oauth_scopes_for_bundles(bundles))
 
+        now = datetime.now(timezone.utc)
         if existing:
             connection = existing.model_copy(deep=True)
             connection.google_account = email
@@ -438,7 +454,7 @@ class GoogleOAuthBrowserFlow:
             connection.granted_scopes = sorted(returned_scopes)
             connection.secret_version_resource = version_resource
             connection.enabled = True
-            connection.updated_at = connection.updated_at.__class__.now(connection.updated_at.tzinfo)
+            connection.updated_at = now
         else:
             connection = GoogleOAuthConnection(
                 patient_id=patient_id,
@@ -446,6 +462,7 @@ class GoogleOAuthBrowserFlow:
                 google_subject=subject,
                 granted_scopes=sorted(returned_scopes),
                 secret_version_resource=version_resource,
+                updated_at=now,
             )
         self.connection_store.save(connection)
         return connection
@@ -455,7 +472,7 @@ class GoogleOAuthBrowserFlow:
         if connection is None:
             return None
         connection.enabled = False
-        connection.updated_at = connection.updated_at.__class__.now(connection.updated_at.tzinfo)
+        connection.updated_at = datetime.now(timezone.utc)
         self.connection_store.save(connection)
         return connection
 
