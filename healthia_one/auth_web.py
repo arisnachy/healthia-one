@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from healthia_one.auth import AccountManager, AuthError, bind_principal, current_principal, reset_principal
 from healthia_one.config import Settings
 from healthia_one.google_constellation_api import build_google_constellation_router
-from healthia_one.google_constellation_runtime import build_google_constellation_service
+from healthia_one.google_constellation_singleton import get_google_constellation_service
 from healthia_one.language import bind_requested_locale, current_requested_locale, reset_requested_locale
 from healthia_one.opportunity_api import build_opportunity_router
 from healthia_one.service import HealthIAService
@@ -44,6 +44,7 @@ def install_patient_auth(
 ) -> AccountManager:
     manager = AccountManager(settings)
     app.state.account_manager = manager
+    app.state.healthia_service = service
 
     public_exact = {
         "/healthz",
@@ -147,7 +148,7 @@ def install_patient_auth(
     # patient-session middleware. Neither prefix is public, so Cloud mode always
     # requires an authenticated patient before any mission/grant/receipt read.
     app.include_router(build_opportunity_router(service))
-    constellation = build_google_constellation_service(settings)
+    constellation = get_google_constellation_service(settings)
     app.state.google_constellation = constellation
     app.include_router(build_google_constellation_router(constellation))
 
