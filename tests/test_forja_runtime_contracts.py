@@ -62,9 +62,10 @@ def test_android_bridge_uses_supported_compose_toolchain() -> None:
     root_gradle = (ROOT / "android-health-bridge/build.gradle.kts").read_text(encoding="utf-8")
     app_gradle = (ROOT / "android-health-bridge/app/build.gradle.kts").read_text(encoding="utf-8")
     assert 'id("org.jetbrains.kotlin.plugin.compose") version "2.1.0"' in root_gradle
+    assert 'id("com.android.application") version "8.9.1"' in root_gradle
     assert 'id("org.jetbrains.kotlin.plugin.compose")' in app_gradle
-    assert "compileSdk = 35" in app_gradle
-    assert "targetSdk = 35" in app_gradle
+    assert "compileSdk = 36" in app_gradle
+    assert "targetSdk = 36" in app_gradle
     assert "minSdk = 28" in app_gradle
     assert "composeOptions" not in app_gradle
 
