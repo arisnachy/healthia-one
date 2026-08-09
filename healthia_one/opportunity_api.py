@@ -83,8 +83,11 @@ def build_opportunity_router(service) -> APIRouter:
         return {
             **packet.model_dump(mode="json"),
             "external_action_performed": False,
+            "submission_truth_state": (
+                "READY_TO_SUBMIT" if packet.external_submission_authorized else "UNAUTHORIZED"
+            ),
             "next_step": (
-                "A configured external delivery adapter must return a durable receipt before this can become SUBMITTED."
+                "The application is READY_TO_SUBMIT only. A configured external delivery adapter must return a durable receipt before this can become SUBMITTED."
                 if packet.external_submission_authorized
                 else "External submission remains unauthorized."
             ),
