@@ -193,10 +193,15 @@ class PubMedSource:
                     abstract=abstract[:8000],
                     published_at=_parse_date(date_value),
                     evidence_tier=tier,
-                    peer_reviewed=tier != EvidenceTier.PREPRINT,
+                    # PubMed indexing/publication type is useful provenance but
+                    # does not, by itself, prove that peer review occurred.
+                    peer_reviewed=False,
                     official=True,
                     source_claims=[abstract[:1200]] if abstract else [],
-                    raw={"publication_types": publication_types},
+                    raw={
+                        "publication_types": publication_types,
+                        "peer_review_status": "unknown",
+                    },
                 )
             )
         return output
@@ -250,10 +255,15 @@ class EuropePmcSource:
                     abstract=abstract[:8000],
                     published_at=published,
                     evidence_tier=EvidenceTier.PREPRINT if is_preprint else tier,
-                    peer_reviewed=not is_preprint,
+                    # "not a preprint" is not equivalent to confirmed peer review.
+                    peer_reviewed=False,
                     official=True,
                     source_claims=[abstract[:1200]] if abstract else [],
-                    raw={"cited_by_count": item.get("citedByCount"), "is_preprint": is_preprint},
+                    raw={
+                        "cited_by_count": item.get("citedByCount"),
+                        "is_preprint": is_preprint,
+                        "peer_review_status": "unknown",
+                    },
                 )
             )
         return output
@@ -309,6 +319,7 @@ class ClinicalTrialsSource:
                     raw={
                         "overall_status": status.get("overallStatus"),
                         "conditions": protocol.get("conditionsModule", {}).get("conditions", []),
+                        "peer_review_status": "not_applicable",
                     },
                 )
             )
