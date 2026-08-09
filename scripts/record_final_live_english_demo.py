@@ -242,9 +242,12 @@ def run() -> dict:
         require_message_locale(page, assistant_id, "en")
         report["checks"].append("safe_clinical_orientation_completed")
 
+        before_action = latest_assistant_message(page)
         send_chat(page, "Open my results.")
-        page.wait_for_timeout(1800)
-        require(page.locator("#view-results").evaluate("node => node.classList.contains('is-active')"), "chat Health OS command did not open Results")
+        action_reply = wait_for_assistant_after(page, str(before_action.get("id") or ""), timeout_s=35.0)
+        action = (action_reply.get("metadata") or {}).get("ui_action") or {}
+        require(action.get("type") == "open_view" and action.get("view") == "results", f"chat command did not emit allowlisted Results ui_action: {action_reply.get('metadata')}")
+        page.wait_for_function("document.getElementById('view-results')?.classList.contains('is-active') === true", timeout=15_000)
         report["checks"].append("chat_health_os_open_results")
         overlay(page, "Chat is the operating surface", "A safe workspace command becomes an allowlisted UI action. Gemini cannot invent arbitrary selectors or silently perform destructive actions.", 6)
         clear_overlay(page)
