@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from healthia_one.models import ChatMessage
 from healthia_one.orchestrator import respond
 from healthia_one.patient_control import maybe_control_response
 from healthia_one.service import seed_state
@@ -79,6 +80,30 @@ def test_past_tense_upload_narration_is_not_mistaken_for_file_picker_command() -
         item.id == response.mission.id and item.mission_type == "result_explanation"
         for item in state.missions
     )
+
+
+def test_explicit_result_explanation_outranks_stale_treatment_context() -> None:
+    state = seed_state()
+    state.messages.append(
+        ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content="We were reviewing your treatment.",
+            metadata={"action_target": "treatment", "mission_type": "medication_management"},
+        )
+    )
+
+    response = respond(
+        state,
+        "Explain the result synthetic-final-lab.pdf I just uploaded and confirm that it was saved with the original file.",
+    )
+
+    assert response.mission is not None
+    assert response.mission.mission_type == "result_explanation"
+    assert response.message.metadata["action_target"] == "results"
+    assert response.message.metadata["mission_type"] == "result_explanation"
+    assert response.message.mission_id == response.mission.id
+    assert any(item.id == response.mission.id for item in state.missions)
 
 
 def test_chat_can_navigate_profile_and_devices() -> None:
