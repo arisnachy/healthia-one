@@ -1,4 +1,5 @@
 from healthia_one.models import FamilyCondition, FamilyMember
+from healthia_one.opportunity_integration import _resource_location
 from healthia_one.orchestrator import respond
 from healthia_one.service import seed_state
 
@@ -26,6 +27,18 @@ def test_urgent_safety_outranks_financial_assistance_in_same_turn():
 
     assert response.message.metadata.get("opportunity_autopilot") is not True
     assert str(response.message.risk_level) in {"urgent", "priority"}
+
+
+def test_resource_search_never_treats_locale_as_residence():
+    state = seed_state()
+    state.profile.locale = "es-DO"
+    state.profile.address = ""
+
+    location = _resource_location(state)
+
+    assert location["country"] == ""
+    assert location["region"] == ""
+    assert location["locality"] == ""
 
 
 def test_chat_can_request_family_support_without_hidden_model_spend_in_local_mode():
