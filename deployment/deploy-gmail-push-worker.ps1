@@ -103,7 +103,7 @@ Run-Gcloud @(
     "--cpu", "1",
     "--command", "uvicorn",
     "--args", "healthia_one.gmail_push_worker:app,--host,0.0.0.0,--port,8080",
-    "--set-env-vars", "HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_GMAIL_PUBSUB_TOPIC=$fullTopic"
+    "--set-env-vars", "GOOGLE_CLOUD_PROJECT=$ProjectId,HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_GMAIL_PUBSUB_TOPIC=$fullTopic"
 )
 
 $serviceUrl = gcloud run services describe $ServiceName --project $ProjectId --region $Region --format="value(status.url)"
