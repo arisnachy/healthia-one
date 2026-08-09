@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import unicodedata
 
 from healthia_one.autopilot_claims import build_event_claim_store
+from healthia_one.autopilot_events import build_event_outbox_store, stable_event_id
 from healthia_one.autopilot_receipts import build_autopilot_receipt_store
 from healthia_one.autopilot_runtime import AutopilotEvent, OpportunityAutopilot
 from healthia_one.config import settings
@@ -21,6 +23,7 @@ def _normalize(value: str) -> str:
 _STORE = build_opportunity_store(settings)
 _CLAIMS = build_event_claim_store(settings)
 _RECEIPTS = build_autopilot_receipt_store(settings)
+_OUTBOX = build_event_outbox_store(settings)
 _SCIENTIFIC = ScientificRadar()
 _RESOURCE = GroundedResourceRadar(
     settings,
@@ -91,6 +94,35 @@ def _resource_location(state: PatientState) -> dict[str, str]:
         "region": "",
         "locality": str(state.profile.address or "")[:220],
     }
+
+
+def enqueue_event(
+    state: PatientState,
+    event_type: str,
+    *,
+    dedupe_key: str,
+    subject_id: str = "",
+    condition: str = "",
+    payload: dict | None = None,
+) -> AutopilotEvent:
+    """Persist one patient event without performing network/model work.
+
+    Firestore mode writes a top-level outbox document shaped for a private
+    Eventarc document-created trigger. Local Memory/JSON modes remain inert until
+    an explicit worker/test consumes the record.
+    """
+    normalized_payload = payload or {}
+    key_material = json.dumps(normalized_payload, sort_keys=True, ensure_ascii=False, default=str)
+    event = AutopilotEvent(
+        id=stable_event_id(state.profile.id, event_type, f"{dedupe_key}|{key_material}"),
+        patient_id=state.profile.id,
+        event_type=event_type,
+        subject_id=subject_id,
+        condition=condition,
+        payload=normalized_payload,
+    )
+    _OUTBOX.put(event)
+    return event
 
 
 def _explicit_science_refresh(text: str) -> bool:
@@ -204,3 +236,7 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse | None:
 
 def autopilot() -> OpportunityAutopilot:
     return _AUTOPILOT
+
+
+def outbox():
+    return _OUTBOX
