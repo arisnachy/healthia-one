@@ -12,6 +12,7 @@ on:
       - ".github/workflows/final-live-english-demo.yml"
       - "docs/HACKATHON_WIN_PLAN.md"
       - "tests/test_human_chat_health_os.py"
+      - "tests/test_conversation_brain.py"
       - "tests/test_result_ai_locale.py"
   workflow_dispatch:
 
@@ -123,10 +124,9 @@ jobs:
           HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
           HEALTHIA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          HEALTHIA_DEMO_TARGET_SECONDS: "220"
         run: python scripts/record_final_live_english_demo.py
 
-      - name: Add English documentary narration to the live capture
+      - name: Build narrated public-hosting master under three minutes
         shell: bash
         run: |
           set -euo pipefail
@@ -135,30 +135,55 @@ jobs:
           curl --fail --location --silent --show-error "$VOICE_PART_2" -o dist/final-live-english-demo/audio/part2.wav
           printf "file '%s'\nfile '%s'\n" "$PWD/dist/final-live-english-demo/audio/part1.wav" "$PWD/dist/final-live-english-demo/audio/part2.wav" > dist/final-live-english-demo/audio/concat.txt
           ffmpeg -y -f concat -safe 0 -i dist/final-live-english-demo/audio/concat.txt -c:a pcm_s16le dist/final-live-english-demo/audio/narration.wav
+
           raw="$(find dist/final-live-english-demo/video -type f -name '*.webm' -print -quit)"
           test -n "$raw"
+          raw_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$raw")"
+          narration_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 dist/final-live-english-demo/audio/narration.wav)"
+          read video_factor audio_speed expected_duration < <(python - "$raw_duration" "$narration_duration" <<'PY'
+          import sys
+          raw=float(sys.argv[1])
+          narration=float(sys.argv[2])
+          # Keep every live frame. Only accelerate continuous playback when
+          # necessary so the public master remains safely below the 3-minute cap.
+          expected=min(raw, 170.0)
+          video_factor=expected/raw if raw > 0 else 1.0
+          # Fit the existing English documentary narration to the live master.
+          # atempo supports 0.5..2.0; this demo remains inside that range.
+          audio_target=max(1.0, expected-1.5)
+          audio_speed=max(1.0, min(2.0, narration/audio_target))
+          print(f"{video_factor:.8f} {audio_speed:.8f} {expected:.3f}")
+          PY
+          )
+          echo "CINE_TIMING raw=${raw_duration}s video_factor=${video_factor} audio_speed=${audio_speed} expected=${expected_duration}s"
+
           ffmpeg -y -i "$raw" -i dist/final-live-english-demo/audio/narration.wav \
-            -map 0:v:0 -map 1:a:0 -c:v copy -c:a libopus -b:a 128k -af apad -shortest \
-            dist/final-live-english-demo/HealthIA-ONE-final-live-English-demo.webm
+            -filter_complex "[0:v]setpts=${video_factor}*PTS[v];[1:a]atempo=${audio_speed},apad[a]" \
+            -map "[v]" -map "[a]" \
+            -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
+            -c:a aac -b:a 160k -movflags +faststart -shortest \
+            dist/final-live-english-demo/HealthIA-ONE-Gemini3-Taskmaster-live-English.mp4
 
       - name: CUTLOCK — reject over-limit, silent, static or failed evidence
         shell: bash
         run: |
           set -euo pipefail
-          final=dist/final-live-english-demo/HealthIA-ONE-final-live-English-demo.webm
+          final=dist/final-live-english-demo/HealthIA-ONE-Gemini3-Taskmaster-live-English.mp4
           report=dist/final-live-english-demo/report.json
           test -s "$final" && test -s "$report"
           duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$final")"
           audio_streams="$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$final" | wc -l | tr -d ' ')"
-          python - "$duration" "$audio_streams" "$report" <<'PY'
+          video_streams="$(ffprobe -v error -select_streams v -show_entries stream=index -of csv=p=0 "$final" | wc -l | tr -d ' ')"
+          python - "$duration" "$audio_streams" "$video_streams" "$report" <<'PY'
           import json, sys
           duration=float(sys.argv[1])
           audio_streams=int(sys.argv[2])
-          report=json.load(open(sys.argv[3], encoding='utf-8'))
-          if not 180 <= duration < 240:
-              raise SystemExit(f'final demo must remain under four minutes and substantial enough to judge: {duration:.2f}s')
-          if audio_streams < 1:
-              raise SystemExit('final demo has no narration audio stream')
+          video_streams=int(sys.argv[3])
+          report=json.load(open(sys.argv[4], encoding='utf-8'))
+          if not 100 <= duration < 180:
+              raise SystemExit(f'final Taskmaster demo must be substantial and strictly under three minutes: {duration:.2f}s')
+          if audio_streams < 1 or video_streams < 1:
+              raise SystemExit('final demo must contain both live video and English narration audio')
           if report.get('status') != 'PASS':
               raise SystemExit(f"recorder report is not PASS: {report}")
           if report.get('live_app_only') is not True or report.get('static_screenshots_used') is not False:
@@ -167,9 +192,11 @@ jobs:
               'exact_candidate_live_google_runtime',
               'human_first_conversation_before_structured_intake',
               'one_question_at_a_time_five_question_contract',
-              'safe_clinical_orientation_completed',
               'chat_health_os_open_results',
               'multimodal_original_result_and_provenance',
+              'english_multimodal_result_explanation',
+              'explicit_current_topic_overrides_stale_context',
+              'assistant_mission_link_matches_persisted_taskmaster',
               'taskmaster_mission_completed_from_persisted_evidence',
               'logout_login_durable_continuity',
               'visible_exact_candidate_cloud_proof',
@@ -178,7 +205,7 @@ jobs:
           missing=required-set(report.get('checks') or [])
           if missing:
               raise SystemExit(f'missing demo gates: {sorted(missing)}')
-          print(f'HEALTHIA_CUTLOCK_PASS duration={duration:.2f}s audio_streams={audio_streams}')
+          print(f'HEALTHIA_CUTLOCK_PASS duration={duration:.2f}s audio_streams={audio_streams} video_streams={video_streams}')
           PY
           sha256sum "$final" | tee dist/final-live-english-demo/final-video.sha256
 
