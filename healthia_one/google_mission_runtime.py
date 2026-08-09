@@ -40,7 +40,7 @@ class MissionState(StrEnum):
     AWAITING_EXTERNAL_EVENT = "awaiting_external_event"
     SLOT_OFFERED = "slot_offered"
     SCHEDULING = "scheduling"
-    FOLLOWUP_CREATED = "followup_created"
+    FOLLOWUP_AUTHORIZATION_PENDING = "followup_authorization_pending"
     COMPLETED = "completed"
     BLOCKED = "blocked"
     FAILED = "failed"
@@ -135,6 +135,7 @@ class FirestoreMissionStore:
 
     def __init__(self, project: str | None = None) -> None:
         from google.cloud import firestore
+
         self.client = firestore.Client(project=project)
 
     def _doc(self, patient_id: str, mission_id: str):
@@ -457,10 +458,7 @@ class GoogleHealthMissionCoordinator:
             if task_receipt.status == "completed" and task_receipt.resource_id:
                 mission.task_ids.append(task_receipt.resource_id)
             elif task_receipt.status == "blocked":
-                # Calendar is already a real external outcome. Do not call the
-                # whole mission failed because an optional follow-up task still
-                # needs its separate exact authorization.
-                mission.state = MissionState.FOLLOWUP_CREATED
+                mission.state = MissionState.FOLLOWUP_AUTHORIZATION_PENDING
                 mission.record(
                     "tasks.authorization_pending",
                     "Appointment is booked; optional follow-up task still requires its own exact authorization.",
