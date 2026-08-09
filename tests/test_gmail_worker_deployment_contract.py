@@ -3,6 +3,7 @@ from pathlib import Path
 
 SCRIPT = Path("deployment/deploy-gmail-push-worker.ps1").read_text(encoding="utf-8")
 WORKER = Path("healthia_one/gmail_push_worker.py").read_text(encoding="utf-8")
+LIVE_PROOF = Path(".github/workflows/google-cloud-live-proof.yml").read_text(encoding="utf-8")
 
 
 def test_gmail_worker_deploy_is_private_and_never_enables_apis_silently():
@@ -20,6 +21,12 @@ def test_gmail_topic_and_push_identity_match_google_authenticated_push_contract(
     assert "--push-auth-token-audience" in SCRIPT
     assert "roles/run.invoker" in SCRIPT
     assert "/events/gmail-push" in SCRIPT
+
+
+def test_cloud_project_is_injected_into_production_and_live_proof_worker_runtime():
+    assert "GOOGLE_CLOUD_PROJECT=$ProjectId" in SCRIPT
+    assert "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}" in LIVE_PROOF
+    assert "GOOGLE_CLOUD_PROJECT is required for Gmail push worker" in WORKER
 
 
 def test_watch_renewal_uses_private_scheduler_oidc_not_mailbox_polling():
