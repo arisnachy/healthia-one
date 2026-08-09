@@ -19,6 +19,7 @@ class GoogleOAuthConnection(BaseModel):
     id: str = Field(default_factory=lambda: new_id("gconn"))
     patient_id: str
     google_account: str
+    google_subject: str = ""
     granted_scopes: list[str] = Field(default_factory=list)
     secret_version_resource: str
     enabled: bool = True
