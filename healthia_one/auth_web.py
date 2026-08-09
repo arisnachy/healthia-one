@@ -68,7 +68,7 @@ def install_patient_auth(
             public = path.startswith("/assets/") or path in public_exact
             if settings.auth_required and principal is None and not public:
                 if path == "/":
-                    return RedirectResponse("/", status_code=303)
+                    return RedirectResponse("/login", status_code=303)
                 if path.startswith("/api/"):
                     return JSONResponse(
                         status_code=401,
