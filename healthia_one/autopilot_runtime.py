@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from healthia_one.autopilot_claims import EventClaimStore, MemoryEventClaimStore
+from healthia_one.autopilot_receipts import AutopilotReceipt, AutopilotReceiptStore
 from healthia_one.models import PatientState, new_id
 from healthia_one.opportunity_autopilot import (
     ApplicationPacket,
@@ -115,8 +117,10 @@ def _interrupt_score(discovery: Discovery) -> float:
 class OpportunityAutopilot:
     """Durable event-to-opportunity engine.
 
-    Network/model work is opt-in per run. Event claiming, watch-topic derivation,
-    deduplication, eligibility checks and application prefill are deterministic.
+    A leased patient-scoped claim is acquired before work starts. The claim is
+    completed only after state and optional public receipt persistence succeed.
+    Exceptions mark the claim FAILED, so a redelivery can retry instead of being
+    silently discarded. Model/network work remains explicit per run.
     """
 
     def __init__(
@@ -125,10 +129,14 @@ class OpportunityAutopilot:
         *,
         scientific_radar: ScientificRadar | None = None,
         resource_radar: GroundedResourceRadar | None = None,
+        claim_store: EventClaimStore | None = None,
+        receipt_store: AutopilotReceiptStore | None = None,
     ) -> None:
         self.store = store
         self.scientific_radar = scientific_radar
         self.resource_radar = resource_radar
+        self.claim_store = claim_store or MemoryEventClaimStore()
+        self.receipt_store = receipt_store
 
     def load(self, patient_id: str) -> OpportunityVault:
         return self.store.load(patient_id)
@@ -143,40 +151,41 @@ class OpportunityAutopilot:
         topics.sort(key=lambda item: (item.relation != "self", item.created_at))
         return topics[:4]
 
-    def process(
+    def _save_receipt(self, event: AutopilotEvent, claim_id: str, report: AutopilotRunReport) -> None:
+        if self.receipt_store is None:
+            return
+        receipt = AutopilotReceipt(
+            id=claim_id,
+            patient_id=event.patient_id,
+            event_id=event.id,
+            event_type=event.event_type,
+            status="completed",
+            cost_class=report.cost_class,
+            actions=[item.model_dump(mode="json") for item in report.actions],
+            discovery_ids=list(report.discoveries_added),
+            program_ids=list(report.programs_added),
+            application_ids=list(report.applications_updated),
+        )
+        self.receipt_store.save(receipt)
+
+    def _process_claimed(
         self,
         state: PatientState,
         event: AutopilotEvent,
         *,
-        allow_scientific_network: bool = False,
-        allow_paid_resource_search: bool = False,
+        claim_id: str,
+        claim_attempt: int,
+        allow_scientific_network: bool,
+        allow_paid_resource_search: bool,
     ) -> AutopilotRunReport:
-        if event.patient_id != state.profile.id:
-            raise PermissionError("Autopilot event patient does not match authorized patient state.")
-
         vault = self.store.load(event.patient_id)
         sync_watch_topics(vault, state)
-        key = event_key(event)
         report = AutopilotRunReport(event_id=event.id)
-
-        if key in vault.processed_event_keys:
-            report.duplicate = True
-            report.actions.append(
-                AutopilotAction(
-                    action="claim_event",
-                    status="skipped",
-                    reason="Idempotency key was already processed.",
-                )
-            )
-            report.snapshot = opportunity_snapshot(vault)
-            return report
-
-        vault.processed_event_keys.append(key)
         report.actions.append(
             AutopilotAction(
                 action="claim_event",
                 status="completed",
-                reason="Event claimed exactly once for this patient vault.",
+                reason=f"Durable event claim acquired (attempt {claim_attempt}).",
             )
         )
 
@@ -262,7 +271,7 @@ class OpportunityAutopilot:
                     AutopilotAction(
                         action="prepare_application",
                         status="blocked",
-                        reason="Program is not present in the patient's verified opportunity vault.",
+                        reason="Program is not present in the patient's opportunity vault.",
                     )
                 )
             else:
@@ -282,9 +291,74 @@ class OpportunityAutopilot:
                     )
                 )
 
+        # Compatibility index only. The authoritative idempotency state is the
+        # leased claim store and this marker is written only after work succeeds.
+        if claim_id not in vault.processed_event_keys:
+            vault.processed_event_keys.append(claim_id)
         self.store.save(vault)
         report.snapshot = opportunity_snapshot(vault)
+        self._save_receipt(event, claim_id, report)
+        self.claim_store.complete(event.patient_id, claim_id)
         return report
+
+    def process(
+        self,
+        state: PatientState,
+        event: AutopilotEvent,
+        *,
+        allow_scientific_network: bool = False,
+        allow_paid_resource_search: bool = False,
+    ) -> AutopilotRunReport:
+        if event.patient_id != state.profile.id:
+            raise PermissionError("Autopilot event patient does not match authorized patient state.")
+
+        claim_id = event_key(event)
+        claim_result = self.claim_store.claim(
+            claim_id=claim_id,
+            patient_id=event.patient_id,
+            event_id=event.id,
+            event_type=event.event_type,
+        )
+        if claim_result.duplicate_completed:
+            vault = self.store.load(event.patient_id)
+            return AutopilotRunReport(
+                event_id=event.id,
+                duplicate=True,
+                actions=[
+                    AutopilotAction(
+                        action="claim_event",
+                        status="skipped",
+                        reason="Durable claim already completed; redelivery has no side effects.",
+                    )
+                ],
+                snapshot=opportunity_snapshot(vault),
+            )
+        if claim_result.busy:
+            vault = self.store.load(event.patient_id)
+            return AutopilotRunReport(
+                event_id=event.id,
+                actions=[
+                    AutopilotAction(
+                        action="claim_event",
+                        status="blocked",
+                        reason="Another worker currently owns an unexpired lease for this event.",
+                    )
+                ],
+                snapshot=opportunity_snapshot(vault),
+            )
+
+        try:
+            return self._process_claimed(
+                state,
+                event,
+                claim_id=claim_id,
+                claim_attempt=claim_result.claim.attempts,
+                allow_scientific_network=allow_scientific_network,
+                allow_paid_resource_search=allow_paid_resource_search,
+            )
+        except Exception as exc:
+            self.claim_store.fail(event.patient_id, claim_id, f"{type(exc).__name__}: {exc}")
+            raise
 
     def next_notice(self, patient_id: str, *, minimum_interrupt_score: float = 0.72) -> Discovery | None:
         vault = self.store.load(patient_id)
@@ -322,3 +396,8 @@ class OpportunityAutopilot:
         vault = self.store.load(state.profile.id)
         packet_id = report.applications_updated[-1]
         return next(item for item in vault.applications if item.id == packet_id)
+
+    def recent_receipts(self, patient_id: str, *, limit: int = 20) -> list[AutopilotReceipt]:
+        if self.receipt_store is None:
+            return []
+        return self.receipt_store.list_recent(patient_id, limit=limit)
