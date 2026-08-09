@@ -193,8 +193,6 @@ class PubMedSource:
                     abstract=abstract[:8000],
                     published_at=_parse_date(date_value),
                     evidence_tier=tier,
-                    # PubMed indexing/publication type is useful provenance but
-                    # does not, by itself, prove that peer review occurred.
                     peer_reviewed=False,
                     official=True,
                     source_claims=[abstract[:1200]] if abstract else [],
@@ -255,7 +253,6 @@ class EuropePmcSource:
                     abstract=abstract[:8000],
                     published_at=published,
                     evidence_tier=EvidenceTier.PREPRINT if is_preprint else tier,
-                    # "not a preprint" is not equivalent to confirmed peer review.
                     peer_reviewed=False,
                     official=True,
                     source_claims=[abstract[:1200]] if abstract else [],
@@ -458,7 +455,12 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 
 class GroundedResourceRadar:
-    """Optional paid layer. It is disabled unless explicitly enabled by the caller."""
+    """Optional paid discovery layer.
+
+    Google Search grounding may discover a program candidate, but requirements
+    extracted by the model are deliberately marked UNKNOWN until a separate
+    source/form verification step confirms them. Discovery is not eligibility.
+    """
 
     def __init__(
         self,
@@ -498,9 +500,9 @@ class GroundedResourceRadar:
             "requirements": [
                 "Use current web information.",
                 "Prefer government, public-health, academic, or established nonprofit sources.",
-                "Do not claim eligibility; only extract explicit requirements.",
+                "Do not claim eligibility; only extract candidate requirements for later source verification.",
                 "Return only programs with a direct source URL.",
-                "Do not infer income, disability certification, citizenship, or diagnosis.",
+                "Do not infer income, disability certification, citizenship, residence, or diagnosis.",
                 "Return JSON with a programs array.",
             ],
             "program_schema": {
@@ -548,15 +550,33 @@ class GroundedResourceRadar:
             for index, requirement in enumerate(raw.get("requirements") or []):
                 if not isinstance(requirement, dict):
                     continue
-                rule_type = str(requirement.get("type") or "unknown")
+                extracted_type = str(requirement.get("type") or "unknown")
                 requirements.append(
                     {
                         "key": f"req_{index + 1}",
                         "label": str(requirement.get("label") or f"Requirement {index + 1}"),
-                        "rule": {"type": rule_type, "value": requirement.get("value")},
+                        "rule": {
+                            "type": "unknown",
+                            "value": requirement.get("value"),
+                            "extracted_type": extracted_type,
+                            "source_verification_required": True,
+                        },
                         "required": True,
                     }
                 )
+            # Even when the model returns no explicit requirements, keep a
+            # fail-closed verification blocker before eligibility/submission.
+            requirements.append(
+                {
+                    "key": "source_verification",
+                    "label": "Verify official program requirements against the source/form",
+                    "rule": {
+                        "type": "unknown",
+                        "source_verification_required": True,
+                    },
+                    "required": True,
+                }
+            )
             required_documents = []
             for index, document in enumerate(raw.get("required_documents") or []):
                 if not isinstance(document, dict):
