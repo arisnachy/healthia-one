@@ -111,12 +111,15 @@ jobs:
             if [[ "$fcm_status" == "400" && "$fcm_error_status" == "INVALID_ARGUMENT" && "$fcm_error_code" == "INVALID_ARGUMENT" ]]; then
               echo "- LIVE AUTH PASS: FCM accepted authentication and rejected the intentionally invalid registration token as INVALID_ARGUMENT." >> "$out"
               echo "- Delivery: impossible by construction; no real device token was used." >> "$out"
-              rm -f "$fcm_body"
+            elif [[ "$fcm_status" == "403" && "$fcm_error_status" == "PERMISSION_DENIED" ]]; then
+              echo "- BLOCKED_IAM: FCM API is enabled, but the CI proof identity lacks permission to send." >> "$out"
+              echo "- Delivery: none; the probe used an intentionally invalid registration token." >> "$out"
             else
-              echo "- FAIL: expected authenticated invalid-token rejection; got HTTP ${fcm_status:-none}, status ${fcm_error_status:-none}, FCM code ${fcm_error_code:-none}." >> "$out"
+              echo "- FAIL: unexpected FCM response; got HTTP ${fcm_status:-none}, status ${fcm_error_status:-none}, FCM code ${fcm_error_code:-none}." >> "$out"
               rm -f "$fcm_body"
               exit 1
             fi
+            rm -f "$fcm_body"
           else
             echo "- BLOCKED: fcm.googleapis.com is not enabled." >> "$out"
           fi
@@ -164,7 +167,7 @@ jobs:
 
           echo "## Human/external promotion gates" >> "$out"
           echo "- Gmail real mailbox: requires patient OAuth/refresh secret and granted scopes." >> "$out"
-          echo "- FCM real delivery: requires a real HealthIA device registration token." >> "$out"
+          echo "- FCM real delivery: requires a runtime identity with FCM send permission plus a real HealthIA device registration token." >> "$out"
           echo "- Veo real generation: requires explicit cost/authorization gate and private GCS output resource." >> "$out"
           echo "- No patient-specific content was sent by this workflow." >> "$out"
 
