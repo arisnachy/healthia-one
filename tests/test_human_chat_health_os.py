@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from healthia_one.language import bind_requested_locale, reset_requested_locale
 from healthia_one.models import ChatMessage
 from healthia_one.orchestrator import respond
 from healthia_one.patient_control import maybe_control_response
@@ -104,6 +105,31 @@ def test_explicit_result_explanation_outranks_stale_treatment_context() -> None:
     assert response.message.metadata["mission_type"] == "result_explanation"
     assert response.message.mission_id == response.mission.id
     assert any(item.id == response.mission.id for item in state.missions)
+
+
+def test_english_request_localizes_durable_mission_copy() -> None:
+    token = bind_requested_locale("en-US")
+    try:
+        state = seed_state()
+        clinical = respond(
+            state,
+            "I have burning pain when I urinate since yesterday and I want to discuss a health problem.",
+        )
+        assert clinical.mission is not None
+        assert clinical.mission.title == "Understand the current health problem and guide the next step"
+        assert clinical.mission.next_action == "Answer the adaptive questions generated for this case"
+
+        result = respond(
+            state,
+            "Explain the result I just uploaded and confirm that it was saved with the original file.",
+        )
+        assert result.mission is not None
+        assert result.mission.title == "Understand a health result"
+        assert result.mission.next_action == "Upload the result you want to review"
+        assert all("Comprender" not in item.title for item in state.missions)
+        assert all("Cargar el resultado" not in item.next_action for item in state.missions)
+    finally:
+        reset_requested_locale(token)
 
 
 def test_chat_can_navigate_profile_and_devices() -> None:
