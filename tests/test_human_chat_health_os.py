@@ -61,6 +61,17 @@ def test_chat_can_open_result_upload_picker() -> None:
     }
 
 
+def test_chat_can_navigate_profile_and_devices() -> None:
+    state = seed_state()
+    profile = respond(state, "Abre mi perfil")
+    devices = respond(state, "Muéstrame mis dispositivos")
+
+    assert profile.message.metadata["ui_action"] == {"type": "open_view", "view": "profile"}
+    assert devices.message.metadata["ui_action"] == {"type": "open_view", "view": "devices"}
+    assert "clinical_interview" not in profile.message.metadata
+    assert "clinical_interview" not in devices.message.metadata
+
+
 def test_privacy_control_response_exposes_health_os_action() -> None:
     state = seed_state()
     response = maybe_control_response(state, "Abre privacidad y permisos")
