@@ -2,21 +2,13 @@ name: HealthIA ONE verification
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
-
-concurrency:
-  group: healthia-verification-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   verify:
     runs-on: ubuntu-22.04
-    timeout-minutes: 48
-    env:
-      HEALTHIA_LLM_BACKEND: mock
-      HEALTHIA_STORE_BACKEND: memory
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,50 +23,54 @@ jobs:
       - name: Run pytest with diagnostic evidence
         shell: bash
         run: |
-          mkdir -p dist/ci-diagnostics
-          set -o pipefail
-          python -m pytest -x -vv 2>&1 | tee dist/ci-diagnostics/pytest.log
+          set +e
+          python -m pytest -q 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          echo "exit_code=$status" > pytest-exit.txt
+          exit "$status"
       - name: Upload pytest diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-pytest-diagnostics
-          path: dist/ci-diagnostics/pytest.log
+          name: HealthIA-pytest-diagnostic
+          path: |
+            pytest.log
+            pytest-exit.txt
           if-no-files-found: warn
           retention-days: 7
       - name: Full system verification
-        run: python scripts/full_system_check.py
+        run: python scripts/verify_full_system.py
       - name: KIRA DialogBench multi-turn context gate
-        run: python scripts/dialogbench.py
+        run: python scripts/kira_dialogbench.py
       - name: Upload KIRA DialogBench evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: HealthIA-KIRA-DialogBench
-          path: dist/dialogbench
+          path: dist/kira-dialogbench
           if-no-files-found: warn
           retention-days: 30
       - name: Install Chromium for browser verification
         run: python -m playwright install --with-deps chromium
       - name: Browser clinical end-to-end verification
-        run: python scripts/browser_smoke.py
+        run: python scripts/browser_clinical_e2e.py
       - name: Upload browser verification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-browser-smoke
-          path: dist/browser-smoke
+          name: HealthIA-browser-clinical-e2e
+          path: dist/browser-clinical-e2e
           if-no-files-found: warn
           retention-days: 30
       - name: LAB OMEGA core full-window functional laboratory
         shell: bash
-        run: timeout 180s python scripts/lab_omega.py
+        run: timeout 240s python scripts/lab_omega_core.py
       - name: Upload LAB OMEGA core evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-LAB-OMEGA
-          path: dist/lab-omega
+          name: HealthIA-LAB-OMEGA-core
+          path: dist/lab-omega-core
           if-no-files-found: warn
           retention-days: 30
       - name: LAB OMEGA secondary windows and state-changing functions
@@ -126,6 +122,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-autopilot-worker.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-autopilot-schedules.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-gmail-push-worker.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/configure-google-oauth.ps1")) | Out-Null
       - name: Build verified release archive
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
       - name: Verify release archive
