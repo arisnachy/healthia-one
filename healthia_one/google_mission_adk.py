@@ -47,9 +47,14 @@ class GoogleMissionToolFacade:
 
     def _result(self, mission, *, summary: str = "", data: dict[str, Any] | None = None) -> dict:
         state = str(mission.state)
-        requires_authorization = mission.state == MissionState.AWAITING_AUTHORIZATION
+        requires_authorization = mission.state in {
+            MissionState.AWAITING_AUTHORIZATION,
+            MissionState.FOLLOWUP_AUTHORIZATION_PENDING,
+        }
         authorization_kind = ""
-        if requires_authorization:
+        if mission.state == MissionState.FOLLOWUP_AUTHORIZATION_PENDING:
+            authorization_kind = "create_followup_task"
+        elif mission.state == MissionState.AWAITING_AUTHORIZATION:
             if mission.selected_slot is not None:
                 authorization_kind = "finalize_selected_appointment"
             elif mission.provider_email:
@@ -63,7 +68,7 @@ class GoogleMissionToolFacade:
             MissionState.AWAITING_EXTERNAL_EVENT: "wait_for_event_driven_reply",
             MissionState.SLOT_OFFERED: "patient_selects_offered_slot",
             MissionState.SCHEDULING: "wait_for_calendar_receipt",
-            MissionState.FOLLOWUP_CREATED: "inspect_followup_state",
+            MissionState.FOLLOWUP_AUTHORIZATION_PENDING: "request_followup_task_authorization",
             MissionState.COMPLETED: "mission_complete",
             MissionState.BLOCKED: "explain_blocker_or_choose_alternative",
             MissionState.FAILED: "inspect_failure_before_retry",
