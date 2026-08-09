@@ -10,6 +10,7 @@ from healthia_one.auth import AccountManager, AuthError, bind_principal, current
 from healthia_one.config import Settings
 from healthia_one.google_constellation_api import build_google_constellation_router
 from healthia_one.google_constellation_singleton import get_google_constellation_service
+from healthia_one.google_oauth_web import build_google_oauth_browser_flow, build_google_oauth_router
 from healthia_one.language import bind_requested_locale, current_requested_locale, reset_requested_locale
 from healthia_one.opportunity_api import build_opportunity_router
 from healthia_one.service import HealthIAService
@@ -151,5 +152,16 @@ def install_patient_auth(
     constellation = get_google_constellation_service(settings)
     app.state.google_constellation = constellation
     app.include_router(build_google_constellation_router(constellation))
+
+    # OAuth readiness is safe to mount even when credentials have not been
+    # provisioned: the flow reports configuration presence and /connect fails
+    # closed. Connect/callback/disconnect remain behind the same patient session
+    # boundary above; no OAuth route is added to public_exact.
+    google_oauth_flow = build_google_oauth_browser_flow(
+        settings,
+        constellation.runtime.oauth_connection_store,
+    )
+    app.state.google_oauth_flow = google_oauth_flow
+    app.include_router(build_google_oauth_router(google_oauth_flow, settings))
 
     return manager
