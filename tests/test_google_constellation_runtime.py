@@ -1,7 +1,15 @@
 from healthia_one.config import Settings
-from healthia_one.google_constellation import GrantBundle, GoogleAction
+from healthia_one.google_constellation import GrantBundle, GoogleAction, GoogleActionRequest
 from healthia_one.google_constellation_runtime import build_google_constellation_service
+from healthia_one.google_constellation_store import build_action_intent_key
 from healthia_one.google_mission_runtime import GoogleHealthMission, MissionKind
+
+
+MAIL_PAYLOAD = {
+    "to": ["center@example.org"],
+    "subject": "Appointment",
+    "body": "Please advise.",
+}
 
 
 def test_memory_runtime_builds_without_cloud_credentials_or_secret_manager_access(monkeypatch):
@@ -19,6 +27,7 @@ def test_memory_runtime_builds_without_cloud_credentials_or_secret_manager_acces
         "patient_demo",
         mission.id,
         GoogleAction.GMAIL_SEND,
+        payload=MAIL_PAYLOAD,
         ttl_minutes=5,
     )
 
@@ -27,6 +36,15 @@ def test_memory_runtime_builds_without_cloud_credentials_or_secret_manager_acces
     assert persisted is not None
     assert persisted.mission_id == mission.id
     assert persisted.action == GoogleAction.GMAIL_SEND
+    expected_intent = build_action_intent_key(
+        GoogleActionRequest(
+            patient_id="patient_demo",
+            mission_id=mission.id,
+            action=GoogleAction.GMAIL_SEND,
+            payload=MAIL_PAYLOAD,
+        )
+    )
+    assert persisted.intent_key == expected_intent
     loaded = service.load_mission("patient_demo", mission.id)
     assert loaded.action_authorizations[str(GoogleAction.GMAIL_SEND)] == authorization.id
 
@@ -38,7 +56,12 @@ def test_authorization_cannot_be_created_for_another_patients_mission(monkeypatc
     service.coordinator.store.save(mission)
 
     try:
-        service.authorize("patient_b", mission.id, GoogleAction.GMAIL_SEND)
+        service.authorize(
+            "patient_b",
+            mission.id,
+            GoogleAction.GMAIL_SEND,
+            payload=MAIL_PAYLOAD,
+        )
         assert False, "foreign patient authorization should fail"
     except KeyError:
         pass
