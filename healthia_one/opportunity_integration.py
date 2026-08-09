@@ -11,6 +11,7 @@ from healthia_one.config import settings
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
 from healthia_one.opportunity_autopilot import sync_watch_topics
 from healthia_one.opportunity_chat import OpportunityChatController
+from healthia_one.opportunity_permissions import build_radar_permission_store
 from healthia_one.opportunity_store import build_opportunity_store
 from healthia_one.research_radar import GroundedResourceRadar, ScientificRadar, SourceFetchError
 
@@ -24,6 +25,7 @@ _STORE = build_opportunity_store(settings)
 _CLAIMS = build_event_claim_store(settings)
 _RECEIPTS = build_autopilot_receipt_store(settings)
 _OUTBOX = build_event_outbox_store(settings)
+_PERMISSIONS = build_radar_permission_store(settings)
 _SCIENTIFIC = ScientificRadar()
 _RESOURCE = GroundedResourceRadar(
     settings,
@@ -78,6 +80,84 @@ def _chat_response(result, *, metadata: dict | None = None) -> ChatResponse:
             author="HealthIA",
             content=result.content,
             metadata=payload,
+        )
+    )
+
+
+def _permission_response(state: PatientState, patient_text: str) -> ChatResponse | None:
+    normalized = _normalize(patient_text)
+    permissions = _PERMISSIONS.load(state.profile.id)
+    action = ""
+
+    enable_science = (
+        "activa el radar cientifico",
+        "activar radar cientifico",
+        "quiero recibir novedades cientificas",
+        "vigila investigaciones sobre mi salud",
+        "enable scientific radar",
+    )
+    disable_science = (
+        "desactiva el radar cientifico",
+        "desactivar radar cientifico",
+        "no vigiles investigaciones",
+        "disable scientific radar",
+    )
+    enable_resources = (
+        "activa el radar de ayudas",
+        "activar radar de ayudas",
+        "vigila ayudas y recursos",
+        "enable assistance radar",
+    )
+    disable_resources = (
+        "desactiva el radar de ayudas",
+        "desactivar radar de ayudas",
+        "no vigiles ayudas",
+        "disable assistance radar",
+    )
+
+    if any(phrase in normalized for phrase in enable_science):
+        permissions.scientific_enabled = True
+        action = "scientific_radar_enabled"
+    elif any(phrase in normalized for phrase in disable_science):
+        permissions.scientific_enabled = False
+        action = "scientific_radar_disabled"
+    elif any(phrase in normalized for phrase in enable_resources):
+        permissions.resource_enabled = True
+        action = "resource_radar_enabled"
+    elif any(phrase in normalized for phrase in disable_resources):
+        permissions.resource_enabled = False
+        action = "resource_radar_disabled"
+    else:
+        return None
+
+    _PERMISSIONS.save(permissions)
+    if action == "scientific_radar_enabled":
+        content = (
+            "Activé el radar científico autónomo. Revisará sólo tus temas de salud/familia autorizados y guardará "
+            "las novedades relevantes sin convertir cada publicación en una alerta. Puedes desactivarlo desde este chat."
+        )
+    elif action == "scientific_radar_disabled":
+        content = "Desactivé el radar científico autónomo. Las búsquedas que tú pidas manualmente seguirán disponibles."
+    elif action == "resource_radar_enabled":
+        content = (
+            "Activé el radar autónomo de ayudas y recursos. La búsqueda web seguirá limitada por el guard de costos y "
+            "ningún programa se tratará como elegible hasta verificar requisitos oficiales. Puedes desactivarlo aquí."
+        )
+    else:
+        content = "Desactivé el radar autónomo de ayudas y recursos. Puedes seguir pidiéndome búsquedas manuales cuando quieras."
+
+    return ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=content,
+            metadata={
+                "opportunity_autopilot": True,
+                "radar_permission_action": action,
+                "scientific_radar_enabled": permissions.scientific_enabled,
+                "resource_radar_enabled": permissions.resource_enabled,
+                "action_target": "discoveries",
+            },
         )
     )
 
@@ -146,12 +226,12 @@ def _related_to_notice(text: str, condition: str, subject_label: str) -> bool:
 
 
 def respond(state: PatientState, patient_text: str) -> ChatResponse | None:
-    """Handle Opportunity Autopilot intents before generic clinical routing.
-
-    Cheap scientific refreshes can occur on an explicit patient request. Paid
-    grounded resource search is still gated by the existing cost-start setting.
-    """
+    """Handle Opportunity Autopilot intents before generic clinical routing."""
     _sync_topics(state)
+
+    permission_response = _permission_response(state, patient_text)
+    if permission_response is not None:
+        return permission_response
 
     result = _CONTROLLER.handle(state, patient_text)
     if result is not None:
@@ -240,3 +320,7 @@ def autopilot() -> OpportunityAutopilot:
 
 def outbox():
     return _OUTBOX
+
+
+def radar_permissions():
+    return _PERMISSIONS
