@@ -34,6 +34,11 @@ from healthia_one.google_constellation_store import (
     build_action_intent_key,
     utc_now,
 )
+from healthia_one.google_mission_actions import (
+    calendar_event_payload,
+    followup_task_payload,
+    provider_contact_payload,
+)
 from healthia_one.google_mission_runtime import (
     FirestoreMissionStore,
     GoogleHealthMission,
@@ -113,6 +118,60 @@ class GoogleConstellationService:
         self.runtime.authorization_store.save(authorization)
         self.coordinator.authorize_action(mission, action, authorization.id)
         return authorization
+
+    def authorize_provider_contact(
+        self,
+        patient_id: str,
+        mission_id: str,
+        *,
+        subject: str,
+        body: str,
+        ttl_minutes: int = 15,
+    ) -> GoogleActionAuthorization:
+        mission = self.load_mission(patient_id, mission_id)
+        payload = provider_contact_payload(mission, subject=subject, body=body)
+        return self.authorize(
+            patient_id,
+            mission_id,
+            GoogleAction.GMAIL_SEND,
+            payload=payload,
+            ttl_minutes=ttl_minutes,
+            one_time=True,
+        )
+
+    def authorize_appointment_finalize(
+        self,
+        patient_id: str,
+        mission_id: str,
+        *,
+        summary: str,
+        time_zone: str,
+        include_followup_task: bool = True,
+        ttl_minutes: int = 15,
+    ) -> list[GoogleActionAuthorization]:
+        mission = self.load_mission(patient_id, mission_id)
+        authorizations = [
+            self.authorize(
+                patient_id,
+                mission_id,
+                GoogleAction.CALENDAR_CREATE_EVENT,
+                payload=calendar_event_payload(mission, summary=summary, time_zone=time_zone),
+                ttl_minutes=ttl_minutes,
+                one_time=True,
+            )
+        ]
+        if include_followup_task:
+            authorizations.append(
+                self.authorize(
+                    patient_id,
+                    mission_id,
+                    GoogleAction.TASKS_CREATE,
+                    payload=followup_task_payload(mission),
+                    ttl_minutes=ttl_minutes,
+                    one_time=True,
+                )
+            )
+        return authorizations
 
     def revoke_grant(self, patient_id: str, grant_id: str) -> GoogleGrant:
         grants = self.runtime.grant_store.list_for_patient(patient_id)
