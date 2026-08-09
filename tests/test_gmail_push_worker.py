@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from healthia_one.gmail_mission_events import GmailWatchState
 from healthia_one.gmail_push_worker import create_app
+from healthia_one.google_oauth_credentials import GoogleOAuthConnection
 
 
 def envelope(email="patient@example.com", history="101"):
@@ -18,10 +19,25 @@ class Watches:
     def __init__(self, watch=None):
         self.watch = watch
         self.lookups = []
+        self.saved = []
 
     def load_by_email(self, email):
         self.lookups.append(email)
         return self.watch
+
+    def save(self, watch):
+        self.watch = watch
+        self.saved.append(watch)
+
+
+class Connections:
+    def __init__(self, connection=None):
+        self.connection = connection
+        self.loads = []
+
+    def load(self, patient_id):
+        self.loads.append(patient_id)
+        return self.connection
 
 
 class Bridge:
@@ -59,11 +75,27 @@ class Manager:
         )
 
 
-def runtime(watch=None, *, bridge=None, manager=None):
+def enabled_connection(mailbox="patient@example.com"):
+    return GoogleOAuthConnection(
+        patient_id="patient_demo",
+        google_account=mailbox,
+        google_subject="subject-1",
+        granted_scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        secret_version_resource="projects/test/secrets/oauth/versions/1",
+        enabled=True,
+    )
+
+
+def runtime(watch=None, *, bridge=None, manager=None, connection=None):
+    watch_store = Watches(watch)
+    connections = Connections(connection if connection is not None else enabled_connection())
     return SimpleNamespace(
-        watch_store=Watches(watch),
+        watch_store=watch_store,
         bridge=bridge or Bridge(),
         watch_manager=manager or Manager(),
+        constellation=SimpleNamespace(
+            runtime=SimpleNamespace(oauth_connection_store=connections)
+        ),
     )
 
 
@@ -87,6 +119,7 @@ def test_unknown_mailbox_is_acked_without_reading_gmail_history():
     assert response.status_code == 204
     assert worker.watch_store.lookups == ["unknown@example.com"]
     assert worker.bridge.calls == []
+    assert worker.constellation.runtime.oauth_connection_store.loads == []
 
 
 def test_known_mailbox_routes_only_to_patient_bound_bridge():
@@ -104,6 +137,40 @@ def test_known_mailbox_routes_only_to_patient_bound_bridge():
     assert response.status_code == 200
     assert response.json() == {"status": "processed", "resumed_missions": ["gmission_1"], "count": 1}
     assert bridge.calls[0][0] == "patient_demo"
+
+
+def test_disconnected_account_acks_delayed_push_disables_watch_and_never_reads_history():
+    watch = GmailWatchState(
+        patient_id="patient_demo",
+        email_address="patient@example.com",
+        history_id="100",
+    )
+    connection = enabled_connection()
+    connection.enabled = False
+    bridge = Bridge()
+    worker = runtime(watch=watch, bridge=bridge, connection=connection)
+    client = TestClient(create_app(lambda: worker))
+
+    response = client.post("/events/gmail-push", json=envelope())
+    assert response.status_code == 204
+    assert worker.watch_store.saved[-1].enabled is False
+    assert bridge.calls == []
+
+
+def test_changed_google_account_acks_old_mailbox_push_without_history_read():
+    watch = GmailWatchState(
+        patient_id="patient_demo",
+        email_address="old@example.com",
+        history_id="100",
+    )
+    bridge = Bridge()
+    worker = runtime(watch=watch, bridge=bridge, connection=enabled_connection("new@example.com"))
+    client = TestClient(create_app(lambda: worker))
+
+    response = client.post("/events/gmail-push", json=envelope(email="old@example.com"))
+    assert response.status_code == 204
+    assert worker.watch_store.saved[-1].enabled is False
+    assert bridge.calls == []
 
 
 def test_transient_bridge_failure_returns_retryable_503_without_sensitive_detail():
