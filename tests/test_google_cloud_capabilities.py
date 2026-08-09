@@ -25,10 +25,33 @@ def test_constellation_registers_requested_google_health_layers_without_claiming
         "forms_followup",
         "wallet_credentials",
         "education_video",
+        "youtube_public",
+        "gemini_live_voice",
     }
     assert expected <= set(CAPABILITIES)
-    assert CAPABILITIES["document_ai"].status == CapabilityStatus.CONTRACT
-    assert CAPABILITIES["healthcare_interop"].status == CapabilityStatus.CONTRACT
+
+    # A guarded connector slice may be executable without pretending the external
+    # Google resource has been provisioned or live-proven.
+    for capability_id in (
+        "document_ai",
+        "healthcare_interop",
+        "speech_input",
+        "speech_output",
+        "fcm_notifications",
+        "education_video",
+    ):
+        assert CAPABILITIES[capability_id].status == CapabilityStatus.EXECUTABLE
+
+    # Adjacent products that were not implemented by those slices stay honest.
+    for capability_id in (
+        "vision_ocr",
+        "translation",
+        "firebase_auth",
+        "youtube_public",
+        "gemini_live_voice",
+    ):
+        assert CAPABILITIES[capability_id].status == CapabilityStatus.CONTRACT
+
     assert CAPABILITIES["bigquery_population"].status == CapabilityStatus.DEFERRED
     assert CAPABILITIES["cloud_storage"].status == CapabilityStatus.EXISTING
     assert CAPABILITIES["places_navigation"].status == CapabilityStatus.EXECUTABLE
@@ -37,7 +60,9 @@ def test_constellation_registers_requested_google_health_layers_without_claiming
 def test_manifest_has_truth_boundary_and_counts_every_capability_once():
     manifest = capability_manifest()
     assert sum(manifest["counts"].values()) == len(CAPABILITIES)
-    assert "must never be described as a live integration" in manifest["truth_boundary"]
+    boundary = manifest["truth_boundary"].lower()
+    assert "does not imply live external configuration" in boundary
+    assert "must never be described as live integrations" in boundary
 
 
 def test_contacts_and_population_capabilities_keep_separate_safety_boundaries():
