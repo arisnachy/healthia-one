@@ -10,6 +10,7 @@ from healthia_one.clinical_intake import (
 )
 from healthia_one.conversation_brain import build_frame
 from healthia_one.deterministic_router import respond as deterministic_respond
+from healthia_one.google_mission_chat import should_consider_google_mission
 from healthia_one.language import current_requested_locale, normalize_locale
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
 from healthia_one.opportunity_integration import respond as opportunity_respond
@@ -243,12 +244,38 @@ def _human_clinical_conversation(state: PatientState, patient_text: str) -> Chat
     )
 
 
+def _google_mission_candidate_response(state: PatientState, patient_text: str) -> ChatResponse:
+    frame = build_frame(state, patient_text)
+    english = bool(re.search(r"\b(find|get me|where can i|contact|book)\b", patient_text.lower()))
+    content = (
+        "I can handle this as a real-world health navigation mission. I will use only location and account access you explicitly provide, and any external write action will still require the exact authorization boundary."
+        if english else
+        "Puedo manejar esto como una misión real de navegación sanitaria. Usaré sólo la ubicación y los accesos que autorices explícitamente, y cualquier acción externa seguirá detenida por la autorización exacta correspondiente."
+    )
+    response = ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=content,
+            metadata={
+                "google_mission_candidate": True,
+                "google_mission_routing_order": "after_deterministic_safety_before_opportunity",
+                "health_os_control": True,
+            },
+        )
+    )
+    return _attach_conversation_frame(response, frame)
+
+
 def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
     safety = assess_text(patient_text)
     if safety.must_stop_normal_flow:
         frame = build_frame(state, patient_text)
         response = deterministic_respond(state, _router_text(patient_text))
         return _attach_conversation_frame(response, frame)
+
+    if should_consider_google_mission(state, patient_text):
+        return _google_mission_candidate_response(state, patient_text)
 
     opportunity_response = opportunity_respond(state, patient_text)
     if opportunity_response is not None:
