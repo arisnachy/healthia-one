@@ -403,6 +403,23 @@ class OfficialProgramVerifier:
                 )
             )
 
+        if not requirements:
+            # An official page that does not expose clear requirements is not
+            # proof that a program has no requirements. Preserve that uncertainty
+            # as one blocking UNKNOWN so downstream eligibility can never treat
+            # silence as automatic qualification.
+            requirements.append(
+                VerifiedRequirement(
+                    key="verified_req_unknown",
+                    label="Official source does not state clear machine-verifiable eligibility requirements",
+                    rule_type="unknown",
+                    value=None,
+                    required=True,
+                    evidence_excerpt="",
+                    source_verification_required=True,
+                )
+            )
+
         documents = []
         for index, raw in enumerate(payload.get("required_documents") or []):
             if not isinstance(raw, dict):
