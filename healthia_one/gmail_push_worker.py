@@ -114,6 +114,18 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
             # An authorized Pub/Sub topic can carry mailbox events that no longer
             # belong to an active HealthIA watch. Ack without querying Gmail.
             return Response(status_code=204)
+
+        # A delayed push can arrive after the patient disconnects Google or
+        # switches accounts. Disable the stale cursor and ACK without reading
+        # Gmail/Secret Manager. This makes disconnect immediate from HealthIA's
+        # perspective even if Gmail/PubSub delivery was already in flight.
+        connection = worker.constellation.runtime.oauth_connection_store.load(watch.patient_id)
+        mailbox = str(connection.google_account or "").strip().lower() if connection else ""
+        if connection is None or not connection.enabled or mailbox != watch.email_address.strip().lower():
+            watch.enabled = False
+            worker.watch_store.save(watch)
+            return Response(status_code=204)
+
         try:
             missions = worker.bridge.process(watch.patient_id, envelope)
         except PermissionError:
