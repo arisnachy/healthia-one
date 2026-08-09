@@ -53,6 +53,9 @@ EN_FOLLOWUPS = (
     ("ordinal", "The second one."),
     ("ellipsis", "And tomorrow?"),
     ("correction", "No, I meant that."),
+    # This deliberately contains an explicit current topic plus a pronoun. It
+    # proves that "result" wins over stale context instead of being overwritten
+    # by the previous action target.
     ("spanglish", "Y that result, is it bad?"),
 )
 
@@ -102,12 +105,22 @@ def evaluate(scenario: Scenario) -> dict:
     frame = build_frame(state, scenario.patient_text)
     routing_lower = frame.routing_text.lower()
     canonical_hint = ACTION_HINTS[scenario.prior_target].lower()
-    resolved = (
-        frame.ambiguous_reference
-        and "contextual_routing_hint:" in routing_lower
-        and canonical_hint in routing_lower
-        and frame.last_action_target == scenario.prior_target
-    )
+    if scenario.category == "spanglish":
+        # The current turn explicitly names a result. Even though "that"/"it"
+        # makes the sentence referential, the old topic must not be injected.
+        resolved = (
+            frame.ambiguous_reference
+            and "result" in scenario.patient_text.lower()
+            and "contextual_routing_hint:" not in routing_lower
+            and frame.last_action_target == scenario.prior_target
+        )
+    else:
+        resolved = (
+            frame.ambiguous_reference
+            and "contextual_routing_hint:" in routing_lower
+            and canonical_hint in routing_lower
+            and frame.last_action_target == scenario.prior_target
+        )
     preserves_user_words = frame.routing_text.startswith(scenario.patient_text)
     bounded_memory = len(frame.recent_turns) <= 12 and sum(len(item["content"]) for item in frame.recent_turns) <= 6000
     return {
@@ -134,7 +147,10 @@ def run() -> dict:
         "categories": sorted({item["category"] for item in results}),
         "locales": sorted({item["locale"] for item in results}),
         "failures": [item for item in results if item not in passed][:30],
-        "claim_boundary": "This deterministic gate proves context/reference continuity, not perfect human conversation. Live-model naturalness remains a separate submission gate.",
+        "claim_boundary": (
+            "This deterministic gate proves bounded context/reference continuity plus explicit-current-topic precedence, "
+            "not perfect human conversation. Live-model naturalness remains a separate submission gate."
+        ),
     }
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
