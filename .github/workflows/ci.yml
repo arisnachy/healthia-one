@@ -123,6 +123,9 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw "deployment/run-local-secure.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-cloud-demo.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/remove-cloud-demo.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/deploy-autopilot-worker.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/deploy-autopilot-schedules.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/deploy-gmail-push-worker.ps1")) | Out-Null
       - name: Build verified release archive
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
       - name: Verify release archive
