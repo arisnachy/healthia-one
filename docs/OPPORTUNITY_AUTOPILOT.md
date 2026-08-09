@@ -29,7 +29,7 @@ The zero-LLM retrieval layer uses official APIs:
 - Europe PMC REST search.
 - ClinicalTrials.gov API v2.
 
-The source adapter stores identifiers, URL, publisher, publication date, evidence tier, peer-review/preprint status where available, and source text/abstract used by later appraisal.
+The source adapter stores identifiers, URL, publisher, publication date, evidence tier, preprint metadata where available, and source text/abstract used by later appraisal. PubMed/Europe PMC indexing is **not** treated as proof that peer review occurred; peer-review status stays conservative unless explicit evidence exists.
 
 A new publication does **not** change patient treatment. `therapeutic_comparison()` places cited source claims next to the recorded medication list and explicitly requires professional review. It never authorizes starting, stopping, substituting, or changing a dose.
 
@@ -52,7 +52,9 @@ A family condition can therefore drive caregiver/community research without bein
 
 Results must include a direct source URL and pass an official-domain allowlist before they enter the Opportunity Vault. The initial list favors government/public-health sources and can be expanded deliberately.
 
-The model is not allowed to infer eligibility facts such as income, disability certification, citizenship or diagnosis.
+A grounded search result is only a **program candidate**. Requirements extracted by the model are marked `unknown` with `source_verification_required=true`; they cannot produce a positive eligibility decision until a separate source/form verification step confirms them. The model is not allowed to infer income, disability certification, citizenship, residence or diagnosis.
+
+Locale is never treated as residence. Until a structured patient-confirmed country field exists, resource search receives only the free-text address explicitly entered by the patient, and country/region remain unknown.
 
 ## Eligibility and application workflow
 
@@ -63,7 +65,7 @@ An assistance program stores explicit requirements and required documents. Deter
 - unknown requirements;
 - missing documents.
 
-Unknown is never silently converted to eligible.
+Unknown is never silently converted to eligible. A display name is never substituted for legal name in an application packet.
 
 Application state:
 
@@ -78,7 +80,7 @@ DISCOVERED
   → COMPLETED
 ```
 
-`authorize_external_submission()` fails closed unless the patient reviewed the packet and no required field/document is missing. `record_submission_receipt()` refuses to mark a submission unless an external action was explicitly authorized and a durable receipt/reference exists.
+`authorize_external_submission()` fails closed unless the patient reviewed the packet and no required field/document is missing. `record_submission_receipt()` refuses to mark a submission unless an external action was explicitly authorized and a durable receipt/reference exists. No real external delivery adapter is claimed by this branch yet.
 
 ## Cost hierarchy
 
@@ -89,27 +91,56 @@ DISCOVERED
 5. Grounded web resource search: optional and explicitly bounded.
 6. Patient-facing synthesis/application help: only when a relevant item exists or the patient asks.
 
-The same scientific source can be processed once and matched to multiple authorized patient topics rather than paying to rediscover the same paper for every patient.
+A future global evidence cache can further reduce duplicate source retrieval across patients, but this branch does **not** claim that optimization until it is implemented and proven.
 
-## Event/idempotency contract
+## Event, crash-recovery and idempotency contract
 
-`OpportunityAutopilot` claims an event with a stable patient-scoped idempotency key. Re-delivery returns a duplicate report and does not repeat discovery, program or application side effects.
+`OpportunityAutopilot` uses a patient-scoped leased event claim. Memory, JSON and Firestore claim stores share the same state contract:
 
-The vault has Memory, JSON and Firestore implementations and lives separately from the canonical clinical `PatientState`, preserving the existing clinical-twin truth boundary.
+```text
+RUNNING (lease)
+  → COMPLETED
+  ↘ FAILED → retry / new lease
+```
+
+- `COMPLETED` redelivery is a duplicate and has no side effects.
+- An unexpired `RUNNING` lease blocks a concurrent worker.
+- An exception marks the claim `FAILED`, so the same event can retry instead of being lost.
+- In Firestore mode, claim acquisition runs transactionally.
+- Compatibility `processed_event_keys` are written only after successful work; they are not the authoritative claim boundary.
+
+Successful runs can persist a patient-scoped `AutopilotReceipt` containing only public execution evidence: event type, action/status/reason, cost class, and correlated discovery/program/application IDs. It never stores private reasoning or chain-of-thought.
+
+The Opportunity Vault, event claims and receipts each have patient-scoped persistence. They remain separate from the canonical clinical `PatientState`, preserving the existing clinical-twin truth boundary.
+
+## Patient-scoped API
+
+The authenticated HealthIA boundary now exposes `/api/opportunities` plus save/review/authorize actions. These routes are deliberately **not** in the public-route allowlist. The API returns the patient's watch topics, discoveries, program candidates, application packets and recent receipts.
+
+Authorization only moves a complete packet to `READY_TO_SUBMIT`; it explicitly reports that no external action happened. An email/portal submission may become `SUBMITTED` only after a real configured adapter returns a durable receipt.
 
 ## Chat-first controls
 
 `OpportunityChatController` handles patient intents such as:
 
-- “¿Qué hay nuevo?”
+- “¿Qué hay nuevo sobre mi salud?”
 - “¿Encontraste alguna ayuda económica?”
+- “Compáralo con mi medicación.”
 - “Completa el formulario de esa ayuda.”
-- “¿Qué documento falta?”
-- “Busca recursos.”
+- “¿Qué documento falta para la solicitud?”
+- “Busca ayudas para autismo.”
 - “No busques más sobre autismo.”
 
-The controller returns a structured action and optional `ui_action`; it does not require a separate autonomous-agent UI.
+Normal language such as “beneficios de caminar” or generic “¿qué falta?” is intentionally excluded so Opportunity Autopilot does not hijack ordinary conversation. Deterministic urgent safety is evaluated before opportunity routing.
 
 ## Current branch boundary
 
-This branch establishes the durable domain, scientific source adapters, resource-search gate, event runtime, application workflow and chat controller with deterministic tests. It intentionally does **not** merge directly to `main` or silently enable recurring/paid scans. Integration into the existing FastAPI/chat service and any scheduled Pub/Sub/Eventarc trigger must pass the normal HealthIA CI/LAB/JUDGE gates before promotion.
+This branch establishes the durable domain, scientific source adapters, resource-search gate, crash-retryable event runtime, patient-scoped claims/receipts, application workflow, authenticated opportunity API and chat controller with deterministic tests. It intentionally does **not** merge directly to `main` or silently enable recurring/paid scans.
+
+Still required before claiming the full autonomous Taskmaster loop:
+
+1. configure a private Cloud Run worker and Eventarc trigger with authenticated service identity;
+2. create a durable event source/outbox for clinically relevant state changes and/or scheduled discovery refresh;
+3. prove the exact deployed candidate survives redelivery/process replacement without duplicated side effects;
+4. add a judge-visible Discoveries/receipt surface without exposing private reasoning;
+5. implement and prove a real external delivery adapter before claiming that applications are submitted.
