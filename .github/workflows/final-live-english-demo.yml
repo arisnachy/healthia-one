@@ -147,9 +147,6 @@ jobs:
           narration=float(sys.argv[2])
           if raw <= 0 or narration <= 0:
               raise SystemExit('invalid live-video or narration duration')
-          # The recorder is intentionally fast. Slow the *continuous* capture so
-          # judges can read it while keeping all live frames. The existing English
-          # narration is accelerated moderately to the same master duration.
           target=min(150.0, max(125.0, raw*2.15))
           video_factor=target/raw
           audio_target=max(1.0, target-1.0)
@@ -161,12 +158,9 @@ jobs:
           )
           echo "CINE_TIMING raw=${raw_duration}s narration=${narration_duration}s target=${target}s video_factor=${video_factor} audio_speed=${audio_speed}"
 
-          # Two-pass media preparation avoids coupling atempo + infinite apad to
-          # video timestamps. This exact recipe is validated against a prior PASS
-          # live artifact before being used in CI.
           ffmpeg -hide_banner -loglevel error -y \
             -i "$base/audio/narration.wav" \
-            -af "atempo=${audio_speed},apad" -t "$target" \
+            -af "atempo=${audio_speed},loudnorm=I=-16:LRA=7:TP=-1.5,apad" -t "$target" \
             -c:a aac -b:a 160k "$base/master/narration-master.m4a"
 
           ffmpeg -hide_banner -loglevel error -y \
