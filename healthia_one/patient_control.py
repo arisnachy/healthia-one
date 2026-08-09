@@ -61,7 +61,12 @@ def maybe_control_response(state: PatientState, patient_text: str) -> ChatRespon
             risk_level=RiskLevel.INFO,
             mission_id=mission.id,
             agent_plan=plan,
-            metadata={"action_target": "control", "mission_type": mission.mission_type},
+            metadata={
+                "action_target": "control",
+                "mission_type": mission.mission_type,
+                "ui_action": {"type": "open_view", "view": "control"},
+                "health_os_control": True,
+            },
         ),
         mission=mission,
     )
