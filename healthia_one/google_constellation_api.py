@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from healthia_one.auth import current_patient_id
 from healthia_one.google_cloud_capabilities import capability_manifest
-from healthia_one.google_constellation import GrantBundle, GoogleAction
+from healthia_one.google_constellation import GrantBundle
 from healthia_one.google_constellation_runtime import GoogleConstellationService
 from healthia_one.google_mission_runtime import OfferedSlot
 
@@ -40,16 +40,13 @@ class FreeBusyRequest(BaseModel):
     time_zone: str = Field(min_length=1, max_length=100)
 
 
-class ActionAuthorizationRequest(BaseModel):
-    action: GoogleAction
-    payload: dict[str, Any]
-    ttl_minutes: int = Field(default=15, ge=1, le=1440)
-    one_time: bool = True
-
-
 class ContactProviderRequest(BaseModel):
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=10000)
+
+
+class AuthorizeContactRequest(ContactProviderRequest):
+    ttl_minutes: int = Field(default=15, ge=1, le=1440)
 
 
 class ChooseSlotRequest(BaseModel):
@@ -60,6 +57,10 @@ class FinalizeAppointmentRequest(BaseModel):
     summary: str = Field(default="Health appointment", min_length=1, max_length=220)
     time_zone: str = Field(min_length=1, max_length=100)
     create_followup_task: bool = True
+
+
+class AuthorizeFinalizeRequest(FinalizeAppointmentRequest):
+    ttl_minutes: int = Field(default=15, ge=1, le=1440)
 
 
 def _mission_payload(mission) -> dict:
@@ -174,25 +175,26 @@ def build_google_constellation_router(constellation: GoogleConstellationService)
             raise HTTPException(status_code=404, detail="Google health mission not found") from exc
         return _mission_payload(mission)
 
-    @router.post("/missions/{mission_id}/authorize")
-    async def authorize_action(mission_id: str, payload: ActionAuthorizationRequest) -> dict:
+    @router.post("/missions/{mission_id}/authorize-contact")
+    async def authorize_contact(mission_id: str, payload: AuthorizeContactRequest) -> dict:
         try:
-            authorization = constellation.authorize(
+            authorization = constellation.authorize_provider_contact(
                 patient_id(),
                 mission_id,
-                payload.action,
-                payload=payload.payload,
+                subject=payload.subject,
+                body=payload.body,
                 ttl_minutes=payload.ttl_minutes,
-                one_time=payload.one_time,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Google health mission not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
             "authorization": authorization.model_dump(mode="json"),
             "external_action_performed": False,
             "truth_boundary": (
-                "Authorization is bound to this exact patient + mission + action + payload fingerprint. "
-                "Changing any material action payload requires a new authorization; authorization is not an execution receipt."
+                "The patient authorized this exact provider destination + subject + body. "
+                "Changing the message requires a new authorization; this is not a send receipt."
             ),
         }
 
@@ -208,6 +210,8 @@ def build_google_constellation_router(constellation: GoogleConstellationService)
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Google health mission not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _mission_payload(mission)
 
     @router.post("/missions/{mission_id}/slot")
@@ -220,6 +224,30 @@ def build_google_constellation_router(constellation: GoogleConstellationService)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _mission_payload(mission)
+
+    @router.post("/missions/{mission_id}/authorize-finalize")
+    async def authorize_finalize(mission_id: str, payload: AuthorizeFinalizeRequest) -> dict:
+        try:
+            authorizations = constellation.authorize_appointment_finalize(
+                patient_id(),
+                mission_id,
+                summary=payload.summary,
+                time_zone=payload.time_zone,
+                include_followup_task=payload.create_followup_task,
+                ttl_minutes=payload.ttl_minutes,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Google health mission not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "authorizations": [item.model_dump(mode="json") for item in authorizations],
+            "external_action_performed": False,
+            "truth_boundary": (
+                "The patient authorized the exact selected slot/calendar event and, when requested, the exact follow-up task. "
+                "No Calendar or Tasks mutation has happened yet."
+            ),
+        }
 
     @router.post("/missions/{mission_id}/finalize")
     async def finalize(mission_id: str, payload: FinalizeAppointmentRequest) -> dict:
