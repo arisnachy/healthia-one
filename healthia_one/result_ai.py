@@ -7,21 +7,23 @@ from pathlib import Path
 from typing import Any
 
 from healthia_one.cost_guard import CostGuardBlocked
+from healthia_one.language import current_requested_locale, language_instruction, normalize_locale
 from healthia_one.models import HealthResult, PatientState, ResultItem
 
 
 RESULT_ANALYSIS_SYSTEM_INSTRUCTION = """
-Eres el analizador multimodal de resultados de HealthIA. Tu tarea es identificar qué tipo de evidencia clínica subió el paciente y extraer únicamente lo que es visible o legible en el archivo.
+You are HealthIA's multimodal clinical-result analyzer. Identify what kind of clinical evidence the patient uploaded and extract only what is visible or legible in the file.
 
-Reglas obligatorias:
-- No inventes texto, valores, medidas ni hallazgos que no puedas leer.
-- Separa observaciones del archivo de cualquier impresión o interpretación.
-- No prescribas ni cambies tratamientos.
-- No declares que un diagnóstico está confirmado por una imagen aislada.
-- Para radiología, ecografía, ECG y otros estudios, incluye limitaciones de calidad y recomienda revisión profesional cuando corresponda.
-- Para laboratorios, conserva valores, unidades, rangos y banderas exactamente cuando sean legibles.
-- Sé conciso: no repitas el mismo hallazgo en observations, findings, impression y patient_explanation.
-- Devuelve únicamente el objeto JSON solicitado por el esquema de salida; no uses Markdown ni texto exterior.
+Mandatory rules:
+- Never invent text, values, measurements, or findings that you cannot read.
+- Separate file observations from any impression or interpretation.
+- Do not prescribe or change treatment.
+- Do not claim that an isolated image confirms a diagnosis.
+- For radiology, ultrasound, ECG, and other studies, include relevant quality limitations and professional-review boundaries.
+- For laboratories, preserve legible values, units, reference ranges, and flags exactly.
+- Be concise: do not repeat the same fact across observations, findings, impression, and patient_explanation.
+- Preserve literal clinical labels from the source when useful, but write patient-facing explanatory prose in the requested response language.
+- Return only the JSON object required by the output schema; no Markdown and no surrounding text.
 """.strip()
 
 
@@ -107,6 +109,12 @@ PDF_SUFFIXES = {".pdf"}
 MULTIMODAL_TIMEOUT_SECONDS = 45
 
 
+def _result_locale(state: PatientState | None = None, analysis: dict[str, Any] | None = None) -> str:
+    explicit = str((analysis or {}).get("response_locale") or "").strip()
+    profile_locale = state.profile.locale if state is not None else None
+    return normalize_locale(explicit or current_requested_locale() or profile_locale, fallback="en")
+
+
 def infer_result_kind(filename: str, mime_type: str = "") -> str:
     name = Path(filename).name.lower()
     mime = str(mime_type or "").lower()
@@ -171,10 +179,12 @@ def _media_input(filename: str, mime_type: str, content: bytes) -> dict[str, str
 
 
 def _generate_analysis(responder, state: PatientState, filename: str, mime_type: str, content: bytes) -> dict[str, Any]:
+    response_locale = _result_locale(state)
     prompt = {
         "task": "identify_and_extract_uploaded_clinical_result",
         "filename": Path(filename).name,
         "hinted_kind": infer_result_kind(filename, mime_type),
+        "response_locale": response_locale,
         "patient_context": {
             "confirmed_conditions": state.profile.confirmed_conditions[:6],
             "allergies": state.profile.allergies[:6],
@@ -183,7 +193,7 @@ def _generate_analysis(responder, state: PatientState, filename: str, mime_type:
         "truth_boundary": "Use only what is visible or legible in this upload. Do not infer missing measurements.",
         "output_policy": (
             "Return a compact clinical extraction. Do not repeat facts across fields; omit optional fields "
-            "when they add no new information."
+            "when they add no new information. Patient-facing explanatory prose must follow response_locale."
         ),
     }
     generation_config: dict[str, Any] = {
@@ -206,14 +216,16 @@ def _generate_analysis(responder, state: PatientState, filename: str, mime_type:
             {"type": "text", "text": json.dumps(prompt, ensure_ascii=False)},
             _media_input(filename, mime_type, content),
         ],
-        system_instruction=RESULT_ANALYSIS_SYSTEM_INSTRUCTION,
+        system_instruction=f"{RESULT_ANALYSIS_SYSTEM_INSTRUCTION}\n\n{language_instruction(response_locale)}",
         generation_config=generation_config,
         store=False,
     )
     text = responder._interaction_text(interaction)
     if not text:
-        raise RuntimeError("Gemini devolvió un análisis multimodal vacío")
-    return responder._json_object(text)
+        raise RuntimeError("Gemini returned an empty multimodal analysis")
+    payload = responder._json_object(text)
+    payload["response_locale"] = response_locale
+    return payload
 
 
 def _multimodal_timeout_seconds(responder) -> int:
@@ -223,14 +235,23 @@ def _multimodal_timeout_seconds(responder) -> int:
 
 
 async def analyze_uploaded_result(responder, state: PatientState, filename: str, mime_type: str, content: bytes) -> dict[str, Any]:
+    locale = _result_locale(state)
     if not multimodal_supported(filename, mime_type):
-        return {"status": "unsupported", "detail": "El formato no está habilitado para análisis multimodal."}
+        return {
+            "status": "unsupported",
+            "detail": "This format is not enabled for multimodal analysis." if locale == "en" else "El formato no está habilitado para análisis multimodal.",
+            "response_locale": locale,
+        }
     if responder.settings.llm_backend != "gemini_api" or not responder.settings.adk_ready:
-        return {"status": "pending", "detail": "Gemini multimodal no está configurado en esta ejecución."}
+        return {
+            "status": "pending",
+            "detail": "Gemini multimodal is not configured for this run." if locale == "en" else "Gemini multimodal no está configurado en esta ejecución.",
+            "response_locale": locale,
+        }
     try:
         request_number = responder.cost_guard.authorize("multimodal_result_interpretation")
     except CostGuardBlocked as exc:
-        return {"status": "pending", "detail": str(exc), "cost_guard": responder.cost_guard.snapshot()}
+        return {"status": "pending", "detail": str(exc), "response_locale": locale, "cost_guard": responder.cost_guard.snapshot()}
     try:
         payload = await asyncio.wait_for(
             asyncio.to_thread(_generate_analysis, responder, state, filename, mime_type, content),
@@ -240,33 +261,38 @@ async def analyze_uploaded_result(responder, state: PatientState, filename: str,
         return {
             "status": "pending",
             "detail": f"{type(exc).__name__}: {exc}"[:500],
+            "response_locale": locale,
             "request_number": request_number,
             "cost_guard": responder.cost_guard.snapshot(),
         }
     payload["status"] = "parsed"
+    payload["response_locale"] = str(payload.get("response_locale") or locale)
     payload["request_number"] = request_number
     payload["cost_guard"] = responder.cost_guard.snapshot()
     return payload
 
 
 def apply_multimodal_analysis(result: HealthResult, analysis: dict[str, Any]) -> HealthResult:
+    locale = _result_locale(analysis=analysis)
     if analysis.get("status") != "parsed":
         result.status = "pending_multimodal"
-        detail = str(analysis.get("detail") or "Análisis multimodal pendiente.").strip()
+        detail = str(analysis.get("detail") or ("Multimodal analysis is pending." if locale == "en" else "Análisis multimodal pendiente.")).strip()
         result.explanation = (
-            "El archivo original quedó guardado. La interpretación multimodal todavía no se completó y HealthIA no inventará hallazgos. "
-            + detail
-        )
+            "The original file is saved. Multimodal interpretation has not completed yet, and HealthIA will not invent findings. "
+            if locale == "en"
+            else "El archivo original quedó guardado. La interpretación multimodal todavía no se completó y HealthIA no inventará hallazgos. "
+        ) + detail
         result.explained = False
         return result
 
-    panel = str(analysis.get("panel") or analysis.get("modality") or "Resultado multimodal").strip()
-    result.panel = panel[:220] or "Resultado multimodal"
+    panel_fallback = "Multimodal result" if locale == "en" else "Resultado multimodal"
+    panel = str(analysis.get("panel") or analysis.get("modality") or panel_fallback).strip()
+    result.panel = panel[:220] or panel_fallback
     items: list[ResultItem] = []
     for raw in analysis.get("observations") or []:
         if not isinstance(raw, dict):
             continue
-        name = str(raw.get("name") or "Observación").strip()
+        name = str(raw.get("name") or ("Observation" if locale == "en" else "Observación")).strip()
         value = raw.get("value", "")
         if value in (None, ""):
             continue
@@ -281,22 +307,30 @@ def apply_multimodal_analysis(result: HealthResult, analysis: dict[str, Any]) ->
         )
     for region in (analysis.get("anatomical_regions") or [])[:8]:
         if str(region).strip():
-            items.append(ResultItem(name="Región anatómica", value=str(region).strip()[:300]))
+            items.append(ResultItem(name="Anatomical region" if locale == "en" else "Región anatómica", value=str(region).strip()[:300]))
     for finding in (analysis.get("findings") or [])[:16]:
         if str(finding).strip():
-            items.append(ResultItem(name="Hallazgo", value=str(finding).strip()[:500]))
+            items.append(ResultItem(name="Finding" if locale == "en" else "Hallazgo", value=str(finding).strip()[:500]))
     impression = str(analysis.get("impression") or "").strip()
     if impression:
-        items.append(ResultItem(name="Impresión", value=impression[:700]))
+        items.append(ResultItem(name="Impression" if locale == "en" else "Impresión", value=impression[:700]))
     result.items = items
     explanation = str(analysis.get("patient_explanation") or "").strip()
     limitations = [str(item).strip() for item in analysis.get("limitations") or [] if str(item).strip()]
     lines = [explanation] if explanation else []
     if limitations:
-        lines.append("Limitaciones: " + "; ".join(limitations[:6]))
+        lines.append(("Limitations: " if locale == "en" else "Limitaciones: ") + "; ".join(limitations[:6]))
     if analysis.get("requires_professional_review", True):
-        lines.append("Este análisis organiza la evidencia subida y debe correlacionarse con el informe original y la evaluación profesional.")
-    result.explanation = "\n\n".join(lines) or "Resultado multimodal extraído sin explicación adicional."
+        lines.append(
+            "This analysis organizes the uploaded evidence and should be correlated with the original report and professional evaluation."
+            if locale == "en"
+            else "Este análisis organiza la evidencia subida y debe correlacionarse con el informe original y la evaluación profesional."
+        )
+    result.explanation = "\n\n".join(lines) or (
+        "Multimodal result extracted without an additional explanation."
+        if locale == "en"
+        else "Resultado multimodal extraído sin explicación adicional."
+    )
     result.status = "parsed"
     result.explained = True
     return result
