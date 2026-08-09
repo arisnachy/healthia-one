@@ -89,3 +89,20 @@ class GuardedGoogleActionExecutor:
                 self.authorization_store.consume(request.patient_id, authorization_id)
 
         return receipt, outcome
+
+
+class GuardedMissionExecutorAdapter:
+    """Mission-coordinator adapter that makes durable policy non-bypassable.
+
+    `GoogleHealthMissionCoordinator` historically accepts an executor whose
+    signature includes a caller-supplied `grants` list so deterministic unit
+    tests can stay simple. Production must not trust that list. This adapter
+    deliberately ignores it and reloads grants/authorizations/receipts through
+    `GuardedGoogleActionExecutor` on every action.
+    """
+
+    def __init__(self, guard: GuardedGoogleActionExecutor) -> None:
+        self.guard = guard
+
+    def execute(self, request: GoogleActionRequest, _untrusted_grants=None):
+        return self.guard.execute(request)
