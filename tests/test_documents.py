@@ -28,6 +28,11 @@ def test_document_upload_is_indexed_and_downloadable():
         download = client.get(f"/api/documents/{document['id']}/download")
         assert download.status_code == 200
         assert download.content == b"synthetic note"
+        assert download.headers["content-disposition"].startswith("attachment;")
+        preview = client.get(f"/api/documents/{document['id']}/download?inline=true")
+        assert preview.status_code == 200
+        assert preview.content == b"synthetic note"
+        assert preview.headers["content-disposition"].startswith("inline;")
 
 
 def test_chat_can_route_document_management():

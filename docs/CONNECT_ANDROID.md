@@ -60,16 +60,18 @@ En HealthIA ONE:
 1. Abre **Dispositivos**.
 2. Pulsa **Conectar teléfono o reloj**.
 3. Revisa la dirección LAN del servidor.
-4. Copia el código temporal de seis dígitos.
+4. Copia el código temporal de ocho dígitos.
 
-El código dura diez minutos y solo puede reclamarse una vez. El token final del dispositivo nunca se muestra en la web y el servidor conserva únicamente su hash.
+El código dura cinco minutos y solo puede reclamarse una vez. El token final del dispositivo nunca se muestra en la web. Es una credencial HMAC firmada y vinculada al paciente, conexión y dispositivo; no se persiste su hash. La desconexión marca la conexión como revocada y el backend rechaza nuevos lotes con esa credencial.
+
+La variante `debug` admite HTTP solo para pruebas sintéticas en una red local confiable. La variante de producción exige HTTPS y deshabilita tráfico en texto claro.
 
 ## 4. Vincular el teléfono
 
 En **HealthIA Android Bridge**:
 
 1. Escribe la dirección LAN del servidor HealthIA.
-2. Escribe el código de seis dígitos.
+2. Escribe el código temporal de ocho dígitos.
 3. Pulsa **Vincular con HealthIA**.
 4. Instala o actualiza Health Connect si la aplicación lo solicita.
 5. Pulsa **Autorizar datos en Health Connect**.

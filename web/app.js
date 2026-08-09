@@ -8,7 +8,7 @@ const i18n = window.HealthIAI18n;
 const tr = (key, vars = {}) => i18n?.t(key, vars) || key;
 const localeTag = () => i18n?.browserLocaleTag?.() || "en-US";
 
-const state = { data: null, currentView: "chat", dialogType: null };
+const state = { data: null, currentView: "chat", dialogType: null, resultProcessing: null };
 const refs = {
   shell: $("#app"), leftRail: $("#leftRail"), contextPanel: $("#contextPanel"),
   messageList: $("#messageList"), chatScroll: $("#chatScroll"), chatForm: $("#chatForm"),
@@ -17,12 +17,13 @@ const refs = {
   latestBp: $("#latestBp"), latestBpMeta: $("#latestBpMeta"), latestWeight: $("#latestWeight"),
   weightTrend: $("#weightTrend"), latestActivity: $("#latestActivity"), missionCount: $("#missionCount"),
   missionPreview: $("#missionPreview"), todayList: $("#todayList"), measurementList: $("#measurementList"),
-  resultList: $("#resultList"), missionList: $("#missionList"), dialog: $("#dataDialog"),
+  resultList: $("#resultList"), resultProcessing: $("#resultProcessing"), missionList: $("#missionList"), dialog: $("#dataDialog"),
   dataForm: $("#dataForm"), dialogTitle: $("#dialogTitle"), dialogFields: $("#dialogFields"),
   resultFile: $("#resultFile"), resultFilePage: $("#resultFilePage"), toast: $("#toast"),
   sendButton: $("#sendButton"), heroPatientName: $("#heroPatientName"), signalSummary: $("#signalSummary"),
   openMissionSummary: $("#openMissionSummary"), newConsultation: $("#newConsultation"), closeContext: $("#closeContext"),
-  expandLeft: $("#expandLeft")
+  expandLeft: $("#expandLeft"), originalPreviewDialog: $("#originalPreviewDialog"), originalPreviewTitle: $("#originalPreviewTitle"),
+  originalPreviewBody: $("#originalPreviewBody"), closeOriginalPreview: $("#closeOriginalPreview"), downloadOriginal: $("#downloadOriginal")
 };
 
 let refreshPromise = null;
@@ -51,6 +52,12 @@ function publicName(value) {
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
 }
+
+function healthiaAvatarSvg() { return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.2c.62 4.14 2.66 6.18 6.8 6.8-4.14.62-6.18 2.66-6.8 6.8-.62-4.14-2.66-6.18-6.8-6.8 4.14-.62 6.18-2.66 6.8-6.8Z"/><path d="M6.1 17.8h4.1l1.45-3.05 2.05 4.1 1.2-2.2h3"/></svg>'; }
+function resultCopy(key) { const es = i18n?.locale === "es"; return ({uploading:es ? "Protegiendo y cargando tu original" : "Protecting and uploading your original", reading:es ? "Leyendo lo disponible, sin inventar hallazgos" : "Reading what is available, without inventing findings", original:es ? "Ver original" : "View original", download:es ? "Descargar original" : "Download original", image:es ? "Vista previa de imagen" : "Image preview", pdf:es ? "Vista previa de PDF" : "PDF preview", unavailable:es ? "Este formato no tiene vista previa visual. Puedes abrir o descargar el original." : "This format has no visual preview. You can open or download the original."})[key]; }
+function documentUrl(document, inline = false) { return `/api/documents/${encodeURIComponent(document.id)}/download${inline ? "?inline=1" : ""}`; }
+function documentKind(document) { const mime = String(document?.mime_type || "").toLowerCase(), filename = String(document?.filename || "").toLowerCase(); if (mime.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(filename)) return "image"; return mime === "application/pdf" || filename.endsWith(".pdf") ? "pdf" : "other"; }
+function setResultProcessing(stage = null) { state.resultProcessing = stage; if (!refs.resultProcessing) return; const active = Boolean(stage); refs.resultProcessing.hidden = !active; refs.resultProcessing.innerHTML = active ? `<span class="processing-avatar">${healthiaAvatarSvg()}</span><div><strong>${escapeHtml(resultCopy(stage))}</strong><small>${escapeHtml(stage === "uploading" ? resultCopy("reading") : resultCopy("uploading"))}</small></div><span class="processing-dots" aria-hidden="true"><i></i><i></i><i></i></span>` : ""; [refs.resultFile, refs.resultFilePage].forEach(input => { if (input) input.disabled = active; }); }
 
 function renderMarkdown(raw) {
   const lines = String(raw ?? "").split(/\r?\n/);
@@ -108,7 +115,8 @@ function renderMessage(message) {
   article.dataset.risk = message.risk_level || "info";
   const avatar = document.createElement("div");
   avatar.className = "avatar";
-  avatar.textContent = message.role === "patient" ? "P" : "H1";
+  if (message.role === "patient") avatar.textContent = "P";
+  else { avatar.classList.add("healthia-avatar"); avatar.innerHTML = healthiaAvatarSvg(); }
   const content = document.createElement("div");
   content.className = "message-content";
   if (message.role !== "patient") {
@@ -133,8 +141,10 @@ function renderAll() {
   if (refs.signalSummary) refs.signalSummary.textContent = `${(data.profile.authorized_signals || []).length || 0} ${tr("app.active_signals")}`;
   if (refs.openMissionSummary) refs.openMissionSummary.textContent = data.missions.filter(item => !["completed","cancelled"].includes(item.status)).length;
   refs.messageList.replaceChildren();
-  const firstPatient = data.messages.findIndex(message => message.role === "patient");
-  const visibleMessages = firstPatient < 0 ? [] : data.messages.slice(firstPatient).filter(message => !message.metadata?.proactive);
+  const lastConversationBoundary = data.messages.reduce((last, message, index) => message.metadata?.conversation_boundary === "new_consultation" ? index : last, -1);
+  const activeConversation = lastConversationBoundary >= 0 ? data.messages.slice(lastConversationBoundary + 1) : data.messages;
+  const firstPatient = activeConversation.findIndex(message => message.role === "patient");
+  const visibleMessages = firstPatient < 0 ? [] : activeConversation.slice(firstPatient).filter(message => !message.metadata?.proactive);
   visibleMessages.forEach(renderMessage);
   refs.chatScroll.classList.toggle("entry-mode", firstPatient < 0);
   refs.chatScroll.classList.toggle("conversation-started", firstPatient >= 0);
@@ -181,11 +191,30 @@ function renderResults() {
   const documents = state.data.documents || [];
   refs.resultList.innerHTML = state.data.results.slice().reverse().map(result => {
     const original = documents.find(document => document.related_result_id === result.id);
+    const kind = documentKind(original);
+    const preview = original && kind === "image"
+      ? `<button type="button" class="result-preview result-image-preview" data-open-original="${escapeHtml(original.id)}" aria-label="${escapeHtml(resultCopy("image"))}: ${escapeHtml(original.filename)}"><img src="${documentUrl(original, true)}" alt="${escapeHtml(resultCopy("image"))}: ${escapeHtml(original.filename)}"></button>`
+      : original && kind === "pdf"
+        ? `<div class="result-preview result-pdf-preview"><iframe title="${escapeHtml(resultCopy("pdf"))}: ${escapeHtml(original.filename)}" loading="lazy" src="${documentUrl(original, true)}#toolbar=0&navpanes=0"></iframe><button type="button" data-open-original="${escapeHtml(original.id)}">${escapeHtml(resultCopy("original"))}</button></div>`
+        : "";
     const evidence = original
-      ? `<div class="result-evidence"><a href="/api/documents/${encodeURIComponent(original.id)}/download" target="_blank" rel="noopener">${escapeHtml(tr("app.original"))}</a><span>${escapeHtml(tr("app.twin_linked"))} · ${escapeHtml(original.status)}</span></div>`
+      ? `<div class="result-evidence"><button type="button" data-open-original="${escapeHtml(original.id)}">${escapeHtml(resultCopy("original"))}</button><a href="${documentUrl(original)}" download>${escapeHtml(resultCopy("download"))}</a><span>${escapeHtml(tr("app.twin_linked"))} · ${escapeHtml(original.status)}</span></div>`
       : `<div class="result-evidence"><span>${escapeHtml(tr("app.no_original"))}</span></div>`;
-    return `<article class="data-card" data-result-id="${escapeHtml(result.id)}"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} ${escapeHtml(tr("app.extracted"))}</p><div>${renderMarkdown(result.explanation)}</div>${evidence}</article>`;
+    return `<article class="data-card result-card" data-result-id="${escapeHtml(result.id)}"><header><h3>${escapeHtml(result.panel)}</h3><small>${escapeHtml(result.status)}</small></header><p>${escapeHtml(result.filename)} · ${result.items.length} ${escapeHtml(tr("app.extracted"))}</p>${preview}<div>${renderMarkdown(result.explanation)}</div>${evidence}</article>`;
   }).join("") || `<article class="data-card"><p>${escapeHtml(tr("app.no_results"))}</p></article>`;
+}
+
+function openOriginalPreview(documentId) {
+  const document = state.data?.documents?.find(item => item.id === documentId);
+  if (!document || !refs.originalPreviewDialog) return;
+  const kind = documentKind(document), inlineUrl = documentUrl(document, true);
+  refs.originalPreviewTitle.textContent = document.filename || resultCopy("original");
+  refs.downloadOriginal.href = documentUrl(document);
+  refs.downloadOriginal.textContent = resultCopy("download");
+  refs.originalPreviewBody.innerHTML = kind === "image"
+    ? `<img src="${inlineUrl}" alt="${escapeHtml(resultCopy("image"))}: ${escapeHtml(document.filename)}">`
+    : kind === "pdf" ? `<iframe title="${escapeHtml(resultCopy("pdf"))}: ${escapeHtml(document.filename)}" src="${inlineUrl}#toolbar=1&navpanes=0"></iframe>` : `<p>${escapeHtml(resultCopy("unavailable"))}</p>`;
+  refs.originalPreviewDialog.showModal();
 }
 
 function renderMissions() {
@@ -226,6 +255,7 @@ async function sendMessage(text) {
   refs.agentStatus.textContent = tr("app.analyzing");
   const patient = {id:`local_${Date.now()}`, role:"patient", author:state.data.profile.display_name, content:clean, created_at:new Date().toISOString(), risk_level:"info", agent_plan:[], metadata:{input_locale:responseLocale}};
   state.data.messages.push(patient); renderMessage(patient); refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+  let chatOutcome = "error";
   try {
     const response = await api("/api/chat", {method:"POST", headers:{"Content-Type":"application/json", "Accept-Language":responseLocale}, body:JSON.stringify({message:clean})});
     if (response.mission) {
@@ -233,22 +263,30 @@ async function sendMessage(text) {
       if (missionIndex >= 0) state.data.missions[missionIndex] = response.mission;
       else state.data.missions.push(response.mission);
     }
+    document.dispatchEvent(new CustomEvent("healthia:chat-settled", {detail:{outcome:"response"}}));
     state.data.messages.push(response.message); renderMessage(response.message); renderContext(); renderMissions();
+    chatOutcome = "response";
   } catch (error) { showToast(error.message); }
-  refs.agentStatus.textContent = tr("app.ready");
-  refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+  finally {
+    if (chatOutcome !== "response") document.dispatchEvent(new CustomEvent("healthia:chat-settled", {detail:{outcome:chatOutcome}}));
+    refs.agentStatus.textContent = tr("app.ready");
+    refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+  }
 }
 
 async function upload(file) {
   if (!file) return;
   const form = new FormData(); form.append("file", file);
+  setResultProcessing("uploading");
   refs.agentStatus.textContent = tr("app.uploading");
   try {
     const result = await api("/api/results/upload", {method:"POST", body:form});
+    setResultProcessing("reading");
     await refresh(true);
     setView("results");
     showToast(result.status === "parsed" ? tr("app.result_parsed") : tr("app.result_pending"));
   } catch (error) { showToast(error.message); }
+  setResultProcessing();
   refs.agentStatus.textContent = tr("app.ready");
 }
 
@@ -296,13 +334,18 @@ function connectEvents() {
 
 refs.chatForm.addEventListener("submit", event => { event.preventDefault(); sendMessage(refs.chatInput.value); });
 refs.chatInput.addEventListener("input", () => { refs.chatInput.style.height = "auto"; refs.chatInput.style.height = `${Math.min(refs.chatInput.scrollHeight,150)}px`; setSendState(); });
-refs.chatInput.addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); refs.chatForm.requestSubmit(); } });
+refs.chatInput.addEventListener("keydown", event => {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); refs.chatForm.requestSubmit(); }
+});
 $$('[data-prompt-en]').forEach(button => button.addEventListener("click", () => sendMessage(button.dataset[i18n?.locale === "es" ? "promptEs" : "promptEn"] || button.dataset.promptEn)));
 $$('[data-open]').forEach(button => button.addEventListener("click", () => setView(button.dataset.open)));
 $$('[data-dialog]').forEach(button => button.addEventListener("click", () => openDialog(button.dataset.dialog)));
 refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
 refs.resultFile.addEventListener("change", () => upload(refs.resultFile.files[0]));
 refs.resultFilePage.addEventListener("change", () => upload(refs.resultFilePage.files[0]));
+refs.resultList?.addEventListener("click", event => { const button = event.target.closest("[data-open-original]"); if (button) openOriginalPreview(button.dataset.openOriginal); });
+refs.closeOriginalPreview?.addEventListener("click", () => refs.originalPreviewDialog.close());
 refs.runCheck.addEventListener("click", async () => { refs.agentStatus.textContent = tr("app.reviewing"); const out = await api("/api/demo/tick", {method:"POST"}); await refresh(); refs.agentStatus.textContent = tr("app.ready"); showToast(out.created ? `${out.created} ${tr("app.new_count")}.` : tr("app.no_new")); });
 function syncLeftToggle() {
   const collapsed = refs.shell.classList.contains("left-collapsed");
@@ -322,7 +365,7 @@ $("#closeContext").addEventListener("click", () => { if (window.innerWidth <= 10
 $("#mobileMenu").addEventListener("click", () => refs.shell.classList.toggle("menu-open"));
 refs.newConsultation?.addEventListener("click", async event => {
   event.preventDefault(); refs.newConsultation.disabled = true;
-  try { await api("/api/demo/reset", {method:"POST"}); await refresh(true); setView("chat"); refs.chatInput.value = ""; refs.chatInput.style.height = "auto"; setSendState(); safeFocusComposer(); showToast(tr("app.new_consult")); }
+  try { await api("/api/consultations/new", {method:"POST"}); await refresh(true); setView("chat"); refs.chatInput.value = ""; refs.chatInput.style.height = "auto"; setSendState(); safeFocusComposer(); showToast(tr("app.new_consult")); }
   catch (error) { showToast(error.message); }
   finally { refs.newConsultation.disabled = false; }
 });

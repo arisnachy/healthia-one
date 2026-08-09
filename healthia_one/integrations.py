@@ -17,7 +17,7 @@ PROVIDERS: tuple[dict[str, Any], ...] = (
             "únicamente los registros autorizados al backend de HealthIA vinculado."
         ),
         "patient_step": (
-            "Instala HealthIA Bridge, escribe la dirección del backend y el código de seis dígitos, "
+            "Instala HealthIA Bridge, escribe la dirección del backend y el código temporal de ocho dígitos, "
             "y luego concede los permisos de Health Connect."
         ),
     },
@@ -25,13 +25,14 @@ PROVIDERS: tuple[dict[str, Any], ...] = (
         "id": "samsung_health_via_health_connect",
         "name": "Samsung Health / Galaxy Watch",
         "platform": "Samsung y Android",
-        "status": "implemented_via_health_connect",
+        "status": "available_via_health_connect_unverified_hardware",
         "connection_mode": "samsung_health_to_health_connect_to_healthia",
         "account_login": "samsung_credentials_remain_inside_samsung_health",
         "requires_native_app": True,
         "summary": (
             "Samsung Health puede escribir en Health Connect los datos consentidos del teléfono y dispositivos "
-            "Galaxy. El puente Android existente de HealthIA lee esos registros autorizados desde Health Connect."
+            "Galaxy. El puente Android de HealthIA puede leer esos registros autorizados desde Health Connect, "
+            "pero esta ruta todavía requiere una validación física documentada."
         ),
         "patient_step": (
             "Activa la sincronización de Samsung Health con Health Connect y después concede acceso a "

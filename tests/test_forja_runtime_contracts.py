@@ -48,7 +48,9 @@ def test_secure_launcher_defaults_to_zero_spend_and_requires_explicit_ai() -> No
     assert "$env:PYTHONUTF8 = \"1\"" in launcher
     assert "Get-NetIPAddress" in launcher
     assert "Telefono en la misma Wi-Fi" in launcher
-    assert "--host 0.0.0.0" in launcher
+    assert '[switch]$AllowLan' in launcher
+    assert 'if ($AllowLan) { "0.0.0.0" } else { "127.0.0.1" }' in launcher
+    assert 'if ($Reload) { $uvicornArgs += "--reload" }' in launcher
     assert "HEALTHIA_GOOGLE_AI_READY" in verifier
     assert "HEALTHIA_GOOGLE_AI_ERROR" in verifier
     assert "genai.Client(vertexai=True" in verifier

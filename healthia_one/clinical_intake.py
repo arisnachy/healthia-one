@@ -71,6 +71,20 @@ DOMAIN_SIGNALS: dict[str, tuple[str, ...]] = {
     "skin": ("piel", "erupcion", "erupción", "picor", "comezon", "comezón", "lesion", "lesión"),
 }
 
+SOCIAL_PATTERNS: dict[str, tuple[str, ...]] = {
+    "greeting": (
+        "hola", "buenas", "buen dia", "buenos dias", "buenas tardes", "buenas noches",
+        "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
+    ),
+    "wellbeing": (
+        "como vas", "como estas", "que tal", "como te va", "como va todo",
+        "how are you", "how is it going", "how are things",
+    ),
+    "thanks": ("gracias", "muchas gracias", "te agradezco", "thank you", "thanks"),
+    "farewell": ("adios", "hasta luego", "nos vemos", "hasta pronto", "chao", "chau", "bye", "goodbye", "see you"),
+}
+ENGLISH_SOCIAL_MARKERS = ("hello", "hi", "hey", "good ", "how are", "how is", "thank", "thanks", "bye", "goodbye", "see you")
+
 
 def _normalize(value: str) -> str:
     text = unicodedata.normalize("NFKD", value.lower())
@@ -123,6 +137,55 @@ def detect_clinical_consultation(text: str) -> tuple[bool, str]:
     if domain_scores[domain] == 0:
         domain = "general"
     return True, domain
+
+
+def respond_to_social_small_talk(state: PatientState, patient_text: str) -> ChatResponse | None:
+    """Answer social turns locally so courtesy never becomes a clinical intake."""
+
+    is_clinical, _ = detect_clinical_consultation(patient_text)
+    if is_clinical:
+        return None
+    normalized = _normalize(patient_text)
+
+    def contains_phrase(phrase: str) -> bool:
+        return phrase in normalized if " " in phrase else bool(re.search(rf"\b{re.escape(phrase)}\b", normalized))
+
+    intent = next(
+        (name for name, phrases in SOCIAL_PATTERNS.items() if any(contains_phrase(phrase) for phrase in phrases)),
+        None,
+    )
+    if intent is None:
+        return None
+
+    english = any(marker in normalized for marker in ENGLISH_SOCIAL_MARKERS)
+    name = state.profile.display_name.split()[0] if state.profile.display_name else ""
+    if english:
+        responses = {
+            "greeting": f"Hi{', ' + name if name else ''}. I’m here with you. What would you like help with today?",
+            "wellbeing": "I’m here and ready to help. What would you like to review today?",
+            "thanks": "You’re welcome. I’m here whenever you need help organizing a health question or record.",
+            "farewell": "Take care. You can return whenever you want to review something from your health record.",
+        }
+    else:
+        responses = {
+            "greeting": f"Hola{', ' + name if name else ''}. Estoy aquí contigo. ¿Qué te gustaría revisar hoy?",
+            "wellbeing": "Estoy aquí y lista para ayudarte. ¿Qué te gustaría revisar hoy?",
+            "thanks": "Con gusto. Aquí estaré cuando quieras organizar una duda o revisar algo de tu expediente.",
+            "farewell": "Cuídate. Puedes volver cuando quieras revisar algo de tu expediente.",
+        }
+    return ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=responses[intent],
+            metadata={
+                "intent": "social_small_talk",
+                "social_intent": intent,
+                "skip_llm": "deterministic_social",
+                "action_target": None,
+            },
+        )
+    )
 
 
 def question_scaffold(stage: int) -> dict[str, Any]:

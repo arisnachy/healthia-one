@@ -189,8 +189,8 @@
   ],
   "critical_blockers": [],
   "next_actions": [
-    "Run final CI/JUDGE on the exact submission head with all billable/recording/publication triggers disabled.",
-    "Merge PR #29 only after that exact-head verification is green.",
+    "PR #29 is merged as a1525ec and its exact candidate head passed CI/JUDGE.",
+    "Run a fresh exact-head CI/JUDGE for any later change before replacing the preserved submission candidate.",
     "Use the preserved public judge-video URL and repository evidence package in the final Devpost submission."
   ]
 }

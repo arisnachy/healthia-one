@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from healthia_one.continuity import build_timeline, consultation_brief, medication_summary
+from healthia_one.devices import device_summary
 from healthia_one.family import describe_genogram, family_summary
 from healthia_one.models import (
     AgentStep,
@@ -162,6 +163,46 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
             agent_plan=plan,
         )
         action_target = "family"
+    elif any(word in lower for word in (
+        "dispositivo", "reloj", "health connect", "báscula", "bascula", "tensiómetro",
+        "tensiometro", "oxímetro", "oximetro", "wearable", "galaxy watch",
+    )):
+        summary = device_summary(state)
+        active = [item for item in summary["connections"] if item["status"] == "connected"]
+        plan = _plan(
+            ("NAVIGATOR", "Revisar conexiones y permisos", "Control del paciente"),
+            ("HISTORIA", "Comprobar datos sincronizados y procedencia", "Continuidad"),
+            ("SENTINEL", "Mantener límites clínicos del sensor", "Seguridad"),
+        )
+        if active:
+            connection = active[-1]
+            granted = connection.get("permissions") or []
+            permission_text = ", ".join(item.replace("_", " ") for item in granted) or "sin permisos informados"
+            content = (
+                f"Veo **{len(active)} conexión(es) activa(s)** y **{summary['record_count']} registros**. "
+                f"La conexión más reciente es **{connection['display_name']}**; tipos autorizados: **{permission_text}**. "
+                "Puedo abrir Dispositivos para revisar la última sincronización o desconectarla. "
+                "El puente autentica el teléfono, pero no certifica clínicamente el sensor ni garantiza transmisión en tiempo real."
+            )
+            evidence = [connection["id"]]
+            next_action = "Abrir Dispositivos, revisar permisos, actualizar o desconectar"
+        else:
+            content = (
+                "No veo un dispositivo conectado. Abre **Dispositivos → Conectar dispositivo**, vincula el puente "
+                "Android con el código temporal y concede solo los tipos que quieras compartir en Health Connect. "
+                "Samsung, relojes, básculas o tensiómetros funcionan por esta vía únicamente si escriben sus datos en Health Connect."
+            )
+            evidence = []
+            next_action = "Abrir Dispositivos y generar un código temporal"
+        mission = HealthMission(
+            title="Conectar y revisar dispositivo de salud",
+            mission_type="device_connection",
+            status=MissionStatus.WAITING_PATIENT,
+            next_action=next_action,
+            evidence_ids=evidence,
+            agent_plan=plan,
+        )
+        action_target = "devices"
     elif _mentions_result(patient_text):
         plan = _plan(
             ("LUMEN", "Recuperar y explicar la evidencia solicitada", "Conversación anclada al resultado persistido"),

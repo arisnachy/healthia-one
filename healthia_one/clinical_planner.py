@@ -81,6 +81,22 @@ SAFETY_TERMS = (
     "fiebre alta",
 )
 
+# Facts stated in the current complaint are clinical memory too. A model may
+# receive the complaint verbatim yet still default to a generic location
+# question. This guard only prevents that narrow repetition; it never infers a
+# diagnosis from free text.
+BODY_LOCATION_TERMS = (
+    "cuello", "nuca", "cabeza", "garganta", "pecho", "espalda", "hombro",
+    "brazo", "mano", "abdomen", "vientre", "costado", "cadera", "pierna",
+    "rodilla", "tobillo", "pie", "pelvis", "zona lumbar", "flanco",
+)
+GENERIC_LOCATION_PROMPTS = (
+    "donde", "en que parte", "en cual parte", "localizacion", "localiza",
+)
+LOCATION_EXPANSION_TERMS = (
+    "ademas", "otro lugar", "se extiende", "se desplaza", "se corre", "irradia",
+)
+
 # These are unambiguously treatment/diagnostic directives, not ordinary
 # medication-history questions. Imperative toma/tome is handled separately so
 # interrogatives such as "¿Toma algún medicamento?" remain valid.
@@ -140,6 +156,28 @@ def _answer_text(previous_answers: Iterable[dict[str, Any]] | None) -> str:
         if detail:
             chunks.append(detail)
     return " ".join(chunks)
+
+
+def extract_known_clinical_facts(
+    chief_complaint: str,
+    previous_answers: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, list[str]]:
+    """Return explicit patient facts needed to avoid duplicate questions."""
+
+    text = _normalize(f"{chief_complaint} {_answer_text(previous_answers)}")
+    return {"explicit_body_locations": [term for term in BODY_LOCATION_TERMS if term in text]}
+
+
+def repeats_explicit_location_fact(question: dict[str, Any], known_facts: dict[str, list[str]]) -> bool:
+    """Reject only generic location questions when the location is already known."""
+
+    if not known_facts.get("explicit_body_locations"):
+        return False
+    prompt = _normalize(str(question.get("prompt", "")))
+    if not any(marker in prompt for marker in GENERIC_LOCATION_PROMPTS):
+        return False
+    # Asking about radiation or another site is a useful follow-up, not a repeat.
+    return not any(marker in prompt for marker in LOCATION_EXPANSION_TERMS)
 
 
 def _requested_role_ids(requested_roles: Iterable[Any] | None) -> list[str]:
@@ -389,6 +427,13 @@ def judge_dynamic_plan(
     else:
         strengths.append("Evita repetir datos ya recogidos")
 
+    known_facts = extract_known_clinical_facts(chief_complaint, previous_answers)
+    if any(repeats_explicit_location_fact(question, known_facts) for question in questions):
+        blockers.append("Vuelve a preguntar una localización ya declarada por la persona")
+        score -= 20
+    else:
+        strengths.append("Respeta la localización ya declarada en el motivo de consulta")
+
     if not 2 <= len(agent_plan) <= 4:
         blockers.append("Activa demasiados o muy pocos especialistas")
         score -= 20
@@ -423,6 +468,7 @@ def judge_dynamic_plan(
             "demo_readiness": "question source, executed tools and judge verdict are auditable",
         },
         "chief_complaint_present": bool(str(chief_complaint).strip()),
+        "known_facts_checked": known_facts,
     }
 
 

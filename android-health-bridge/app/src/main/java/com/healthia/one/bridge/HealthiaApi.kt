@@ -17,12 +17,13 @@ object HealthiaApi {
         return JSONObject(body).getString("access_token")
     }
 
-    fun sync(baseUrl: String, token: String, deviceId: String, records: List<HealthRecordDto>, background: Boolean): String {
+    fun sync(baseUrl: String, token: String, deviceId: String, records: List<HealthRecordDto>, background: Boolean, grantedMetrics: List<String>): String {
         val payload = JSONObject().apply {
             put("device_id", deviceId)
             put("source_package", "com.healthia.one.bridge")
             put("synced_at", Instant.now().toString())
             put("background_read", background)
+            put("granted_metrics", JSONArray(grantedMetrics))
             put("records", JSONArray().apply {
                 records.forEach { record ->
                     put(JSONObject().apply {

@@ -23,11 +23,14 @@ from healthia_one.models import (
     HealthResult,
     MedicationCheckIn,
     MedicationPlan,
+    MissionStatus,
     PatientConsent,
     PatientProfile,
     PatientState,
+    RiskLevel,
     VitalRecord,
     WeightRecord,
+    new_id,
 )
 from healthia_one.orchestrator import respond
 from healthia_one.patient_control import maybe_control_response
@@ -275,6 +278,55 @@ class HealthIAService:
         await self.broker.publish({"type": "state", "section": "reset"}, patient_id=current_patient_id())
         return state
 
+    async def start_new_consultation(self) -> ChatMessage:
+        """Open a new chat boundary without replacing the longitudinal record."""
+
+        async with self._mutation_lock:
+            state = await self.store.load()
+            conversation_id = new_id("consultation")
+            cancelled_interviews = 0
+            for mission in state.missions:
+                if mission.mission_type == "clinical_interview" and mission.status == MissionStatus.WAITING_PATIENT:
+                    mission.status = MissionStatus.CANCELLED
+                    mission.next_action = "Entrevista anterior cerrada al iniciar una nueva consulta"
+                    mission.closure_evidence.append("superseded_by_new_consultation")
+                    cancelled_interviews += 1
+                    for prior_message in state.messages:
+                        interview = prior_message.metadata.get("clinical_interview")
+                        if isinstance(interview, dict) and interview.get("mission_id") == mission.id:
+                            interview["status"] = "cancelled"
+            message = ChatMessage(
+                patient_id=state.profile.id,
+                role="assistant",
+                author="HealthIA",
+                content=(
+                    "Nueva consulta iniciada. Tu expediente, documentos, mediciones y consultas anteriores siguen guardados. "
+                    "Cuéntame qué te preocupa hoy y usaré solo el contexto necesario."
+                ),
+                metadata={
+                    "conversation_id": conversation_id,
+                    "conversation_boundary": "new_consultation",
+                    "preserves_longitudinal_record": True,
+                    "cancelled_unfinished_interviews": cancelled_interviews,
+                },
+            )
+            state.messages.append(message)
+            audit(
+                state,
+                actor="patient",
+                action="start_new_consultation",
+                resource_type="chat_conversation",
+                resource_id=conversation_id,
+                details={
+                    "preserves_longitudinal_record": True,
+                    "cancelled_unfinished_interviews": cancelled_interviews,
+                },
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "message", "message": message.model_dump(mode="json")})
+        await self.broker.publish({"type": "state", "section": "consultation"})
+        return message
+
     async def update_profile(self, profile: PatientProfile) -> PatientProfile:
         async with self._mutation_lock:
             state = await self.store.load()
@@ -291,10 +343,41 @@ class HealthIAService:
         await self.broker.publish({"type": "state", "section": "profile"})
         return profile
 
-    async def ingest_health_connect(self, batch: HealthConnectSyncBatch) -> dict:
+    async def ingest_health_connect(
+        self,
+        batch: HealthConnectSyncBatch,
+        *,
+        authorized_connection_id: str | None = None,
+    ) -> dict:
         async with self._mutation_lock:
             state = await self.store.load()
+            if authorized_connection_id:
+                connection = next(
+                    (item for item in state.device_connections if item.id == authorized_connection_id),
+                    None,
+                )
+                if connection is not None and connection.status == "disconnected":
+                    raise PermissionError("La conexión del dispositivo fue revocada.")
             result = ingest_health_connect_batch(state, batch)
+            for alert in result.get("safety_alerts", []):
+                state.messages.append(
+                    ChatMessage(
+                        patient_id=state.profile.id,
+                        role="assistant",
+                        author="HealthIA",
+                        content=(
+                            f"{alert['message']} Esta alerta proviene de un umbral determinista sobre una lectura "
+                            "sincronizada; confirma la medición y busca revisión humana según la orientación mostrada."
+                        ),
+                        risk_level=RiskLevel(alert["risk_level"]),
+                        metadata={
+                            "device_safety_alert": True,
+                            "evidence_id": alert["evidence_id"],
+                            "requires_human_review": True,
+                            "clinical_source_verified": False,
+                        },
+                    )
+                )
             audit(
                 state,
                 actor="android_health_connect",
@@ -310,6 +393,25 @@ class HealthIAService:
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": "devices"})
         return result
+
+    async def disconnect_device(self, connection_id: str) -> bool:
+        async with self._mutation_lock:
+            state = await self.store.load()
+            connection = next((item for item in state.device_connections if item.id == connection_id), None)
+            if connection is None:
+                return False
+            connection.status = "disconnected"
+            connection.background_read = False
+            audit(
+                state,
+                actor="patient",
+                action="disconnect_device",
+                resource_type="device_connection",
+                resource_id=connection_id,
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "devices"})
+        return True
 
     async def add_patient_message(self, content: str):
         async with self._mutation_lock:

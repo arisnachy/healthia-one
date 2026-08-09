@@ -219,4 +219,4 @@ Evidence: `hackathon/evidence/public_judge_video_proof.json`.
 
 HealthIA ONE is a synthetic hackathon release candidate, not a regulated medical device, clinical-effectiveness study or autonomous prescribing system. Green tests prove software behavior within tested boundaries; they do not establish medical efficacy, regulatory compliance or universal security certification.
 
-All internal JUDGE hard gates are now proven. The **100/100 score is an evidence-backed rubric assessment, not a guarantee that external hackathon judges will award a win**. Final operational lock requires the exact final branch head to pass CI/JUDGE/public-video probe and PR #29 to merge without changing that verified head.
+PR #29 was merged as `a1525ec` after its candidate passed the internal gates. The **100/100 score is an evidence-backed rubric assessment of that preserved candidate, not a guarantee that external judges will award a win and not evidence for later uncommitted hardening**. Any replacement candidate requires a fresh exact-head CI/JUDGE/public-video gate.

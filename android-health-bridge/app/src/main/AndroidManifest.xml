@@ -20,7 +20,7 @@
         android:allowBackup="false"
         android:label="HealthIA Bridge"
         android:theme="@style/Theme.HealthIABridge"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
             android:exported="true">

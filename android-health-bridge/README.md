@@ -28,7 +28,7 @@ El APK de depuración sirve para pruebas del hackathon; no es una distribución 
 2. El lanzador imprime la dirección del navegador y una o más direcciones LAN para el teléfono.
 3. Abre **Dispositivos → Conectar teléfono o reloj**.
 4. Instala y abre HealthIA Bridge.
-5. En el puente escribe la dirección LAN y el código de seis dígitos.
+5. En el puente escribe la dirección LAN y el código temporal de ocho dígitos.
    - Emulador: `http://10.0.2.2:8000`.
    - Teléfono físico: `http://<IP-LAN-DE-LA-PC>:8000`.
    - `127.0.0.1` en el teléfono apunta al propio teléfono y no funciona.
@@ -37,7 +37,9 @@ El APK de depuración sirve para pruebas del hackathon; no es una distribución 
 8. Pulsa **Autorizar datos en Health Connect** y elige qué compartir.
 9. Pulsa **Sincronizar ahora**.
 
-El código temporal expira después de diez minutos. El token del dispositivo permanece válido durante el proceso local del servidor; vuelve a vincular tras reiniciar el backend.
+El código temporal expira después de cinco minutos y solo puede reclamarse una vez. La credencial firmada queda ligada al paciente, la conexión y el dispositivo; al desconectar la conexión desde HealthIA, el backend rechaza futuros lotes de esa credencial. Una instalación cloud debe configurar un secreto persistente.
+
+La compilación `debug` permite HTTP únicamente para una demostración sintética en una LAN confiable. La compilación de producción bloquea texto claro y exige HTTPS.
 
 ## Disponibilidad y segundo plano
 

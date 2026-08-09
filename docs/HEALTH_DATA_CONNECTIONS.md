@@ -20,13 +20,13 @@ watch / scale / health app
 Health Connect on the Android phone
           ↓ user grants HealthIA Bridge selected read permissions
 HealthIA Bridge
-          ↓ six-digit backend pairing + device token
+          ↓ eight-digit temporary backend pairing + device token
 HealthIA ONE
 ```
 
 The patient does not provide a Google password to HealthIA. Health Connect presents the operating-system permission screen and the patient chooses each data type.
 
-The six-digit code solves a different problem: it securely pairs HealthIA Bridge with the backend that will receive the records.
+The eight-digit temporary code solves a different problem: it securely pairs HealthIA Bridge with the backend that will receive the records.
 
 ## Samsung Health and Galaxy Watch
 
@@ -81,13 +81,14 @@ Use SMART on FHIR, OAuth or another standards-based institutional flow. The pati
 ## What is implemented today
 
 - Android Health Connect companion source.
-- Six-digit backend pairing.
+- Eight-digit backend pairing.
 - Device-bound bearer token.
 - Per-data-type Android permissions.
 - Manual and supported background synchronization.
 - Provenance and idempotent external record IDs.
-- Samsung Health data when it is synchronized into Health Connect.
 - Synthetic device path for demonstrations without hardware.
+
+Samsung Health and Galaxy devices are a conditional Health Connect route: HealthIA can consume their records only when Samsung Health writes them into Health Connect and the patient grants the corresponding permission. This path is not labeled hardware-verified until a physical-device evidence run is captured.
 
 ## What remains planned
 

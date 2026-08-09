@@ -4,7 +4,7 @@ from healthia_one.pairing import DevicePairingManager, PairingError
 def test_pairing_claim_and_token_validation() -> None:
     manager = DevicePairingManager(ttl_minutes=10)
     session = manager.create()
-    assert len(session["code"]) == 6
+    assert len(session["code"]) == 8
     claim = manager.claim(session["code"], "phone-1", "My phone")
     assert manager.status(session["code"])["claimed"] is True
     assert manager.validate(claim["access_token"], "phone-1") is True

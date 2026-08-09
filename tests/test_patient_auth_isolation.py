@@ -125,4 +125,5 @@ def test_browser_loads_progressive_dynamic_questions_and_real_account_controls()
     assert "Continuar con las 3 restantes" in clinical
     assert "No pude completar las próximas preguntas personalizadas" in clinical
     assert "/api/auth/logout" in account
-    assert "event.stopImmediatePropagation()" in account
+    assert 'button.dataset.recordPreserving = "true"' in account
+    assert "stopImmediatePropagation" not in account

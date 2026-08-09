@@ -195,4 +195,4 @@ See `docs/EVIDENCE.md` for the permanent sanitized evidence index.
 **PUBLIC/JUDGE VIDEO URL:**  
 `https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm`
 
-The video/publication gate is proven. Final submission lock now depends only on the exact final repository HEAD passing CI + JUDGE Ω and PR #29 being merged without changing that head.
+PR #29 was merged as `a1525ec` after its candidate passed CI + JUDGE Ω. Later working-tree hardening is not part of that preserved candidate until a new exact-head gate is run.

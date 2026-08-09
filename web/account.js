@@ -75,18 +75,7 @@ if (!window.__HEALTHIA_ACCOUNT__) {
     function protectAuthenticatedNewConsultation() {
       const button = $("#newConsultation");
       if (!button) return;
-      button.addEventListener("click", event => {
-        if (!session?.authenticated) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        openView("chat");
-        const input = $("#chatInput");
-        if (input) {
-          input.value = "";
-          input.style.height = "auto";
-          input.focus();
-        }
-      }, true);
+      if (session?.authenticated) button.dataset.recordPreserving = "true";
     }
 
     async function boot() {

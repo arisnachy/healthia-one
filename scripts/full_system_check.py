@@ -187,6 +187,7 @@ def run() -> dict:
                     "device_id": "full-check-phone",
                     "source_package": "com.healthia.fullcheck",
                     "background_read": True,
+                    "granted_metrics": ["heart_rate"],
                     "records": [
                         {
                             "external_id": "full-check-heart-1",

@@ -14,8 +14,8 @@ class HealthSyncWorker(appContext: Context, params: WorkerParameters) : Coroutin
         val repository = HealthConnectRepository(applicationContext)
         if (!repository.isAvailable || !repository.supportsBackgroundRead) return Result.success()
 
-        val granted = repository.grantedPermissions()
-        if (!granted.containsAll(repository.permissions)) return Result.success()
+        val grantedMetrics = repository.grantedMetricNames()
+        if (grantedMetrics.isEmpty()) return Result.success()
 
         val preferences = applicationContext.getSharedPreferences("healthia", Context.MODE_PRIVATE)
         val baseUrl = preferences.getString("base_url", BuildConfig.HEALTHIA_BASE_URL).orEmpty()
@@ -23,7 +23,7 @@ class HealthSyncWorker(appContext: Context, params: WorkerParameters) : Coroutin
         if (baseUrl.isBlank() || token.isBlank()) return Result.success()
 
         val records = repository.readSince()
-        HealthiaApi.sync(baseUrl, token, deviceId(), records, background = true)
+        HealthiaApi.sync(baseUrl, token, deviceId(), records, background = true, grantedMetrics = grantedMetrics)
         Result.success()
     }.getOrElse { Result.retry() }
 

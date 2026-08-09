@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from healthia_one.clinical_planner import ROLE_DEFINITIONS
+from healthia_one.clinical_planner import ROLE_DEFINITIONS, extract_known_clinical_facts
 from healthia_one.clinical_tools import execute_on_demand_clinical_tools
 from healthia_one.config import Settings
 from healthia_one.language import current_requested_locale, language_instruction, resolve_response_locale
@@ -75,6 +75,9 @@ Execution contract:
 Memory and natural-language rules:
 - Treat chief_complaint and previous_answers as accumulated clinical memory.
 - Do not ask for a fact already answered unless there is a concrete contradiction.
+- Facts explicitly stated in chief_complaint are already answered. If it says
+  "dolor de cuello", do not ask where the pain is; ask only a meaningful
+  discriminator such as radiation, trigger, limitation or warning sign.
 - Each new question must resolve a case-specific uncertainty.
 - Prefer a concrete discriminator over a generic template.
 - If duration, intensity, medication, allergy, exposure, vital sign, or warning sign is known, treat it as known.
@@ -246,6 +249,7 @@ class AdkClinicalRuntime:
             "stage": stage,
             "chief_complaint": chief_complaint,
             "previous_answers": _answer_payload(previous_answers),
+            "known_facts": extract_known_clinical_facts(chief_complaint, previous_answers),
             "authorized_clinical_context": authorized_clinical_context,
             "response_locale": response_locale,
             "constraints": {
@@ -257,6 +261,7 @@ class AdkClinicalRuntime:
                 "mandatory_roles_inside_tool": ["interview", "safety"],
                 "structured_output_required": True,
                 "must_not_repeat_known_answers": True,
+                "must_not_repeat_explicit_chief_complaint_facts": True,
                 "must_not_diagnose_or_prescribe": True,
                 "patient_visible_language": response_locale,
             },

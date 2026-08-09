@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from healthia_one.integrations import health_data_provider_catalog
+from healthia_one.safety import assess_vital
 from healthia_one.models import (
     ActivityRecord,
     DeviceMetric,
@@ -16,12 +17,17 @@ from healthia_one.models import (
 )
 
 
+HEALTH_CONNECT_METRICS = tuple(item for item in DeviceMetric if item != DeviceMetric.CHOLESTEROL)
+
+
 def device_source(record: DeviceObservation) -> SourceRef:
     return SourceRef(
         source_type="health_connect",
         source_id=record.source_package or record.source_name or "health_connect",
         captured_at=record.observed_at,
-        verified=True,
+        # Pairing authenticates the bridge transport, not the clinical accuracy
+        # of a sensor or the client-supplied Health Connect origin metadata.
+        verified=False,
     )
 
 
@@ -87,45 +93,86 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
     duplicates = 0
     sections: set[str] = set()
     existing = set(state.synced_external_ids)
+    initial_vital_count = len(state.vitals)
+    transport_identity_verified = any(
+        bool(item.metadata.get("paired_connection_id") and item.metadata.get("paired_device_id"))
+        for item in batch.records
+    )
     for record in sorted(batch.records, key=lambda item: item.observed_at):
-        if record.external_id in existing:
+        scoped_external_id = f"{batch.device_id}:{record.external_id}"
+        if scoped_external_id in existing or record.external_id in existing:
             duplicates += 1
             continue
         section = apply_observation(state, record)
         state.device_observations.append(record)
-        state.synced_external_ids.append(record.external_id)
-        existing.add(record.external_id)
+        state.synced_external_ids.append(scoped_external_id)
+        existing.add(scoped_external_id)
         accepted += 1
         if section:
             sections.add(section)
     state.device_observations.sort(key=lambda item: item.observed_at)
+    paired_connection_id = next(
+        (str(item.metadata.get("paired_connection_id") or "") for item in batch.records if item.metadata),
+        "",
+    )
     connection = next(
-        (item for item in state.device_connections if item.provider == "health_connect" and item.device_id == batch.device_id),
+        (
+            item
+            for item in state.device_connections
+            if item.provider == "health_connect"
+            and (
+                (paired_connection_id and item.id == paired_connection_id)
+                or (not paired_connection_id and item.device_id == batch.device_id)
+            )
+        ),
         None,
     )
     if connection is None:
         from healthia_one.models import DeviceConnection
 
-        connection = DeviceConnection(
+        connection_payload = dict(
             provider="health_connect",
             device_id=batch.device_id,
             display_name="Android Health Connect",
             status="connected",
             background_read=batch.background_read,
             last_sync_at=batch.synced_at,
+            permissions=[item.value for item in batch.granted_metrics],
         )
+        if paired_connection_id:
+            connection_payload["id"] = paired_connection_id
+        connection = DeviceConnection(**connection_payload)
         state.device_connections.append(connection)
     else:
         connection.status = "connected"
         connection.background_read = batch.background_read
         connection.last_sync_at = batch.synced_at
         connection.last_error = ""
+        connection.permissions = [item.value for item in batch.granted_metrics]
     state.updated_at = datetime.now(timezone.utc)
+    safety_alerts = []
+    for vital in state.vitals[initial_vital_count:]:
+        decision = assess_vital(vital)
+        if decision.level.value not in {"priority", "urgent"}:
+            continue
+        safety_alerts.append(
+            {
+                "risk_level": decision.level.value,
+                "message": decision.message,
+                "must_stop_normal_flow": decision.must_stop_normal_flow,
+                "evidence_id": vital.id,
+                "requires_human_review": True,
+            }
+        )
     return {
         "accepted": accepted,
         "duplicates": duplicates,
         "sections": sorted(sections),
         "last_sync_at": batch.synced_at,
+        "granted_metrics": [item.value for item in batch.granted_metrics],
+        "transport_identity_verified": transport_identity_verified,
+        "clinical_source_verified": False,
+        "safety_alerts": safety_alerts,
     }
 
 
@@ -137,11 +184,12 @@ def device_summary(state: PatientState) -> dict[str, Any]:
         "connections": [item.model_dump(mode="json") for item in state.device_connections],
         "record_count": len(state.device_observations),
         "latest_by_metric": latest_by_metric,
-        "supported_metrics": [item.value for item in DeviceMetric],
+        "supported_metrics": [item.value for item in HEALTH_CONNECT_METRICS],
         "provider_catalog": health_data_provider_catalog(),
         "truth_boundary": (
             "Health Connect is a consent-based synchronization layer. Availability and freshness depend on the "
-            "device or source app. HealthIA does not infer that a missing metric was measured."
+            "device or source app. The bridge identity can be authenticated, but the sensor is not clinically "
+            "certified by HealthIA. HealthIA does not infer that a missing metric was measured."
         ),
     }
 

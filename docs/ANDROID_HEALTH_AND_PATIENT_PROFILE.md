@@ -39,6 +39,10 @@ profile, timeline, autonomous review, audit
 
 Every device record contains an external ID, metric, time, unit, source package, source name, device information, recording method, and optional metadata. Duplicate external IDs are ignored.
 
+The backend validates canonical units, supported ranges, ordered blood-pressure pairs, timezone-aware timestamps and metadata size before longitudinal merge. Pairing authenticates the bridge transport; it does not clinically certify the sensor or attest the source metadata supplied through Health Connect.
+
+The bridge reads only the Health Connect data types actually granted by the patient. Denying one type does not block synchronization of other authorized types. HealthIA records the granted metric names on the connection and the patient can disconnect it from the Devices screen; future uploads with that connection credential are then rejected.
+
 ## Freshness boundary
 
 Health Connect can support foreground and authorized background reads, but freshness depends on the source app and device. HealthIA must never display `Sin dato` as a normal measurement or infer that a missing observation was taken.

@@ -39,6 +39,7 @@ from healthia_one.models import (
     WeightRecord,
 )
 from healthia_one.result_ai import analyze_uploaded_result, apply_multimodal_analysis, multimodal_supported
+from healthia_one.result_capabilities import UnsupportedClinicalFormat, capability_manifest, validate_clinical_upload
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.pairing import DevicePairingManager, PairingError
 from healthia_one.service import HealthIAService
@@ -215,6 +216,13 @@ async def devices() -> dict:
     return payload
 
 
+@app.delete("/api/devices/{connection_id}")
+async def disconnect_device(connection_id: str) -> dict:
+    if not await service.disconnect_device(connection_id):
+        raise HTTPException(status_code=404, detail="Conexión no encontrada.")
+    return {"disconnected": True, "connection_id": connection_id}
+
+
 @app.post("/api/devices/pairing")
 async def create_device_pairing(request: Request) -> dict:
     patient_id = (await service.snapshot()).profile.id
@@ -269,13 +277,28 @@ async def health_connect_sync(
     principal = pairing_manager.identify(bearer_token(authorization), batch.device_id)
     if principal is None:
         raise HTTPException(status_code=401, detail="Dispositivo no vinculado o token inválido.")
+    granted_metrics = set(batch.granted_metrics)
+    if batch.records and not granted_metrics:
+        raise HTTPException(status_code=422, detail="El lote no declara métricas autorizadas.")
+    unauthorized = sorted({record.metric.value for record in batch.records if record.metric not in granted_metrics})
+    if unauthorized:
+        raise HTTPException(
+            status_code=422,
+            detail=f"El lote contiene métricas no autorizadas: {', '.join(unauthorized)}.",
+        )
     for record in batch.records:
         record.patient_id = principal.patient_id
         record.metadata["paired_connection_id"] = principal.connection_id
         record.metadata["paired_device_id"] = principal.device_id
         record.metadata["paired_patient_id"] = principal.patient_id
     with patient_scope(principal.patient_id):
-        result = await service.ingest_health_connect(batch)
+        try:
+            result = await service.ingest_health_connect(
+                batch,
+                authorized_connection_id=principal.connection_id,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
     result["connection_id"] = principal.connection_id
     result["patient_id"] = principal.patient_id
     result["device_identity_verified"] = True
@@ -285,6 +308,17 @@ async def health_connect_sync(
 @app.post("/api/chat")
 async def chat(request: ChatRequest) -> dict:
     return (await service.add_patient_message(request.message)).model_dump(mode="json")
+
+
+@app.post("/api/consultations/new")
+async def start_new_consultation() -> dict:
+    """Create a chat boundary while preserving the patient record."""
+    message = await service.start_new_consultation()
+    return {
+        "conversation_id": message.metadata["conversation_id"],
+        "message": message.model_dump(mode="json"),
+        "preserves_longitudinal_record": True,
+    }
 
 
 @app.post("/api/vitals")
@@ -326,6 +360,10 @@ async def upload_document(
     title: str | None = Form(default=None),
 ) -> dict:
     content = await file.read(settings.max_upload_bytes + 1)
+    try:
+        validate_clinical_upload(file.filename or "documento", file.content_type or "application/octet-stream", content)
+    except UnsupportedClinicalFormat as exc:
+        raise HTTPException(status_code=415, detail={"code": "format_not_implemented", "format": exc.detected_format, "capabilities_url": "/api/results/capabilities"}) from exc
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
     state = await service.snapshot()
@@ -345,13 +383,18 @@ async def upload_document(
 
 
 @app.get("/api/documents/{document_id}/download")
-async def download_document(document_id: str):
+async def download_document(document_id: str, inline: bool = False):
     document = await service.get_document(document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
     path = local_evidence_path(document, ROOT)
     if path is not None:
-        return FileResponse(path, media_type=document.mime_type, filename=document.filename)
+        return FileResponse(
+            path,
+            media_type=document.mime_type,
+            filename=document.filename,
+            content_disposition_type="inline" if inline else "attachment",
+        )
     try:
         content = await load_evidence(document, ROOT)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -359,7 +402,7 @@ async def download_document(document_id: str):
     return Response(
         content=content,
         media_type=document.mime_type,
-        headers={"Content-Disposition": f'attachment; filename="{document.filename}"'},
+        headers={"Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{document.filename}"'},
     )
 
 
@@ -450,6 +493,11 @@ async def patient_export() -> JSONResponse:
     )
 
 
+@app.get("/api/results/capabilities")
+async def result_capabilities() -> dict:
+    return capability_manifest(settings.max_upload_bytes, service.gemini.settings.adk_ready)
+
+
 @app.post("/api/results/upload")
 async def upload_result(file: UploadFile = File(...)) -> dict:
     filename = file.filename or "result"
@@ -457,6 +505,10 @@ async def upload_result(file: UploadFile = File(...)) -> dict:
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="El archivo supera el límite de 5 MB.")
+    try:
+        validate_clinical_upload(filename, content_type, content)
+    except UnsupportedClinicalFormat as exc:
+        raise HTTPException(status_code=415, detail={"code": "format_not_implemented", "format": exc.detected_format, "capabilities_url": "/api/results/capabilities"}) from exc
     state = await service.snapshot()
     try:
         result = parse_result_file(filename, content)
@@ -514,6 +566,7 @@ async def demo_device_sync() -> dict:
         device_id="android-demo",
         source_package="com.healthia.one.demo",
         background_read=True,
+        granted_metrics=[DeviceMetric.STEPS, DeviceMetric.HEART_RATE, DeviceMetric.WEIGHT],
         records=[
             DeviceObservation(
                 patient_id=current_patient_id(),

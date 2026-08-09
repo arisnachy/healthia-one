@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from healthia_one.clinical_intake import ANSWER_PREFIX, respond_to_clinical_intake
+from healthia_one.clinical_intake import ANSWER_PREFIX, respond_to_clinical_intake, respond_to_social_small_talk
 from healthia_one.conversation_brain import build_frame
 from healthia_one.deterministic_router import respond as deterministic_respond
 from healthia_one.models import ChatResponse, PatientState
@@ -108,6 +108,15 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse:
     forward only the latest verified topic as a private routing hint. The public
     patient text is never rewritten or stored with that hint.
     """
+
+    # Social language is evaluated from the explicit current turn before
+    # Conversation Brain adds an unfinished interview's topic as a private
+    # routing hint. Otherwise "hola, ¿cómo vas?" could inherit yesterday's
+    # symptom and incorrectly resume the questionnaire or consume Gemini.
+    social_response = respond_to_social_small_talk(state, _clinical_text(patient_text))
+    if social_response is not None:
+        frame = build_frame(state, patient_text)
+        return _attach_conversation_frame(social_response, frame)
 
     frame = build_frame(state, patient_text)
     routed_text = frame.routing_text
