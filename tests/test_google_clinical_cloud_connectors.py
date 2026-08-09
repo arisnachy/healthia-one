@@ -35,10 +35,11 @@ class Transport:
             return {"document": {"text": "private extracted text", "pages": [{"pageNumber": 1}], "entities": []}}
         if "fcm.googleapis.com" in url:
             return {"name": "projects/demo/messages/123"}
+        # Match the more specific Text-to-Speech hostname before Speech-to-Text.
+        if "texttospeech.googleapis.com" in url:
+            return {"audioContent": "UklGRg=="}
         if "speech.googleapis.com" in url:
             return {"results": [{"alternatives": [{"transcript": "private transcript", "confidence": 0.9}]}], "requestId": "77"}
-        if "texttospeech" in url:
-            return {"audioContent": "UklGRg=="}
         if "aiplatform" in url:
             return {"name": "projects/demo/locations/us-central1/operations/veo123"}
         if method == "GET" and "dicomWeb" in url:
