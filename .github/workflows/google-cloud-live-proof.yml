@@ -54,11 +54,9 @@ jobs:
           image="${image_package}:${source_sha}"
           active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
           runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
-          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-          pubsub_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 
-          if [[ -z "$runtime_sa" || -z "$active_account" || -z "$project_number" ]]; then
-            echo "Unable to resolve existing proof identities/project metadata."
+          if [[ -z "$runtime_sa" || -z "$active_account" ]]; then
+            echo "Unable to resolve existing proof identities."
             exit 1
           fi
 
@@ -76,6 +74,17 @@ jobs:
           # EXIT cleanup removes it again after the proof.
           gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
 
+          project_invoker="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+            --flatten='bindings[].members' \
+            --filter="bindings.role:roles/run.invoker AND bindings.members:serviceAccount:${active_account}" \
+            --format='value(bindings.members)' | head -n1 || true)"
+          token_creator="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+            --flatten='bindings[].members' \
+            --filter='bindings.role:roles/iam.serviceAccountTokenCreator AND bindings.members:serviceAccount:service-1038180719788@gcp-sa-pubsub.iam.gserviceaccount.com' \
+            --format='value(bindings.members)' | head -n1 || true)"
+          test -n "$project_invoker"
+          test -n "$token_creator"
+
           {
             echo "# Google Health Constellation live proof"
             echo
@@ -83,6 +92,7 @@ jobs:
             echo "Region: $REGION"
             echo "Exact source head: $source_sha"
             echo "Mode: temporary/reversible infrastructure proof"
+            echo "IAM mutations by this proof: none"
             echo "Production identity separation: NOT claimed by this temporary proof"
             echo
           } > "$proof"
@@ -130,16 +140,8 @@ jobs:
           revision="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           test -n "$service_url" && test -n "$revision"
 
-          # The GitHub proof principal and the temporary push identity need invoke
-          # permission on this proof service only. Production deployment uses the
-          # dedicated identities required by deploy-gmail-push-worker.ps1.
-          gcloud run services add-iam-policy-binding "$service" \
-            --project "$PROJECT_ID" --region "$REGION" \
-            --member "serviceAccount:${active_account}" --role roles/run.invoker --quiet >/dev/null
-          gcloud run services add-iam-policy-binding "$service" \
-            --project "$PROJECT_ID" --region "$REGION" \
-            --member "serviceAccount:${runtime_sa}" --role roles/run.invoker --quiet >/dev/null
-
+          # No service-level IAM mutation is needed: the audit proved the GitHub
+          # identity already inherits roles/run.invoker at project scope.
           unauth_status="$(curl -sS -o /dev/null -w '%{http_code}' "$service_url/healthz")"
           token="$(gcloud auth print-identity-token --audiences="$service_url")"
           echo "::add-mask::$token"
@@ -152,38 +154,31 @@ jobs:
           echo "Creating temporary Pub/Sub topic..."
           gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
 
-          # Pub/Sub must be able to mint an OIDC token as the temporary push SA.
-          binding_added="false"
-          if ! gcloud iam service-accounts get-iam-policy "$runtime_sa" --project "$PROJECT_ID" \
-              --flatten='bindings[].members' \
-              --filter="bindings.role:roles/iam.serviceAccountTokenCreator AND bindings.members:serviceAccount:${pubsub_agent}" \
-              --format='value(bindings.members)' | grep -q .; then
-            gcloud iam service-accounts add-iam-policy-binding "$runtime_sa" \
-              --project "$PROJECT_ID" \
-              --member "serviceAccount:${pubsub_agent}" \
-              --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null
-            binding_added="true"
-          fi
-
-          cleanup_token_binding() {
-            if [[ "$binding_added" == "true" ]]; then
-              gcloud iam service-accounts remove-iam-policy-binding "$runtime_sa" \
-                --project "$PROJECT_ID" \
-                --member "serviceAccount:${pubsub_agent}" \
-                --role roles/iam.serviceAccountTokenCreator --quiet >/dev/null 2>&1 || true
-            fi
-          }
-          trap 'cleanup_token_binding; cleanup' EXIT
-
-          gcloud pubsub subscriptions create "$subscription" \
+          # The audit already proved Pub/Sub's service agent has project-level
+          # Service Account Token Creator. Use the already-invoker GitHub service
+          # account as the TEMPORARY push-auth identity. Production keeps a
+          # dedicated push identity; this proof performs no IAM mutation.
+          if ! subscription_output="$(gcloud pubsub subscriptions create "$subscription" \
             --project "$PROJECT_ID" \
             --topic "$topic" \
             --push-endpoint "${service_url}/events/gmail-push" \
-            --push-auth-service-account "$runtime_sa" \
+            --push-auth-service-account "$active_account" \
             --push-auth-token-audience "$service_url" \
             --ack-deadline 20 \
             --message-retention-duration 10m \
-            --quiet
+            --quiet 2>&1)"; then
+            {
+              echo "## Partial proof reached"
+              echo "- Cloud Build produced an immutable image."
+              echo "- Private Cloud Run deployed successfully."
+              echo "- Unauthenticated /healthz status: $unauth_status"
+              echo "- Authenticated /healthz status: $auth_status"
+              echo "- Pub/Sub authenticated subscription creation was blocked without IAM mutation."
+              echo "- Blocker class: iam.serviceAccounts.actAs or equivalent subscription attachment permission."
+            } >> "$proof"
+            echo "$subscription_output" >&2
+            exit 1
+          fi
 
           payload='{"emailAddress":"unknown-proof@example.invalid","historyId":"100"}'
           message_id="$(gcloud pubsub topics publish "$topic" --project "$PROJECT_ID" --message "$payload" --format='value(messageIds[0])')"
@@ -199,7 +194,14 @@ jobs:
             if [[ -n "$push_status" ]]; then break; fi
             sleep 5
           done
-          test "$push_status" = "204"
+          if [[ "$push_status" != "204" ]]; then
+            {
+              echo "## Partial proof reached"
+              echo "- Authenticated Pub/Sub subscription was created and a synthetic message was published."
+              echo "- Request status could not be confirmed as 204 with the audit principal's available log permissions."
+            } >> "$proof"
+            exit 1
+          fi
 
           {
             echo "## Proven"
@@ -208,7 +210,7 @@ jobs:
             echo "- Private Cloud Run revision: $revision"
             echo "- Unauthenticated /healthz status: $unauth_status"
             echo "- Authenticated /healthz status: $auth_status"
-            echo "- Temporary authenticated Pub/Sub push subscription created."
+            echo "- Temporary authenticated Pub/Sub push subscription created without IAM mutation."
             echo "- Synthetic Gmail-shaped Pub/Sub message id: $message_id"
             echo "- Cloud Run /events/gmail-push status from Pub/Sub: $push_status"
             echo "- Firestore-backed worker runtime initialized successfully for an unknown mailbox and failed closed with 204."
