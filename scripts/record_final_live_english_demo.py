@@ -22,7 +22,11 @@ CLOUD_REVISION = os.getenv("HEALTHIA_CLOUD_REVISION", "")
 CLOUD_IMAGE = os.getenv("HEALTHIA_CLOUD_IMAGE", "")
 CLOUD_PROJECT = os.getenv("HEALTHIA_CLOUD_PROJECT", "")
 CLOUD_REGION = os.getenv("HEALTHIA_CLOUD_REGION", "")
-TARGET_SECONDS = int(os.getenv("HEALTHIA_DEMO_TARGET_SECONDS", "220"))
+
+
+def checkpoint(report: dict) -> None:
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    REPORT.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def overlay(page: Page, title: str, body: str, seconds: float) -> None:
@@ -58,13 +62,13 @@ def latest_assistant_message(page: Page) -> dict:
     return assistants[-1] if assistants else {}
 
 
-def wait_for_assistant_after(page: Page, previous_id: str = "", timeout_s: float = 20.0) -> dict:
+def wait_for_assistant_after(page: Page, previous_id: str = "", timeout_s: float = 30.0) -> dict:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         message = latest_assistant_message(page)
         if message.get("id") and message.get("id") != previous_id:
             return message
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(250)
     raise RuntimeError("assistant did not produce a new response in time")
 
 
@@ -92,14 +96,15 @@ def answer_conversational_block(page: Page, *, answer_prefix: str) -> None:
         option = visible.locator(".clinical-option").first
         if option.count():
             option.click()
+        page.wait_for_timeout(280)
         block.locator(".clinical-next-question").click()
         if index < 4:
-            page.wait_for_timeout(180)
+            page.wait_for_timeout(280)
             require(block.locator(".clinical-question:visible").count() == 1, "next conversational question did not appear")
             require(block.locator(".clinical-mini-turn.patient").count() == index + 1, "answered turn did not persist in visible transcript")
 
 
-def latest_result_state(page: Page, filename: str, timeout_s: float = 80.0) -> tuple[dict, dict, dict]:
+def latest_result_state(page: Page, filename: str, timeout_s: float = 70.0) -> tuple[dict, dict, dict]:
     deadline = time.time() + timeout_s
     last_state: dict = {}
     while time.time() < deadline:
@@ -112,22 +117,34 @@ def latest_result_state(page: Page, filename: str, timeout_s: float = 80.0) -> t
             document = next((item for item in state.get("documents", []) if item.get("related_result_id") == result_id), None)
             if result.get("status") == "parsed" and result_id and document:
                 return state, result, document
-        page.wait_for_timeout(700)
+        page.wait_for_timeout(500)
     raise RuntimeError(f"live demo result did not become parsed: {last_state.get('results', [])[-2:]}")
 
 
-def wait_for_result_mission(page: Page, result_id: str, timeout_s: float = 55.0) -> dict:
+def wait_for_exact_result_mission(
+    page: Page,
+    *,
+    mission_id: str,
+    result_id: str,
+    document_id: str,
+    timeout_s: float = 25.0,
+) -> dict:
     deadline = time.time() + timeout_s
     last = None
     while time.time() < deadline:
         state = api_json(page, "/api/bootstrap")
-        matches = [mission for mission in state.get("missions", []) if mission.get("mission_type") == "result_explanation" and result_id in (mission.get("evidence_ids") or [])]
-        if matches:
-            last = matches[-1]
-            if last.get("status") == "completed":
+        last = next((mission for mission in state.get("missions", []) if str(mission.get("id") or "") == mission_id), None)
+        if last:
+            evidence = set(last.get("evidence_ids") or [])
+            if (
+                last.get("mission_type") == "result_explanation"
+                and last.get("status") == "completed"
+                and result_id in evidence
+                and document_id in evidence
+            ):
                 return last
-        page.wait_for_timeout(650)
-    raise RuntimeError(f"Taskmaster mission did not complete: {last}")
+        page.wait_for_timeout(450)
+    raise RuntimeError(f"exact Taskmaster mission did not complete with persisted evidence: {last}")
 
 
 def send_chat(page: Page, text: str) -> None:
@@ -168,6 +185,7 @@ def run() -> dict:
         "pdf_sha256": hashlib.sha256(pdf).hexdigest(),
         "checks": [],
     }
+    checkpoint(report)
 
     started = time.monotonic()
     with sync_playwright() as p:
@@ -186,7 +204,7 @@ def run() -> dict:
         page.goto(f"{BASE_URL}/login", wait_until="networkidle", timeout=60_000)
         page.wait_for_function("document.documentElement.lang === 'en'")
         require(page.locator("#registerTab").is_visible(), "registration UI missing")
-        overlay(page, "HealthIA ONE", "A patient's health should not reset when a conversation ends. This is the live exact-candidate application on Google Cloud — not screenshots or a mockup.", 7)
+        overlay(page, "HealthIA ONE", "Live exact-candidate application on Google Cloud. No screenshots, no mock screens.", 3)
         clear_overlay(page)
 
         page.locator("#registerTab").click()
@@ -207,40 +225,35 @@ def run() -> dict:
         report["patient_id"] = patient_id
         report["readiness"] = {key: readiness.get(key) for key in ("ready", "model", "adk_ready", "ai_ready", "store_backend", "evidence_backend", "auth_required")}
         report["checks"].append("exact_candidate_live_google_runtime")
+        checkpoint(report)
 
         before = latest_assistant_message(page)
         send_chat(page, "Since yesterday I have burning pain when I urinate and I need to go very often. Help me understand what information is still missing.")
         human = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=25.0)
         require(str(human.get("content") or "").strip(), "human-first assistant response was empty")
         require(str((human.get("metadata") or {}).get("response_locale") or "") == "en", "human-first response was not English")
-        page.wait_for_timeout(700)
+        page.wait_for_timeout(400)
         require(page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').count() == 0, "structured interview appeared on the human-first turn")
         report["checks"].append("human_first_conversation_before_structured_intake")
-        overlay(page, "Human before form", "HealthIA does not turn one symptom message into a questionnaire. It first responds naturally and asks what changed or matters most.", 7)
+        overlay(page, "Human before workflow", "One symptom does not become a rigid form. HealthIA first responds naturally.", 3)
         clear_overlay(page)
 
         send_chat(page, "The burning is 6 out of 10, I also have lower abdominal pain, and the urinary frequency is getting worse. I want to discuss a health problem.")
-        assistant_id, status = wait_for_dynamic_or_orientation(page, str(human.get("id") or ""), timeout_s=90.0)
+        assistant_id, status = wait_for_dynamic_or_orientation(page, str(human.get("id") or ""), timeout_s=70.0)
         require(status == "dynamic_clinical_questions", f"concrete clinical follow-up did not start adaptive intake: {status}")
         require_message_locale(page, assistant_id, "en")
         page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
-        overlay(page, "Google ADK + Gemini", "Once the patient gives concrete clinical context, ADK executes the bounded baseline tool. Gemini creates five case-specific questions, shown as one conversational turn at a time.", 8)
+        overlay(page, "Google ADK + Gemini", "ADK activates the bounded workflow. Gemini creates exactly five case-specific questions, shown one conversational turn at a time.", 4)
         clear_overlay(page)
         answer_conversational_block(page, answer_prefix="Synthetic answer")
         report["checks"].append("one_question_at_a_time_five_question_contract")
+        checkpoint(report)
 
-        assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id, timeout_s=90.0)
-        blocks = 1
-        while status in {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"} and blocks < 3:
-            require_message_locale(page, assistant_id, "en")
-            blocks += 1
-            overlay(page, "Conversation memory", "If more evidence is useful, the next ADK/Gemini block receives the actual prior questions and answers instead of restarting the patient story.", 5)
-            clear_overlay(page)
-            answer_conversational_block(page, answer_prefix=f"Follow-up {blocks}")
-            assistant_id, status = wait_for_dynamic_or_orientation(page, assistant_id, timeout_s=90.0)
-        require(status == "clinical_ai_orientation_completed", f"clinical orientation did not complete: {status}")
-        require_message_locale(page, assistant_id, "en")
-        report["checks"].append("safe_clinical_orientation_completed")
+        # Let the submitted five-answer payload settle, but do not spend judge
+        # time completing optional extra interview blocks. Full orientation is
+        # covered by CI; the video now moves to the Taskmaster track core.
+        post_block = wait_for_assistant_after(page, assistant_id, timeout_s=70.0)
+        require(str((post_block.get("metadata") or {}).get("response_locale") or "") == "en", "post-block response was not English")
 
         before_action = latest_assistant_message(page)
         send_chat(page, "Open my results.")
@@ -249,7 +262,7 @@ def run() -> dict:
         require(action.get("type") == "open_view" and action.get("view") == "results", f"chat command did not emit allowlisted Results ui_action: {action_reply.get('metadata')}")
         page.wait_for_function("document.getElementById('view-results')?.classList.contains('is-active') === true", timeout=15_000)
         report["checks"].append("chat_health_os_open_results")
-        overlay(page, "Chat is the operating surface", "A safe workspace command becomes an allowlisted UI action. Gemini cannot invent arbitrary selectors or silently perform destructive actions.", 6)
+        overlay(page, "Chat is the operating surface", "The command becomes a deterministic allow-listed UI action, not an arbitrary model-generated selector.", 3)
         clear_overlay(page)
 
         page.locator("#resultFile").set_input_files(str(pdf_path))
@@ -257,21 +270,56 @@ def run() -> dict:
         result_id = str(result.get("id") or "")
         document_id = str(document.get("id") or "")
         require(result_id and document_id, "result/document provenance missing")
+        result_explanation = str(result.get("explanation") or "").strip()
+        require(result_explanation, "parsed multimodal result has no patient explanation")
+        spanish_leaks = ("este análisis", "el archivo original", "limitaciones:", "resultado multimodal")
+        require(not any(marker in result_explanation.lower() for marker in spanish_leaks), f"English demo leaked Spanish result explanation: {result_explanation[:500]}")
         report["result_id"] = result_id
         report["document_id"] = document_id
-        report["checks"].append("multimodal_original_result_and_provenance")
-        overlay(page, "Evidence first", "The original PDF is stored first in private Cloud Storage. Gemini extracts readable evidence, Firestore commits patient-scoped state, and the clinical twin keeps provenance to the original.", 8)
+        report["result_panel"] = str(result.get("panel") or "")
+        report["checks"].extend([
+            "multimodal_original_result_and_provenance",
+            "english_multimodal_result_explanation",
+        ])
+        checkpoint(report)
+        overlay(page, "Evidence first", "The original synthetic PDF is preserved in private Cloud Storage; Gemini extracts readable evidence and Firestore stores patient-scoped state with provenance.", 4)
         clear_overlay(page)
 
         page.locator('.main-nav [data-open="chat"]').click()
+        before_explanation = latest_assistant_message(page)
         send_chat(page, f"Explain the result {filename} I just uploaded and confirm that it was saved with the original file.")
-        mission = wait_for_result_mission(page, result_id)
-        require(document_id in (mission.get("evidence_ids") or []), "completed mission lost original-document evidence")
-        report["mission_id"] = str(mission.get("id") or "")
-        report["checks"].append("taskmaster_mission_completed_from_persisted_evidence")
+        explanation_reply = wait_for_assistant_after(page, str(before_explanation.get("id") or ""), timeout_s=45.0)
+        explanation_meta = explanation_reply.get("metadata") or {}
+        reply_mission_id = str(explanation_reply.get("mission_id") or "")
+        report["result_explanation_reply"] = {
+            "id": str(explanation_reply.get("id") or ""),
+            "mission_id": reply_mission_id,
+            "intent": explanation_meta.get("intent"),
+            "mission_type": explanation_meta.get("mission_type"),
+            "action_target": explanation_meta.get("action_target"),
+            "response_locale": explanation_meta.get("response_locale"),
+        }
+        checkpoint(report)
+        require(explanation_meta.get("response_locale") == "en", f"result explanation reply was not English: {explanation_meta}")
+        require(explanation_meta.get("mission_type") == "result_explanation", f"explicit current result did not outrank stale context: {explanation_meta}")
+        require(explanation_meta.get("action_target") == "results", f"result explanation routed to wrong workspace: {explanation_meta}")
+        require(reply_mission_id, f"result explanation response has no mission_id: {explanation_meta}")
+        mission = wait_for_exact_result_mission(
+            page,
+            mission_id=reply_mission_id,
+            result_id=result_id,
+            document_id=document_id,
+        )
+        report["mission_id"] = reply_mission_id
+        report["checks"].extend([
+            "explicit_current_topic_overrides_stale_context",
+            "assistant_mission_link_matches_persisted_taskmaster",
+            "taskmaster_mission_completed_from_persisted_evidence",
+        ])
+        checkpoint(report)
         page.locator('.main-nav [data-open="missions"]').click()
-        page.wait_for_timeout(650)
-        overlay(page, "Taskmaster closure", "The mission is not complete because the model answered. It is complete because the persisted result and original document actually exist and remain correlated evidence.", 8)
+        page.wait_for_timeout(500)
+        overlay(page, "Taskmaster closure", "This mission is complete because the persisted result and original evidence exist and remain linked — not merely because the model produced an answer.", 4)
         clear_overlay(page)
 
         page.locator("#accountPill").click()
@@ -286,31 +334,29 @@ def run() -> dict:
         require((restored.get("profile") or {}).get("id") == patient_id, "patient identity changed after relogin")
         require(any(item.get("id") == result_id for item in restored.get("results", [])), "result disappeared after relogin")
         require(any(item.get("id") == document_id for item in restored.get("documents", [])), "document disappeared after relogin")
-        require(any(item.get("id") == mission.get("id") and item.get("status") == "completed" for item in restored.get("missions", [])), "mission disappeared after relogin")
+        require(any(item.get("id") == reply_mission_id and item.get("status") == "completed" for item in restored.get("missions", [])), "mission disappeared after relogin")
         report["checks"].append("logout_login_durable_continuity")
-        overlay(page, "Durable continuity", "After logout and login, the result, original evidence and completed mission are still present. Canonical state does not live in the browser tab.", 7)
+        checkpoint(report)
+        overlay(page, "Durable continuity", "After logout and login, the result, original evidence and completed Taskmaster mission are still present.", 4)
         clear_overlay(page)
 
         readiness = api_json(page, "/api/readiness")
         page.locator('.main-nav [data-open="chat"]').click()
         cloud_summary = (
-            f"Exact candidate {CANDIDATE_SHA[:12]} · Cloud Run revision {CLOUD_REVISION or 'verified'} · "
-            f"Gemini {readiness.get('model')} on Vertex AI · ADK ready: {readiness.get('adk_ready')} · "
+            f"Exact candidate {CANDIDATE_SHA[:12]} · Cloud Run {CLOUD_REVISION or 'verified'} · "
+            f"Gemini {readiness.get('model')} · ADK ready: {readiness.get('adk_ready')} · "
             f"State: {readiness.get('store_backend')} · Evidence: {readiness.get('evidence_backend')}"
         )
-        overlay(page, "Live Google Cloud proof", cloud_summary, 9)
+        overlay(page, "Live Google Cloud proof", cloud_summary, 5)
         report["checks"].append("visible_exact_candidate_cloud_proof")
         clear_overlay(page)
-
-        elapsed = time.monotonic() - started
-        if elapsed < TARGET_SECONDS:
-            overlay(page, "Your health never starts over.", "HealthIA finishes when the evidence-backed outcome exists, remains auditable, and is ready for the patient's next conversation.", min(8.0, TARGET_SECONDS - elapsed))
-            clear_overlay(page)
 
         require(not page_errors, f"browser page errors: {page_errors}")
         require(not console_errors, f"browser console errors: {console_errors}")
         report["checks"].append("zero_browser_console_or_page_errors")
         report["status"] = "PASS"
+        report["raw_elapsed_seconds"] = round(time.monotonic() - started, 2)
+        checkpoint(report)
         context.close()
         browser.close()
 
@@ -320,7 +366,7 @@ def run() -> dict:
     report["video_file"] = str(video.relative_to(ROOT))
     report["video_sha256"] = hashlib.sha256(video.read_bytes()).hexdigest()
     report["elapsed_seconds"] = round(time.monotonic() - started, 2)
-    REPORT.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    checkpoint(report)
     print("HEALTHIA_FINAL_LIVE_ENGLISH_DEMO_PASS")
     print(json.dumps({"status": report["status"], "candidate_sha": CANDIDATE_SHA, "checks": report["checks"], "video_sha256": report["video_sha256"], "elapsed_seconds": report["elapsed_seconds"]}, ensure_ascii=False))
     return report
@@ -331,6 +377,14 @@ if __name__ == "__main__":
         run()
     except Exception as exc:
         OUTPUT.mkdir(parents=True, exist_ok=True)
-        REPORT.write_text(json.dumps({"status": "FAIL", "error_type": type(exc).__name__, "error": str(exc)[:2000]}, indent=2), encoding="utf-8")
+        if REPORT.exists():
+            try:
+                failure = json.loads(REPORT.read_text(encoding="utf-8"))
+            except Exception:
+                failure = {}
+        else:
+            failure = {}
+        failure.update({"status": "FAIL", "error_type": type(exc).__name__, "error": str(exc)[:3000]})
+        REPORT.write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"HEALTHIA_FINAL_LIVE_ENGLISH_DEMO_FAIL {type(exc).__name__}: {exc}")
         raise
