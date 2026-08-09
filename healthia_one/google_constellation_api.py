@@ -42,6 +42,7 @@ class FreeBusyRequest(BaseModel):
 
 class ActionAuthorizationRequest(BaseModel):
     action: GoogleAction
+    payload: dict[str, Any]
     ttl_minutes: int = Field(default=15, ge=1, le=1440)
     one_time: bool = True
 
@@ -86,14 +87,12 @@ def build_google_constellation_router(constellation: GoogleConstellationService)
             **capability_manifest(),
             "patient_id": pid,
             "grants": [item.model_dump(mode="json") for item in constellation.grants(pid)],
-            "google_account_connection": (
-                {
-                    "connected": bool(connection and connection.enabled),
-                    "google_account": connection.google_account if connection and connection.enabled else "",
-                    "granted_scopes": connection.granted_scopes if connection and connection.enabled else [],
-                    "secret_material_exposed": False,
-                }
-            ),
+            "google_account_connection": {
+                "connected": bool(connection and connection.enabled),
+                "google_account": connection.google_account if connection and connection.enabled else "",
+                "granted_scopes": connection.granted_scopes if connection and connection.enabled else [],
+                "secret_material_exposed": False,
+            },
         }
 
     @router.post("/grants")
@@ -182,6 +181,7 @@ def build_google_constellation_router(constellation: GoogleConstellationService)
                 patient_id(),
                 mission_id,
                 payload.action,
+                payload=payload.payload,
                 ttl_minutes=payload.ttl_minutes,
                 one_time=payload.one_time,
             )
@@ -190,7 +190,10 @@ def build_google_constellation_router(constellation: GoogleConstellationService)
         return {
             "authorization": authorization.model_dump(mode="json"),
             "external_action_performed": False,
-            "truth_boundary": "Authorization permits one scoped action; it is not an execution receipt.",
+            "truth_boundary": (
+                "Authorization is bound to this exact patient + mission + action + payload fingerprint. "
+                "Changing any material action payload requires a new authorization; authorization is not an execution receipt."
+            ),
         }
 
     @router.post("/missions/{mission_id}/contact")
