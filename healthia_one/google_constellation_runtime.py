@@ -12,7 +12,6 @@ from healthia_one.google_connector_runtime import (
     DriveConnector,
     GmailConnector,
     GoogleActionExecutor,
-    MapsConnector,
     PeopleConnector,
     TasksConnector,
 )
@@ -34,6 +33,7 @@ from healthia_one.google_constellation_store import (
     build_action_intent_key,
     utc_now,
 )
+from healthia_one.google_maps_connector import HealthIAMapsConnector
 from healthia_one.google_mission_actions import (
     calendar_event_payload,
     followup_task_payload,
@@ -209,7 +209,7 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
 
     maps_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
     if maps_key:
-        connectors[GoogleService.MAPS] = MapsConnector(maps_key)
+        connectors[GoogleService.MAPS] = HealthIAMapsConnector(maps_key)
 
     class PatientBoundOAuthProxy:
         def __init__(self, service, connector_type):
