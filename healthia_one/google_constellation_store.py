@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -8,6 +10,7 @@ from pydantic import BaseModel, Field
 from healthia_one.google_constellation import (
     GoogleAction,
     GoogleActionReceipt,
+    GoogleActionRequest,
     GoogleGrant,
     new_id,
 )
@@ -17,22 +20,46 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def build_action_intent_key(request: GoogleActionRequest) -> str:
+    """Hash the patient/mission/action/payload independently of auth IDs.
+
+    This lets the patient authorize one exact external mutation before an
+    authorization ID exists. If destination, content, time, file or any other
+    material payload field changes, the intent key changes and the old
+    authorization cannot be reused.
+    """
+    payload = json.dumps(request.payload, sort_keys=True, ensure_ascii=False, default=str)
+    raw = "|".join((request.patient_id, request.mission_id, str(request.action), payload))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 class GoogleActionAuthorization(BaseModel):
     id: str = Field(default_factory=lambda: new_id("gauth"))
     patient_id: str
     mission_id: str
     action: GoogleAction
+    intent_key: str = Field(min_length=64, max_length=64)
     enabled: bool = True
     one_time: bool = True
     created_at: datetime = Field(default_factory=utc_now)
     expires_at: datetime | None = None
     consumed_at: datetime | None = None
 
-    def usable_for(self, *, patient_id: str, mission_id: str, action: GoogleAction, now: datetime | None = None) -> bool:
+    def usable_for(
+        self,
+        *,
+        patient_id: str,
+        mission_id: str,
+        action: GoogleAction,
+        intent_key: str,
+        now: datetime | None = None,
+    ) -> bool:
         now = now or utc_now()
         if not self.enabled:
             return False
         if self.patient_id != patient_id or self.mission_id != mission_id or self.action != action:
+            return False
+        if self.intent_key != intent_key:
             return False
         if self.expires_at is not None and self.expires_at <= now:
             return False
