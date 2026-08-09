@@ -337,10 +337,14 @@ class GoogleOAuthBrowserFlow:
         bundles = _normalize_bundles(bundles_raw)
         scopes = oauth_scopes_for_bundles(bundles)
         verifier = secrets.token_urlsafe(64)
+        # The OAuth state is sent to Google and may appear in provider logs. It
+        # therefore contains no HealthIA patient identifier, email or clinical
+        # reference. Patient binding stays only in the HttpOnly PKCE cookie and
+        # the authenticated HealthIA session; state_hash binds both halves.
         state = _signed_token(
             self.state_secret,
             "google_oauth_state",
-            {"patient_id": patient_id, "bundles": [item.value for item in bundles]},
+            {"flow_nonce": secrets.token_hex(12), "bundles": [item.value for item in bundles]},
         )
         cookie = _signed_token(
             self.state_secret,
@@ -372,7 +376,7 @@ class GoogleOAuthBrowserFlow:
         self._validate_redirect()
         state_payload = _verify_signed_token(self.state_secret, state, "google_oauth_state")
         cookie_payload = _verify_signed_token(self.state_secret, pkce_cookie, "google_oauth_pkce")
-        if state_payload.get("patient_id") != patient_id or cookie_payload.get("patient_id") != patient_id:
+        if cookie_payload.get("patient_id") != patient_id:
             raise GoogleOAuthFlowError("Google OAuth state does not belong to this patient session")
         expected_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
         if not hmac.compare_digest(str(cookie_payload.get("state_hash") or ""), expected_hash):
