@@ -1,3 +1,4 @@
+import base64
 import json
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -87,6 +88,12 @@ def flow(*, store=None, reader=None, writer=None, transport=None, state_secret=S
     )
 
 
+def decode_signed_body(token: str) -> dict:
+    _, encoded, _ = token.split(".", 2)
+    padded = encoded + "=" * (-len(encoded) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+
+
 def test_unconfigured_oauth_reports_not_ready_without_crashing_startup():
     value = GoogleOAuthBrowserFlow(
         connection_store=MemoryOAuthConnectionStore(),
@@ -106,7 +113,7 @@ def test_unconfigured_oauth_reports_not_ready_without_crashing_startup():
         value.begin("patient_demo")
 
 
-def test_begin_uses_pkce_state_offline_access_and_incremental_narrow_scopes_without_secret_in_url():
+def test_begin_uses_pkce_state_offline_access_and_incremental_narrow_scopes_without_secret_or_patient_id_in_url():
     value = flow()
     authorization_url, cookie = value.begin(
         "patient_demo",
@@ -128,6 +135,10 @@ def test_begin_uses_pkce_state_offline_access_and_incremental_narrow_scopes_with
     assert "https://www.googleapis.com/auth/calendar.freebusy" in scopes
     assert "https://www.googleapis.com/auth/gmail.send" not in scopes
     assert "client-secret-value" not in authorization_url
+    state_body = decode_signed_body(query["state"][0])
+    assert "patient_id" not in state_body["payload"]
+    assert "patient_demo" not in json.dumps(state_body)
+    assert set(state_body["payload"]) == {"flow_nonce", "bundles"}
     assert cookie.startswith("hgo1.")
 
 
@@ -168,6 +179,17 @@ def test_tampered_state_and_pkce_cookie_are_rejected_before_token_exchange():
         value.complete("patient_demo", state=state + "x", code="code", pkce_cookie=cookie)
     with pytest.raises(GoogleOAuthFlowError):
         value.complete("patient_demo", state=state, code="code", pkce_cookie=cookie + "x")
+    assert transport.forms == []
+
+
+def test_pkce_cookie_binds_state_to_current_patient_session_even_though_provider_state_is_patient_opaque():
+    transport = Transport()
+    value = flow(transport=transport)
+    authorization_url, cookie = value.begin("patient_demo")
+    state = parse_qs(urlparse(authorization_url).query)["state"][0]
+
+    with pytest.raises(GoogleOAuthFlowError, match="patient session"):
+        value.complete("patient_other", state=state, code="code", pkce_cookie=cookie)
     assert transport.forms == []
 
 
