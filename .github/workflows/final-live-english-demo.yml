@@ -32,7 +32,20 @@ jobs:
       VOICE_PART_1: https://resource2.heygen.ai/text_to_speech/8981c4b72391476e87aacb95e683d25d/04d0ae1d0af2489ca7d3bb402a39a890/id=c2308a93-dd4a-4840-8660-527da461507e.wav
       VOICE_PART_2: https://resource2.heygen.ai/text_to_speech/8981c4b72391476e87aacb95e683d25d/04d0ae1d0af2489ca7d3bb402a39a890/id=8934ea99-20db-4f64-a4af-5178ef8a07cc.wav
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out exact candidate head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checked-out SHA is the candidate SHA
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SHA"
+          echo "HEALTHIA_EXACT_HEAD_PASS $actual"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -147,6 +160,7 @@ jobs:
               raise SystemExit('demo is not certified as live-app-only')
           required={
               'exact_candidate_live_google_runtime',
+              'human_first_conversation_before_structured_intake',
               'one_question_at_a_time_five_question_contract',
               'safe_clinical_orientation_completed',
               'chat_health_os_open_results',
