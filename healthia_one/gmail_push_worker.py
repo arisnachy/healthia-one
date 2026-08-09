@@ -99,7 +99,7 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
         return {"status": "ok", "service": "healthia-gmail-worker"}
 
     @app.post("/events/gmail-push")
-    async def gmail_push(envelope: dict[str, Any]) -> dict[str, Any] | Response:
+    async def gmail_push(envelope: dict[str, Any]) -> Any:
         try:
             notification = decode_gmail_pubsub_push(envelope)
         except ValueError:
