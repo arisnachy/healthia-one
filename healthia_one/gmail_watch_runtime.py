@@ -191,6 +191,17 @@ class GmailWatchManager:
         cutoff = epoch_ms(current + timedelta(hours=self.renew_before_hours))
         results: list[tuple[str, str]] = []
         for watch in self.watch_store.expiring_before(cutoff):
+            connection = self.constellation.runtime.oauth_connection_store.load(watch.patient_id)
+            mailbox = str(connection.google_account or "").strip().lower() if connection else ""
+            if connection is None or not connection.enabled or mailbox != watch.email_address.strip().lower():
+                # Disconnect/account switch is a terminal state for the old watch,
+                # not a scheduler-wide retry condition. Disable metadata without
+                # touching Gmail or Secret Manager.
+                watch.enabled = False
+                watch.updated_at = current
+                self.watch_store.save(watch)
+                results.append((watch.patient_id, "disabled_disconnected"))
+                continue
             renewed, status = self.ensure_watch(watch.patient_id, force=True, now=current)
             results.append((renewed.patient_id, status))
         return results
