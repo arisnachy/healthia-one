@@ -115,18 +115,21 @@ def _permission_response(state: PatientState, patient_text: str) -> ChatResponse
         "disable assistance radar",
     )
 
-    if any(phrase in normalized for phrase in enable_science):
-        permissions.scientific_enabled = True
-        action = "scientific_radar_enabled"
-    elif any(phrase in normalized for phrase in disable_science):
+    # Negative intents must win before positive substring matches. In Spanish,
+    # "desactiva" contains "activa", so checking enable first would silently
+    # turn an explicit opt-out into an opt-in.
+    if any(phrase in normalized for phrase in disable_science):
         permissions.scientific_enabled = False
         action = "scientific_radar_disabled"
-    elif any(phrase in normalized for phrase in enable_resources):
-        permissions.resource_enabled = True
-        action = "resource_radar_enabled"
     elif any(phrase in normalized for phrase in disable_resources):
         permissions.resource_enabled = False
         action = "resource_radar_disabled"
+    elif any(phrase in normalized for phrase in enable_science):
+        permissions.scientific_enabled = True
+        action = "scientific_radar_enabled"
+    elif any(phrase in normalized for phrase in enable_resources):
+        permissions.resource_enabled = True
+        action = "resource_radar_enabled"
     else:
         return None
 
