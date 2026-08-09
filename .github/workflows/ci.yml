@@ -108,6 +108,7 @@ jobs:
           node --check web/account.js
           node --check web/auth.js
           node --check web/cost-control.js
+          node --check web/opportunities-ui.js
       - name: Reject version-number UI layers
         shell: bash
         run: |
