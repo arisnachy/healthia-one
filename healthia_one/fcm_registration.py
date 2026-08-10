@@ -39,13 +39,18 @@ class FCMDeviceRegistration(BaseModel):
     patient_id: str
     connection_id: str
     device_id: str
-    registration_token: str = Field(repr=False)
-    token_sha256: str = Field(min_length=64, max_length=64)
+    # Disabled registrations are privacy tombstones: token material is deleted,
+    # while enabled registrations always carry both the raw token and its digest.
+    registration_token: str | None = Field(default=None, repr=False)
+    token_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     enabled: bool = True
     updated_at: datetime = Field(default_factory=utc_now)
     last_delivery_proof_id: str | None = Field(default=None, min_length=8, max_length=128)
     last_delivery_ack_at: datetime | None = None
     last_delivery_notification_shown: bool | None = None
+
+    def usable(self) -> bool:
+        return bool(self.enabled and self.registration_token and self.token_sha256)
 
 
 class FCMRegistrationStore(Protocol):
@@ -81,16 +86,13 @@ def _merged_registration(
     *,
     allow_reenable: bool,
 ) -> FCMDeviceRegistration | None:
-    """Return the value that may be persisted without bypassing a user opt-out.
-
-    A normal token refresh is automatic background behavior and therefore cannot
-    turn a disabled registration back on. Re-enabling is a separate explicit
-    opt-in action. Returning ``None`` means the sticky disabled record must remain
-    untouched, including its previous token/hash.
-    """
+    """Return a value that cannot bypass a sticky user notification opt-out."""
 
     if existing is not None and not existing.enabled and not allow_reenable:
         return None
+
+    if not registration.registration_token or not registration.token_sha256:
+        raise ValueError("Enabled FCM registration requires token material")
 
     value = registration.model_copy(deep=True)
     value.enabled = True
@@ -121,7 +123,7 @@ class MemoryFCMRegistrationStore:
         return [
             value.model_copy(deep=True)
             for (owner, _), value in self._values.items()
-            if owner == patient_id and value.enabled
+            if owner == patient_id and value.usable()
         ]
 
     def disable_connection(self, patient_id: str, connection_id: str) -> bool:
@@ -130,6 +132,8 @@ class MemoryFCMRegistrationStore:
         if value is None:
             return False
         value.enabled = False
+        value.registration_token = None
+        value.token_sha256 = None
         value.updated_at = utc_now()
         self._values[key] = value
         return True
@@ -143,7 +147,7 @@ class MemoryFCMRegistrationStore:
     ) -> FCMDeviceRegistration | None:
         key = (patient_id, connection_id)
         value = self._values.get(key)
-        if value is None or not value.enabled:
+        if value is None or not value.usable():
             return None
         value.last_delivery_proof_id = str(proof_id)
         value.last_delivery_ack_at = utc_now()
@@ -188,15 +192,31 @@ class FirestoreFCMRegistrationStore:
 
     def list_active(self, patient_id: str) -> list[FCMDeviceRegistration]:
         query = self._devices(patient_id).where("enabled", "==", True)
-        return [FCMDeviceRegistration.model_validate(item.to_dict()) for item in query.stream()]
+        values = [FCMDeviceRegistration.model_validate(item.to_dict()) for item in query.stream()]
+        return [value for value in values if value.usable()]
 
     def disable_connection(self, patient_id: str, connection_id: str) -> bool:
         ref = self._devices(patient_id).document(connection_id)
-        snapshot = ref.get()
-        if not snapshot.exists:
-            return False
-        ref.set({"enabled": False, "updated_at": utc_now().isoformat()}, merge=True)
-        return True
+        transaction = self.client.transaction()
+
+        @self.firestore.transactional
+        def disable(txn):
+            snapshot = ref.get(transaction=txn)
+            if not snapshot.exists:
+                return False
+            txn.set(
+                ref,
+                {
+                    "enabled": False,
+                    "registration_token": self.firestore.DELETE_FIELD,
+                    "token_sha256": self.firestore.DELETE_FIELD,
+                    "updated_at": utc_now().isoformat(),
+                },
+                merge=True,
+            )
+            return True
+
+        return bool(disable(transaction))
 
     def acknowledge(
         self,
@@ -210,7 +230,7 @@ class FirestoreFCMRegistrationStore:
         if not snapshot.exists:
             return None
         current = FCMDeviceRegistration.model_validate(snapshot.to_dict())
-        if not current.enabled:
+        if not current.usable():
             return None
         acknowledged_at = utc_now()
         ref.set(
