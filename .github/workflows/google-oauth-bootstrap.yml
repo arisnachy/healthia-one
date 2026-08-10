@@ -1,0 +1,137 @@
+name: Google OAuth live bootstrap
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/google-oauth-bootstrap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-google-oauth-bootstrap-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-health-constellation')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-demo
+      STATE_SECRET: healthia-google-oauth-state
+      CLIENT_SECRET: healthia-google-oauth-client
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Enable bounded mega-loop APIs and create OAuth secret shells
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p dist/google-oauth-bootstrap
+          out="dist/google-oauth-bootstrap/bootstrap.md"
+          source_sha="$(git rev-parse HEAD)"
+          service_url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          runtime_sa="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
+          test -n "$service_url" && test -n "$runtime_sa"
+          callback="${service_url}/api/google-constellation/oauth/callback"
+
+          # User explicitly authorized this live promotion. Enabling an API does
+          # not itself perform Workspace side effects; billable Maps calls remain
+          # behind the application connector/cost policy.
+          required_apis=(
+            calendar-json.googleapis.com
+            tasks.googleapis.com
+            people.googleapis.com
+            drive.googleapis.com
+            places.googleapis.com
+            routes.googleapis.com
+          )
+          gcloud services enable "${required_apis[@]}" --project "$PROJECT_ID" --quiet
+
+          if ! gcloud secrets describe "$STATE_SECRET" --project "$PROJECT_ID" >/dev/null 2>&1; then
+            state_value="$(openssl rand -base64 48 | tr -d '\n')"
+            printf '%s' "$state_value" | gcloud secrets create "$STATE_SECRET" \
+              --project "$PROJECT_ID" --replication-policy=automatic --data-file=- --quiet >/dev/null
+            unset state_value
+          fi
+          state_version="$(gcloud secrets versions list "$STATE_SECRET" --project "$PROJECT_ID" \
+            --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)')"
+          if [[ -z "$state_version" ]]; then
+            state_value="$(openssl rand -base64 48 | tr -d '\n')"
+            printf '%s' "$state_value" | gcloud secrets versions add "$STATE_SECRET" \
+              --project "$PROJECT_ID" --data-file=- --quiet >/dev/null
+            unset state_value
+            state_version="$(gcloud secrets versions list "$STATE_SECRET" --project "$PROJECT_ID" \
+              --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)')"
+          fi
+          test -n "$state_version"
+
+          if ! gcloud secrets describe "$CLIENT_SECRET" --project "$PROJECT_ID" >/dev/null 2>&1; then
+            gcloud secrets create "$CLIENT_SECRET" --project "$PROJECT_ID" \
+              --replication-policy=automatic --quiet >/dev/null
+          fi
+          client_version="$(gcloud secrets versions list "$CLIENT_SECRET" --project "$PROJECT_ID" \
+            --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)' 2>/dev/null || true)"
+
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          for api in "${required_apis[@]}" gmail.googleapis.com pubsub.googleapis.com run.googleapis.com secretmanager.googleapis.com; do
+            grep -Fxq "$api" <<<"$enabled"
+          done
+
+          {
+            echo "# Google OAuth live bootstrap"
+            echo
+            echo "Exact source head: $source_sha"
+            echo "Project: $PROJECT_ID"
+            echo "Region: $REGION"
+            echo "Cloud Run service: $SERVICE_NAME"
+            echo "Runtime identity: $runtime_sa"
+            echo "Exact HTTPS callback: $callback"
+            echo
+            echo "## Enabled for the live mega-loop"
+            for api in "${required_apis[@]}"; do echo "- $api"; done
+            echo "- gmail.googleapis.com (already enabled)"
+            echo "- pubsub.googleapis.com (already enabled)"
+            echo
+            echo "## Secret Manager"
+            echo "- OAuth state secret version: projects/${PROJECT_ID}/secrets/${STATE_SECRET}/versions/${state_version}"
+            echo "- OAuth client secret: projects/${PROJECT_ID}/secrets/${CLIENT_SECRET}"
+            if [[ -n "$client_version" ]]; then
+              echo "- OAuth client JSON version already exists: projects/${PROJECT_ID}/secrets/${CLIENT_SECRET}/versions/${client_version}"
+            else
+              echo "- OAuth client JSON version: PENDING HUMAN WEB-CLIENT CREATION"
+            fi
+            echo
+            echo "No secret payload was printed or uploaded. No Gmail, Calendar, Tasks, Drive, People, Places or Routes request was executed."
+          } > "$out"
+
+          if grep -Eiq '(BEGIN PRIVATE KEY|client_secret["=: ]|refresh_token["=: ]|access_token["=: ]|ya29\.)' "$out"; then
+            echo "Sensitive-looking material appeared in bootstrap evidence; refusing artifact upload."
+            rm -f "$out"
+            exit 1
+          fi
+          cat "$out"
+      - name: Upload sanitized bootstrap receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Google-OAuth-bootstrap
+          path: dist/google-oauth-bootstrap/bootstrap.md
+          if-no-files-found: warn
+          retention-days: 14
