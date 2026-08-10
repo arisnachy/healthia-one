@@ -52,7 +52,7 @@ HealthIA-Android-APK-Readiness
 
 Si su `status.json` indica `BLOCKED_FIREBASE_CONFIG`, el código Android puede estar verde pero **no existe un APK válido para probar FCM**. En ese estado el workflow elimina el APK compilado y no publica `HealthIA-Bridge-debug`.
 
-### Configuración recomendada: un solo secret
+### Configuración recomendada: un solo secret Base64
 
 En Firebase Console, abre el proyecto HealthIA, entra a la aplicación Android con package name:
 
@@ -60,23 +60,38 @@ En Firebase Console, abre el proyecto HealthIA, entra a la aplicación Android c
 com.healthia.one.bridge
 ```
 
-y descarga su `google-services.json`. Copia el contenido completo del archivo como un GitHub Actions repository secret llamado:
+y descarga su `google-services.json`.
+
+Convierte **ese archivo local** a Base64 de una sola línea. En PowerShell:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("google-services.json"))
+```
+
+Guarda el resultado como un GitHub Actions repository secret llamado:
+
+```text
+HEALTHIA_FIREBASE_ANDROID_CONFIG_B64
+```
+
+Ésta es la vía preferida porque mantiene un solo valor de secret, evita depender de un JSON/multilínea para el enmascaramiento y no requiere copiar cuatro identificadores por separado. El workflow:
+
+1. decodifica Base64 únicamente dentro del runner;
+2. valida que el contenido sea un `google-services.json` válido;
+3. exige exactamente un cliente Android con package `com.healthia.one.bridge`;
+4. extrae `mobilesdk_app_id`, `current_key`, `project_id` y `project_number`;
+5. exige que `project_id` sea `healthia-6088a`;
+6. enmascara cada valor derivado;
+7. inyecta los valores únicamente durante Gradle;
+8. nunca escribe el `google-services.json` en el repositorio ni en artifacts.
+
+Por compatibilidad, el workflow también acepta el JSON completo en:
 
 ```text
 HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON
 ```
 
-Ésta es la vía preferida. El workflow:
-
-1. interpreta el JSON únicamente dentro del runner;
-2. exige exactamente un cliente Android con package `com.healthia.one.bridge`;
-3. extrae `mobilesdk_app_id`, `current_key`, `project_id` y `project_number`;
-4. exige que `project_id` sea `healthia-6088a`;
-5. enmascara cada valor;
-6. inyecta los valores únicamente durante Gradle;
-7. nunca escribe el `google-services.json` en el repositorio ni en artifacts.
-
-Como fallback también admite cuatro Actions Secrets separados:
+pero Base64 es la vía recomendada para una configuración nueva. Como segundo fallback admite cuatro Actions Secrets separados:
 
 ```text
 HEALTHIA_FIREBASE_APP_ID
@@ -85,7 +100,7 @@ HEALTHIA_FIREBASE_PROJECT_ID
 HEALTHIA_FIREBASE_SENDER_ID
 ```
 
-No es necesario configurar ambas vías. El JSON protegido tiene prioridad.
+No es necesario configurar más de una vía; Base64 tiene prioridad, luego JSON, y por último los cuatro valores individuales.
 
 Cuando la configuración es válida, el workflow verifica que el `BuildConfig` generado no tenga identificadores vacíos y publica:
 
@@ -99,7 +114,7 @@ El artefacto es un ZIP. Extráelo para obtener:
 HealthIA-Bridge-debug.apk
 ```
 
-No copies la configuración Firebase a logs, issues, PRs ni artefactos de evidencia. El workflow la consume desde GitHub Actions y la enmascara durante el build.
+No pegues `google-services.json`, su Base64 ni los valores Firebase en chats, logs, issues, PRs o artefactos de evidencia. Guárdalos directamente como Actions Secret.
 
 También puedes abrir `android-health-bridge` en Android Studio y ejecutar la aplicación directamente en un teléfono, pero una prueba FCM real sigue requiriendo la configuración Firebase válida.
 
