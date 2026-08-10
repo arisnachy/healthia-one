@@ -30,6 +30,7 @@ from healthia_one.google_oauth_credentials import SecretManagerOAuthTokenProvide
 
 
 logger = logging.getLogger("healthia.gmail_worker")
+logger.setLevel(logging.INFO)
 
 
 class EnsureWatchRequest(BaseModel):
@@ -154,9 +155,6 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
             "scheduler_job_bound": bool(job_name),
             "secret_material_exposed": False,
         }
-        # Emit one machine-readable, PHI-neutral operational event. It contains
-        # aggregate counts and binding booleans only: no patient IDs, mailbox,
-        # OAuth material, message IDs, clinical content, or raw Scheduler headers.
         logger.info(
             json.dumps(
                 {
