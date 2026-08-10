@@ -5,7 +5,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.time.Instant
 
 object HealthiaApi {
@@ -66,7 +65,7 @@ object HealthiaApi {
     }
 
     fun disableFcm(baseUrl: String, token: String, deviceId: String): String {
-        val encodedDeviceId = URLEncoder.encode(deviceId, StandardCharsets.UTF_8)
+        val encodedDeviceId = URLEncoder.encode(deviceId, "UTF-8")
         return request(
             baseUrl,
             "/api/devices/fcm/register/$encodedDeviceId",
