@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,15 +40,17 @@ class MainActivity : ComponentActivity() {
                     supportsBackgroundRead = repository.supportsBackgroundRead,
                     availabilityMessage = repository.availabilityMessage(),
                     initialBaseUrl = preferences.getString("base_url", BuildConfig.HEALTHIA_BASE_URL).orEmpty(),
+                    initialNotificationsEnabled = FirebaseRuntime.notificationsEnabled(this),
                     connect = { baseUrl, code, updateStatus -> connectBridge(baseUrl, code, updateStatus) },
                     syncNow = { updateStatus -> syncNow(updateStatus) },
+                    setPrivateNotifications = { enabled, complete -> setPrivateNotifications(enabled, complete) },
                     installOrUpdate = ::installOrUpdateHealthConnect,
                     openHealthConnect = ::openHealthConnect,
                 )
             }
         }
         // If this device was already paired, refresh its FCM token mapping on each
-        // foreground launch. Empty pairing preferences fail closed inside runtime.
+        // foreground launch only while the user has private notifications enabled.
         FirebaseRuntime.syncRegistration(applicationContext)
     }
 
@@ -67,11 +70,76 @@ class MainActivity : ComponentActivity() {
                     .putString("base_url", normalizedUrl)
                     .putString("access_token", token)
                     .apply()
-                requestNotificationPermissionIfNeeded()
-                FirebaseRuntime.syncRegistration(applicationContext)
-                updateStatus("Teléfono vinculado. Registrando notificaciones privadas; autoriza Health Connect cuando quieras sincronizar datos.")
+                if (FirebaseRuntime.notificationsEnabled(applicationContext)) {
+                    requestNotificationPermissionIfNeeded()
+                    FirebaseRuntime.syncRegistration(applicationContext)
+                    updateStatus("Teléfono vinculado. Registrando notificaciones privadas; autoriza Health Connect cuando quieras sincronizar datos.")
+                } else {
+                    updateStatus("Teléfono vinculado. Tus notificaciones privadas siguen desactivadas hasta que las reactives explícitamente.")
+                }
             }.onFailure { updateStatus("No se pudo vincular: ${it.message}") }
         }
+    }
+
+    private fun setPrivateNotifications(enabled: Boolean, complete: (Boolean, String) -> Unit) {
+        val preferences = getSharedPreferences("healthia", MODE_PRIVATE)
+        val baseUrl = preferences.getString("base_url", "").orEmpty()
+        val accessToken = preferences.getString("access_token", "").orEmpty()
+        val currentDeviceId = preferences.getString("device_id", "").orEmpty()
+        if (baseUrl.isBlank() || accessToken.isBlank() || currentDeviceId.isBlank()) {
+            complete(FirebaseRuntime.notificationsEnabled(applicationContext), "Vincula el teléfono con HealthIA antes de cambiar las notificaciones privadas.")
+            return
+        }
+
+        if (!enabled) {
+            lifecycleScope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        HealthiaApi.disableFcm(baseUrl, accessToken, currentDeviceId)
+                    }
+                }.onSuccess {
+                    FirebaseRuntime.setNotificationsEnabled(applicationContext, false)
+                    complete(false, "Notificaciones privadas desactivadas. HealthIA no volverá a registrar este teléfono automáticamente.")
+                }.onFailure {
+                    complete(true, "No se pudieron desactivar las notificaciones: ${it.message}")
+                }
+            }
+            return
+        }
+
+        if (!FirebaseRuntime.initialize(applicationContext)) {
+            complete(false, "Firebase no está configurado en esta compilación; no se pueden reactivar las notificaciones.")
+            return
+        }
+        requestNotificationPermissionIfNeeded()
+        FirebaseMessaging.getInstance().token
+            .addOnSuccessListener { registrationToken ->
+                if (registrationToken.isBlank()) {
+                    complete(false, "Firebase no devolvió un token válido; las notificaciones siguen desactivadas.")
+                    return@addOnSuccessListener
+                }
+                lifecycleScope.launch {
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            HealthiaApi.explicitlyEnableFcm(
+                                baseUrl,
+                                accessToken,
+                                currentDeviceId,
+                                registrationToken,
+                            )
+                        }
+                    }.onSuccess {
+                        FirebaseRuntime.setNotificationsEnabled(applicationContext, true)
+                        FirebaseRuntime.syncRegistration(applicationContext)
+                        complete(true, "Notificaciones privadas reactivadas explícitamente.")
+                    }.onFailure {
+                        complete(false, "No se pudieron reactivar las notificaciones: ${it.message}")
+                    }
+                }
+            }
+            .addOnFailureListener {
+                complete(false, "No se pudo obtener el token de Firebase; las notificaciones siguen desactivadas.")
+            }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -147,14 +215,17 @@ private fun BridgeScreen(
     supportsBackgroundRead: Boolean,
     availabilityMessage: String,
     initialBaseUrl: String,
+    initialNotificationsEnabled: Boolean,
     connect: (String, String, (String) -> Unit) -> Unit,
     syncNow: ((String) -> Unit) -> Unit,
+    setPrivateNotifications: (Boolean, (Boolean, String) -> Unit) -> Unit,
     installOrUpdate: () -> Unit,
     openHealthConnect: () -> Unit,
 ) {
     var status by remember { mutableStateOf(availabilityMessage) }
     var baseUrl by remember { mutableStateOf(initialBaseUrl) }
     var code by remember { mutableStateOf("") }
+    var notificationsEnabled by remember { mutableStateOf(initialNotificationsEnabled) }
     val permissionLauncher = rememberLauncherForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
@@ -216,6 +287,24 @@ private fun BridgeScreen(
                 enabled = baseUrl.isNotBlank() && code.length == 8,
                 onClick = { connect(baseUrl, code) { status = it } },
             ) { Text("Vincular con HealthIA") }
+
+            Text(
+                if (notificationsEnabled) {
+                    "Notificaciones privadas: activadas. Los avisos no incluyen contenido clínico."
+                } else {
+                    "Notificaciones privadas: desactivadas. El teléfono no se volverá a registrar automáticamente."
+                }
+            )
+            OutlinedButton(
+                onClick = {
+                    setPrivateNotifications(!notificationsEnabled) { actual, message ->
+                        notificationsEnabled = actual
+                        status = message
+                    }
+                },
+            ) {
+                Text(if (notificationsEnabled) "Desactivar notificaciones privadas" else "Reactivar notificaciones privadas")
+            }
 
             OutlinedButton(
                 enabled = healthConnectAvailable,
