@@ -20,4 +20,9 @@
 - FCM device readiness audit: GitHub Actions run `31399804527` SUCCESS; artifact `HealthIA-Wave2-FCM-Device-Readiness`, artifact id `9067133415`, digest `sha256:16ae32623e19e7528e9e0b87fbd8ce4c06c4ea781f2f91efb3e0d06157abb6c6`.
 - FCM provider truth from Firestore: 0 registration documents, 0 active registrations, 0 valid registration hashes; no raw token, secret material, or IAM mutation was emitted. Therefore FCM is `BLOCKED_DEVICE`, not LIVE PASS.
 - Firebase Management app listing returned HTTP 403/PERMISSION_DENIED for the GitHub audit principal. This is recorded only as an audit-IAM limitation and is not treated as proof that Firebase is absent.
+- Android bridge APK build run `31399922787` SUCCESS; artifact `HealthIA-Bridge-debug`, artifact id `9067302759`, artifact digest `sha256:931a8e0fbbf5332e1022f7bd8e07444bcc03a86b2d0e04f6f8eafa802cf3ae51`.
+- Read-only Wave 2 API enablement audit: run `31400393321` SUCCESS; artifact `HealthIA-Wave2-API-Enablement`, artifact id `9067372235`, digest `sha256:7f78467d9197fdb965e5edfb53e53cd485813469fc42f04a2f4be2952d96c0a0`.
+- API provider truth: `fcm.googleapis.com=true`, `firebase.googleapis.com=true`, `texttospeech.googleapis.com=true`, `aiplatform.googleapis.com=true`; `speech.googleapis.com=false`, `documentai.googleapis.com=false`, `healthcare.googleapis.com=false`.
+- API audit mutation flags: `api_enable_mutation=false`, `iam_mutation=false`, `secret_material_exposed=false`.
+- Canonical Cloud capability audit was restored after the probe to Golden blob `1c505b8292b3fea3b595971e6d9e7d29ea42ea0a`.
 - Current full verification after restoring Golden workflows: GitHub Actions run `31399922801` SUCCESS for pytest, Full System, DialogBench, Chromium, LAB OMEGA Core/Secondary, compileall, smoke, JUDGE, frontend/PowerShell gates, release build/verification and pytest inside extracted release.
