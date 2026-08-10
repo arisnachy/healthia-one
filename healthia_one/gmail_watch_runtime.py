@@ -119,6 +119,15 @@ class GmailWatchManager:
             raise GoogleConnectorError("Connected Google account has no usable mailbox identity")
         return mailbox
 
+    @staticmethod
+    def _scheduled_window(value: str | None) -> str | None:
+        clean = str(value or "").strip()
+        if not clean:
+            return None
+        if len(clean) > 96 or any(ch in clean for ch in "\r\n"):
+            raise GoogleConnectorError("Scheduler renewal window is invalid")
+        return clean
+
     def due(self, watch: GmailWatchState | None, *, now: datetime | None = None) -> bool:
         if watch is None or not watch.enabled or watch.expiration_ms is None:
             return True
@@ -132,6 +141,7 @@ class GmailWatchManager:
         *,
         force: bool = False,
         now: datetime | None = None,
+        renewal_window: str | None = None,
     ) -> tuple[GmailWatchState, str]:
         if not self.topic_name.startswith("projects/") or "/topics/" not in self.topic_name:
             raise GoogleConnectorError("Gmail Pub/Sub topic must be a full projects/.../topics/... resource")
@@ -147,13 +157,15 @@ class GmailWatchManager:
         if not force and not self.due(existing, now=current):
             return existing, "unchanged"
 
-        # Scheduled daily renewal remains idempotent for the day. An explicit
-        # force is an operator repair and must reach Gmail instead of recovering
-        # a stale daily receipt that may move the history cursor backwards.
-        renewal_window = (
+        # Cloud Scheduler can retry the same delivery. Bind the guarded action to
+        # X-CloudScheduler-ScheduleTime when supplied so retries recover the same
+        # receipt, while the next scheduled invocation receives a new fingerprint.
+        # Explicit operator repairs remain unique and always reach Gmail.
+        scheduled_window = self._scheduled_window(renewal_window)
+        renewal_window_value = (
             current.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             if force
-            else current.strftime("%Y-%m-%d")
+            else (scheduled_window or current.strftime("%Y-%m-%d"))
         )
         request_value = GoogleActionRequest(
             patient_id=patient_id,
@@ -163,7 +175,7 @@ class GmailWatchManager:
                 "topic_name": self.topic_name,
                 "label_ids": ["INBOX"],
                 "label_filter_behavior": "INCLUDE",
-                "renewal_window": renewal_window,
+                "renewal_window": renewal_window_value,
             },
         )
         receipt, outcome = self.constellation.runtime.guarded_executor.execute(request_value)
@@ -193,8 +205,14 @@ class GmailWatchManager:
         self.watch_store.save(watch)
         return watch, "renewed"
 
-    def renew_due(self, *, now: datetime | None = None) -> list[tuple[str, str]]:
+    def renew_due(
+        self,
+        *,
+        now: datetime | None = None,
+        renewal_window: str | None = None,
+    ) -> list[tuple[str, str]]:
         current = now or utc_now()
+        scheduled_window = self._scheduled_window(renewal_window)
         cutoff = epoch_ms(current + timedelta(hours=self.renew_before_hours))
         results: list[tuple[str, str]] = []
         for watch in self.watch_store.expiring_before(cutoff):
@@ -209,9 +227,11 @@ class GmailWatchManager:
                 self.watch_store.save(watch)
                 results.append((watch.patient_id, "disabled_disconnected"))
                 continue
-            # The directory already selected only due watches, so the scheduled
-            # path can retain its daily idempotency key. `force=True` is reserved
-            # for an explicit operator repair.
-            renewed, status = self.ensure_watch(watch.patient_id, force=False, now=current)
+            renewed, status = self.ensure_watch(
+                watch.patient_id,
+                force=False,
+                now=current,
+                renewal_window=scheduled_window,
+            )
             results.append((renewed.patient_id, status))
         return results
