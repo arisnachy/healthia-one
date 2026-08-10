@@ -114,6 +114,7 @@ def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
     assert "com.healthia.one.bridge" in workflow
     assert "GOOGLE_SERVICES_JSON_BASE64_SECRET" in workflow
     assert "GOOGLE_SERVICES_JSON_SECRET" in workflow
+    assert "FIREBASE_MANAGEMENT_API_EPHEMERAL" in workflow
     assert "FOUR_ACTIONS_SECRETS" in workflow
     assert "BLOCKED_FIREBASE_CONFIG" in workflow
     assert "CODE PASS != FCM-READY APK" in workflow
@@ -127,3 +128,20 @@ def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
     assert "HealthIA-Bridge-debug" in guide
     assert "127.0.0.1" in guide
     assert "ipconfig" in guide
+
+
+def test_firebase_readonly_iam_gate_is_narrow_and_chains_only_after_success() -> None:
+    workflow = (ROOT / ".github/workflows/google-firebase-ci-readonly-iam.yml").read_text(encoding="utf-8")
+    assert "I_AUTHORIZE_FCM_VIEWER_FOR_CI" in workflow
+    assert "roles/firebasecloudmessaging.viewer" in workflow
+    assert "roles/firebase.viewer" not in workflow
+    assert "firebase.clients.get" in workflow
+    assert "firebase.clients.list" in workflow
+    assert "firebase.projects.get" in workflow
+    assert "firebase_ready: ${{ steps.postcheck.outputs.firebase_ready }}" in workflow
+    assert "needs.firebase-ci-readonly-iam.outputs.firebase_ready == 'true'" in workflow
+    assert "actions: write" in workflow
+    assert '"ref":"kira/google-constellation-wave2-live"' in workflow
+    assert "actions/workflows/android-bridge.yml/dispatches" in workflow
+    assert "api_enable_mutation':False" in workflow
+    assert "provider_write':False" in workflow
