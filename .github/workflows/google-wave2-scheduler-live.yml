@@ -1,0 +1,165 @@
+name: Google Wave 2 Scheduler LIVE
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/google-wave2-scheduler-live.yml"
+      - "healthia_one/gmail_push_worker.py"
+      - "healthia_one/gmail_watch_runtime.py"
+      - "scripts/verify_gmail_scheduler_live.py"
+      - "tests/test_gmail_push_worker.py"
+      - "tests/test_gmail_watch_runtime.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave2-scheduler-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scheduler-live:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE: healthia-gmail-worker
+      JOB_NAME: healthia-gmail-watch-renewal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Install verifier dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+      - name: Build, deploy, force Scheduler, prove idempotency
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-scheduler-live
+          proof="dist/wave2-scheduler-live/proof.json"
+          source_sha="$(git rev-parse HEAD)"
+          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-gmail-wave2"
+          image="${image_package}:${source_sha}"
+          original_image="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          original_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          promoted=0
+
+          rollback() {
+            rc=$?
+            if [[ $rc -ne 0 && $promoted -eq 1 && -n "$original_image" ]]; then
+              echo "Wave 2 Scheduler proof failed; rolling worker image back to previous revision image." >&2
+              gcloud run services update "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$original_image" --quiet >/dev/null 2>&1 || true
+            fi
+            if [[ $rc -ne 0 ]]; then
+              gcloud artifacts docker images delete "$image" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
+            fi
+            exit $rc
+          }
+          trap rollback EXIT
+
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=""
+          for _ in $(seq 1 60); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+
+          # Update only the image. Existing private IAM, service account, command,
+          # environment, scaling and Scheduler target remain unchanged.
+          gcloud run services update "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$image" --quiet
+          promoted=1
+          new_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$new_revision" && test "$new_revision" != "$original_revision"
+
+          # Fail closed if the exact Scheduler job cannot be described. No broad
+          # IAM is granted here; this is a capability proof of the existing principal.
+          scheduler_sa="$(gcloud scheduler jobs describe "$JOB_NAME" --project "$PROJECT_ID" --location "$REGION" --format='value(httpTarget.oidcToken.serviceAccountEmail)')"
+          test -n "$scheduler_sa"
+
+          # Discover a controlled connected patient without writing identifiers to
+          # the repository or artifact. Require exactly one enabled Gmail watch whose
+          # OAuth connection is enabled. Mask the identifier before using it.
+          patient_id="$(python - <<'PY'
+from google.cloud import firestore
+c=firestore.Client(project='healthia-6088a')
+connections={d.id:(d.to_dict() or {}) for d in c.collection('healthia_google_oauth_connections').stream()}
+ids=[]
+for d in c.collection('healthia_gmail_watch_state').stream():
+    w=d.to_dict() or {}
+    conn=connections.get(d.id) or {}
+    if bool(w.get('enabled', True)) and bool(conn.get('enabled', False)):
+        ids.append(d.id)
+if len(ids) != 1:
+    raise SystemExit(f'expected exactly one controlled enabled OAuth+watch pair, got {len(ids)}')
+print(ids[0])
+PY
+)"
+          test -n "$patient_id"
+          echo "::add-mask::$patient_id"
+
+          python scripts/verify_gmail_scheduler_live.py \
+            --project "$PROJECT_ID" \
+            --location "$REGION" \
+            --job-name "$JOB_NAME" \
+            --scheduler-service-account "$scheduler_sa" \
+            --patient-id "$patient_id" \
+            --confirmed-live-run > "$proof"
+
+          python - <<'PY'
+import json
+p='dist/wave2-scheduler-live/proof.json'
+data=json.load(open(p, encoding='utf-8'))
+assert data.get('status') == 'LIVE_PASS', data
+assert data.get('watch_expiration_future') is True, data
+assert data.get('second_run_noop') is True, data
+assert data.get('secret_material_exposed') is False, data
+PY
+
+          python - <<PY
+import json
+p='$proof'
+d=json.load(open(p, encoding='utf-8'))
+d['source_sha']='$source_sha'
+d['cloud_build_id']='$build_id'
+d['image_digest']='$digest'
+d['worker_revision']='$new_revision'
+d['previous_worker_revision']='$original_revision'
+open(p,'w',encoding='utf-8').write(json.dumps(d,sort_keys=True,indent=2)+'\n')
+PY
+
+          if grep -Eiq '(refresh_token|client_secret|access_token|id_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' "$proof"; then
+            echo "Sensitive-looking material appeared in Scheduler evidence; refusing upload." >&2
+            rm -f "$proof"
+            exit 1
+          fi
+          cat "$proof"
+          trap - EXIT
+      - name: Upload sanitized Scheduler LIVE evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave2-Scheduler-LIVE
+          path: dist/wave2-scheduler-live
+          if-no-files-found: warn
+          retention-days: 30
