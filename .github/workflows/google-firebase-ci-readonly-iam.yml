@@ -20,9 +20,6 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: read
-
 concurrency:
   group: healthia-firebase-ci-readonly-iam-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
@@ -30,8 +27,12 @@ concurrency:
 jobs:
   firebase-ci-readonly-iam:
     if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
+    permissions:
+      contents: read
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    outputs:
+      firebase_ready: ${{ steps.postcheck.outputs.firebase_ready }}
     env:
       PROJECT_ID: healthia-6088a
       AUTHORIZE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'authorize' }}
@@ -136,6 +137,7 @@ jobs:
           echo 'mutated=true' >> "$GITHUB_OUTPUT"
 
       - name: Verify Firebase read access after gate
+        id: postcheck
         if: always() && (steps.preflight.conclusion == 'success')
         shell: bash
         run: |
@@ -148,6 +150,11 @@ jobs:
             -H 'Accept: application/json' \
             "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
           rm -f /tmp/firebase-apps-post.json
+          if [[ "$post_code" == '200' ]]; then
+            echo 'firebase_ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'firebase_ready=false' >> "$GITHUB_OUTPUT"
+          fi
           export POST_CODE="$post_code"
           export MUTATED="${{ steps.grant.outputs.mutated || 'false' }}"
           python - <<'PY'
@@ -193,3 +200,28 @@ jobs:
           path: dist/firebase-ci-readonly-iam/*.json
           if-no-files-found: error
           retention-days: 30
+
+  dispatch-fcm-ready-android-build:
+    needs: firebase-ci-readonly-iam
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'authorize' && needs.firebase-ci-readonly-iam.outputs.firebase_ready == 'true'
+    permissions:
+      actions: write
+      contents: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    steps:
+      - name: Dispatch Android FCM-ready build on Wave 2 branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -d '{"ref":"kira/google-constellation-wave2-live"}' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/android-bridge.yml/dispatches"
+          echo 'Android FCM-ready build dispatch accepted after verified Firebase read access.'
