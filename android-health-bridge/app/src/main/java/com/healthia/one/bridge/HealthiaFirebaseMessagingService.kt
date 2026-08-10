@@ -15,12 +15,13 @@ import com.google.firebase.messaging.RemoteMessage
 class HealthiaFirebaseMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        if (token.isBlank()) return
+        if (token.isBlank() || !FirebaseRuntime.notificationsEnabled(applicationContext)) return
         FirebaseRuntime.syncRegistration(applicationContext)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
+        if (!FirebaseRuntime.notificationsEnabled(applicationContext)) return
         val proofId = message.data["proof_id"].orEmpty()
         val kind = message.data["kind"].orEmpty()
         if (kind != "healthia_update" || !validProofId(proofId)) return
