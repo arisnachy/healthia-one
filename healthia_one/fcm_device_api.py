@@ -30,12 +30,11 @@ def build_fcm_device_router(
 ) -> APIRouter:
     """Register FCM clients and record PHI-neutral delivery acknowledgements.
 
-    Raw FCM registration tokens are accepted and stored server-side only. Delivery
-    evidence contains a short synthetic proof id, visible-notification boolean and
-    timestamp, never notification content, patient identifiers or the raw token.
-
-    Notification opt-out is sticky: automatic token refreshes cannot re-enable a
-    disabled registration. Re-enabling requires the explicit opt-in endpoint.
+    Raw FCM registration tokens are accepted and stored server-side only while the
+    user has private notifications enabled. Opt-out erases token material and keeps
+    only a disabled tombstone so automatic token refreshes cannot silently opt in.
+    Delivery evidence contains a short synthetic proof id, visible-notification
+    boolean and timestamp, never notification content or raw registration tokens.
     """
 
     verifier = pairing_manager or DevicePairingManager()
@@ -75,13 +74,13 @@ def build_fcm_device_router(
         candidate = registration_for(principal, payload.registration_token)
         registrations.save(candidate)
         current = registrations.load(principal.patient_id, principal.connection_id)
-        enabled = bool(current and current.enabled)
+        usable = bool(current and current.usable())
         return {
-            "registered": enabled,
-            "notifications_enabled": enabled,
+            "registered": usable,
+            "notifications_enabled": usable,
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
-            "token_stored_server_side": enabled,
+            "token_stored_server_side": usable,
             "token_returned": False,
             "sticky_opt_out_respected": bool(current and not current.enabled),
             "updated_at": current.updated_at.isoformat() if current else candidate.updated_at.isoformat(),
@@ -96,7 +95,7 @@ def build_fcm_device_router(
         candidate = registration_for(principal, payload.registration_token)
         registrations.save(candidate, allow_reenable=True)
         current = registrations.load(principal.patient_id, principal.connection_id)
-        if current is None or not current.enabled:
+        if current is None or not current.usable():
             raise HTTPException(status_code=409, detail="No se pudo reactivar el registro FCM.")
         return {
             "registered": True,
@@ -146,6 +145,7 @@ def build_fcm_device_router(
             "unregistered": bool(disabled),
             "notifications_enabled": False,
             "sticky_opt_out": bool(disabled),
+            "token_erased_server_side": bool(disabled),
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
             "token_returned": False,
@@ -158,10 +158,10 @@ def build_fcm_device_router(
     ) -> dict:
         principal = await active_principal(authorization, device_id)
         registration = registrations.load(principal.patient_id, principal.connection_id)
-        enabled = bool(registration and registration.enabled)
+        usable = bool(registration and registration.usable())
         return {
-            "registered": enabled,
-            "notifications_enabled": enabled,
+            "registered": usable,
+            "notifications_enabled": usable,
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
             "token_returned": False,
