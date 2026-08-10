@@ -1,0 +1,154 @@
+name: Google Firebase Android config readiness
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/google-firebase-config-readiness.yml'
+      - '.github/workflows/android-bridge.yml'
+      - 'android-health-bridge/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firebase-config-readiness:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Bind source SHA
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Audit Firebase config sources read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/firebase-config-readiness
+
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || true)"
+          if [[ -n "$project_number" ]]; then echo "::add-mask::$project_number"; fi
+
+          gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' | sort > /tmp/enabled-services.txt
+
+          # Firebase Management app listing is attempted only to classify the current
+          # audit principal. Response bodies are discarded and never uploaded.
+          access_token="$(gcloud auth print-access-token)"
+          test -n "$access_token"
+          echo "::add-mask::$access_token"
+          firebase_list_code="$(curl -sS -o /tmp/firebase-apps.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${access_token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
+          rm -f /tmp/firebase-apps.json
+
+          secret_list_status=0
+          if gcloud secrets list --project "$PROJECT_ID" --format='value(name)' > /tmp/secret-names.txt 2>/tmp/secret-list.err; then
+            secret_list_status=200
+          else
+            secret_list_status=403
+            : > /tmp/secret-names.txt
+          fi
+          rm -f /tmp/secret-list.err
+
+          # Inspect Cloud Run ENV *names only*, never values.
+          : > /tmp/run-env-names.txt
+          while IFS= read -r service; do
+            [[ -z "$service" ]] && continue
+            gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" \
+              --format=json > /tmp/run-service.json 2>/dev/null || continue
+            python - <<'PY' >> /tmp/run-env-names.txt
+          import json
+          from pathlib import Path
+          try:
+              raw=json.loads(Path('/tmp/run-service.json').read_text(encoding='utf-8'))
+          except Exception:
+              raw={}
+          containers=(((raw.get('spec') or {}).get('template') or {}).get('spec') or {}).get('containers') or []
+          for container in containers:
+              for item in container.get('env') or []:
+                  name=str(item.get('name') or '').strip()
+                  if name:
+                      print(name)
+          PY
+          done < <(gcloud run services list --project "$PROJECT_ID" --region "$REGION" --format='value(metadata.name)' 2>/dev/null || true)
+          sort -u -o /tmp/run-env-names.txt /tmp/run-env-names.txt
+
+          export PROJECT_NUMBER_PRESENT="$( [[ -n "$project_number" ]] && echo true || echo false )"
+          export FIREBASE_LIST_CODE="$firebase_list_code"
+          export SECRET_LIST_STATUS="$secret_list_status"
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          enabled=set(Path('/tmp/enabled-services.txt').read_text(encoding='utf-8').splitlines())
+          secret_names=[line.strip() for line in Path('/tmp/secret-names.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
+          env_names=set(line.strip() for line in Path('/tmp/run-env-names.txt').read_text(encoding='utf-8').splitlines() if line.strip())
+          exact=(
+              'HEALTHIA_FIREBASE_APP_ID',
+              'HEALTHIA_FIREBASE_API_KEY',
+              'HEALTHIA_FIREBASE_PROJECT_ID',
+              'HEALTHIA_FIREBASE_SENDER_ID',
+          )
+          normalized=lambda value: re.sub(r'[^a-z0-9]+','',value.lower())
+          firebase_like=[name for name in secret_names if 'firebase' in normalized(name) or 'googleservices' in normalized(name)]
+          out={
+              'status':'READ_ONLY_AUDIT',
+              'source_sha':os.environ.get('SOURCE_SHA',''),
+              'project_number_readable':os.environ.get('PROJECT_NUMBER_PRESENT')=='true',
+              'firebase_api_enabled':'firebase.googleapis.com' in enabled,
+              'firebase_management_list_http_status':int(os.environ.get('FIREBASE_LIST_CODE') or 0),
+              'secret_manager_api_enabled':'secretmanager.googleapis.com' in enabled,
+              'secret_metadata_list_status':int(os.environ.get('SECRET_LIST_STATUS') or 0),
+              'firebase_like_secret_name_count':len(firebase_like),
+              'exact_firebase_secret_name_presence':{name: name in secret_names for name in exact},
+              'cloud_run_exact_firebase_env_name_presence':{name: name in env_names for name in exact},
+              'api_keys_api_enabled':'apikeys.googleapis.com' in enabled,
+              'provider_write':False,
+              'iam_mutation':False,
+              'secret_value_read':False,
+              'secret_material_exposed':False,
+          }
+          Path('dist/firebase-config-readiness/readiness.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+          rm -f /tmp/enabled-services.txt /tmp/secret-names.txt /tmp/run-env-names.txt
+
+      - name: Refuse secret-like artifact content
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|client_secret|access_token|refresh_token|ya29\.|AIza[0-9A-Za-z_-]{20,}|1:[0-9]+:android:[0-9a-f]+)' dist/firebase-config-readiness; then
+            rm -rf dist/firebase-config-readiness
+            echo 'Sensitive-looking Firebase material detected; refusing upload.' >&2
+            exit 1
+          fi
+
+      - name: Upload sanitized Firebase readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Firebase-Config-Readiness
+          path: dist/firebase-config-readiness/readiness.json
+          if-no-files-found: error
+          retention-days: 30
