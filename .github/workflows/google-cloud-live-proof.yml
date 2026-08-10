@@ -4,9 +4,6 @@ on:
   pull_request:
     paths:
       - ".github/workflows/google-cloud-live-proof.yml"
-      - "healthia_one/gmail_push_worker.py"
-      - "healthia_one/gmail_watch_runtime.py"
-      - "tests/test_gmail_scheduler_observability.py"
   workflow_dispatch:
 
 permissions:
@@ -17,20 +14,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  scheduler-prep:
+  scheduler-natural-observer:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 50
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       SERVICE: healthia-gmail-worker
       CONTROLLED_PATIENT: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+      EXPECTED_IMAGE_SHA: 77110880b40a76105891ffb6a2d6326c2def3ad1
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -40,98 +35,157 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Deploy Wave 2 worker and force one real Gmail renewal
+      - name: Bind baseline to deployed Wave 2 watch state
+        id: baseline
         shell: bash
         run: |
           set -euo pipefail
           echo "::add-mask::$CONTROLLED_PATIENT"
-          mkdir -p dist/wave2-scheduler-prep
-          proof="dist/wave2-scheduler-prep/proof.json"
-          source_sha="$(git rev-parse HEAD)"
-          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-gmail-wave2"
-          image="${image_package}:${source_sha}"
-          original_image="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
-          original_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
-          promoted=0
-
-          rollback() {
-            rc=$?
-            if [[ $rc -ne 0 && $promoted -eq 1 && -n "$original_image" ]]; then
-              echo "Scheduler prep failed; restoring previous worker image." >&2
-              gcloud run services update "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$original_image" --quiet >/dev/null 2>&1 || true
-            fi
-            if [[ $rc -ne 0 ]]; then
-              gcloud artifacts docker images delete "$image" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
-            fi
-            exit $rc
-          }
-          trap rollback EXIT
-
-          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
-          test -n "$build_id"
-          digest=""
-          for _ in $(seq 1 60); do
-            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
-            [[ -n "$digest" ]] && break
-            sleep 5
-          done
-          test -n "$digest"
-
-          gcloud run services update "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$image" --quiet
-          promoted=1
+          mkdir -p dist/wave2-scheduler-live
           worker_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-          new_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
-          test -n "$worker_url" && test -n "$new_revision" && test "$new_revision" != "$original_revision"
-
+          revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          [[ "$image" == *":${EXPECTED_IMAGE_SHA}" ]]
           id_token="$(gcloud auth print-identity-token --audiences="$worker_url")"
-          test -n "$id_token"
           echo "::add-mask::$id_token"
           raw="$(mktemp)"
-          status_code="$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' \
+          code="$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' \
             -X POST "${worker_url}/internal/ensure-watch" \
             -H "Authorization: Bearer ${id_token}" \
             -H 'Content-Type: application/json' \
-            --data "{\"patient_id\":\"${CONTROLLED_PATIENT}\",\"force\":true}")"
-          [[ "$status_code" == "200" ]]
-
-          python - "$raw" "$proof" "$source_sha" "$build_id" "$digest" "$new_revision" "$original_revision" <<'PY'
-          import json, sys, time
-          raw_path, proof_path, source_sha, build_id, digest, revision, previous = sys.argv[1:]
-          data=json.load(open(raw_path, encoding='utf-8'))
-          history=str(data.get('history_id') or '')
-          expiration=data.get('expiration_ms')
-          assert data.get('status') == 'renewed', data.get('status')
-          assert history.isdigit(), 'Gmail watch history id is not numeric'
-          assert isinstance(expiration, int) and expiration > int(time.time()*1000), 'Gmail watch expiration is not future'
-          assert data.get('secret_material_exposed') is False
-          safe={
-              'status':'PREP_LIVE_PASS',
-              'source_sha':source_sha,
-              'cloud_build_id':build_id,
-              'image_digest':digest,
-              'worker_revision':revision,
-              'previous_worker_revision':previous,
-              'gmail_watch_history_numeric':True,
-              'gmail_watch_expiration_future':True,
-              'forced_real_renewal':True,
-              'secret_material_exposed':False,
-              'next_expected_scheduler_utc':'05:00',
-          }
-          open(proof_path,'w',encoding='utf-8').write(json.dumps(safe,sort_keys=True,indent=2)+'\n')
+            --data "{\"patient_id\":\"${CONTROLLED_PATIENT}\",\"force\":false}")"
+          [[ "$code" == "200" ]]
+          fingerprint="$(python - "$raw" <<'PY'
+          import hashlib,json,sys,time
+          d=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert d.get('status') == 'unchanged', d.get('status')
+          h=str(d.get('history_id') or '')
+          e=d.get('expiration_ms')
+          assert h.isdigit()
+          assert isinstance(e,int) and e > int(time.time()*1000)
+          assert d.get('secret_material_exposed') is False
+          print(hashlib.sha256(f'{h}:{e}'.encode()).hexdigest())
           PY
+          )"
           rm -f "$raw"
+          echo "worker_url=$worker_url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "BASELINE_READY revision=$revision"
+      - name: Wait for natural 05:00 UTC Scheduler execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          seconds="$(python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          now=datetime.now(timezone.utc)
+          target=now.replace(hour=5,minute=3,second=0,microsecond=0)
+          if now >= target:
+              # This observer is intended for today's just-imminent 05:00 run.
+              # If it starts shortly after 05:03, inspect immediately; do not wait a day.
+              print(0)
+          else:
+              print(max(0,int((target-now).total_seconds())))
+          PY
+          )"
+          if (( seconds > 2700 )); then
+            echo "Natural Scheduler window is too far away for this bounded proof." >&2
+            exit 1
+          fi
+          echo "Waiting ${seconds}s for the natural Scheduler window."
+          sleep "$seconds"
+      - name: Prove natural Scheduler OIDC and no-op
+        shell: bash
+        env:
+          WORKER_URL: ${{ steps.baseline.outputs.worker_url }}
+          WORKER_REVISION: ${{ steps.baseline.outputs.revision }}
+          BASELINE_FINGERPRINT: ${{ steps.baseline.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONTROLLED_PATIENT"
+          proof="dist/wave2-scheduler-live/proof.json"
+          date_utc="$(date -u +%Y-%m-%d)"
+          since="${date_utc}T04:55:00Z"
 
+          request_json="$(gcloud logging read \
+            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND resource.labels.revision_name=${WORKER_REVISION} AND httpRequest.requestUrl=\"${WORKER_URL}/scheduled/renew-gmail-watches\" AND timestamp>=\"${since}\"" \
+            --project "$PROJECT_ID" --limit 10 --order=desc --format=json)"
+          python - <<'PY' "$request_json" > /tmp/request-safe.json
+          import json,sys
+          rows=json.loads(sys.argv[1] or '[]')
+          good=[]
+          for row in rows:
+              req=row.get('httpRequest') or {}
+              status=int(req.get('status') or 0)
+              if status == 200:
+                  good.append({'timestamp':str(row.get('timestamp') or ''),'status':status})
+          if not good:
+              raise SystemExit('No HTTP 200 natural Scheduler request observed on expected worker revision')
+          print(json.dumps(good[0],sort_keys=True))
+          PY
+
+          scheduler_log="$(gcloud logging read \
+            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND resource.labels.revision_name=${WORKER_REVISION} AND textPayload:\"healthia_gmail_watch_scheduler\" AND timestamp>=\"${since}\"" \
+            --project "$PROJECT_ID" --limit 20 --order=desc --format='value(textPayload)' | head -n1)"
+          test -n "$scheduler_log"
+          echo "$scheduler_log" | grep -F '"scheduler_request_bound":true' >/dev/null
+          echo "$scheduler_log" | grep -F '"scheduler_job_bound":true' >/dev/null
+          echo "$scheduler_log" | grep -F '"processed_count":0' >/dev/null
+          echo "$scheduler_log" | grep -F '"renewed_count":0' >/dev/null
+
+          id_token="$(gcloud auth print-identity-token --audiences="$WORKER_URL")"
+          echo "::add-mask::$id_token"
+          raw="$(mktemp)"
+          code="$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' \
+            -X POST "${WORKER_URL}/internal/ensure-watch" \
+            -H "Authorization: Bearer ${id_token}" \
+            -H 'Content-Type: application/json' \
+            --data "{\"patient_id\":\"${CONTROLLED_PATIENT}\",\"force\":false}")"
+          [[ "$code" == "200" ]]
+          after="$(python - "$raw" <<'PY'
+          import hashlib,json,sys,time
+          d=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert d.get('status') == 'unchanged', d.get('status')
+          h=str(d.get('history_id') or '')
+          e=d.get('expiration_ms')
+          assert h.isdigit()
+          assert isinstance(e,int) and e > int(time.time()*1000)
+          assert d.get('secret_material_exposed') is False
+          print(hashlib.sha256(f'{h}:{e}'.encode()).hexdigest())
+          PY
+          )"
+          rm -f "$raw"
+          [[ "$after" == "$BASELINE_FINGERPRINT" ]]
+
+          request_time="$(python -c 'import json; print(json.load(open("/tmp/request-safe.json"))["timestamp"])')"
+          python - <<PY
+          import json
+          out={
+            'status':'LIVE_PASS',
+            'provider':'Cloud Scheduler + Gmail API',
+            'worker_revision':'$WORKER_REVISION',
+            'natural_scheduler_http_status':200,
+            'natural_scheduler_timestamp':'$request_time',
+            'scheduler_headers_bound':True,
+            'processed_count':0,
+            'renewed_count':0,
+            'watch_fingerprint_unchanged':True,
+            'second_effect_noop':True,
+            'iam_mutation':False,
+            'secret_material_exposed':False,
+          }
+          open('$proof','w',encoding='utf-8').write(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          PY
           if grep -Eiq '(patient_|@|refresh_token|client_secret|access_token|id_token|ya29\.)' "$proof"; then
             rm -f "$proof"
             exit 1
           fi
           cat "$proof"
-          trap - EXIT
-      - name: Upload sanitized Scheduler prep evidence
+      - name: Upload Scheduler LIVE evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-Wave2-Scheduler-PREP-LIVE
-          path: dist/wave2-scheduler-prep
+          name: HealthIA-Wave2-Scheduler-LIVE
+          path: dist/wave2-scheduler-live
           if-no-files-found: warn
           retention-days: 30
