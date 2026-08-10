@@ -14,6 +14,9 @@ from scripts.extract_firebase_android_config import (
 )
 
 
+SYNTHETIC_KEY = "SYNTHETIC_FIREBASE_KEY_1234567890"
+
+
 def synthetic_config(*, package: str = "com.healthia.one.bridge", project: str = "healthia-6088a") -> dict:
     return {
         "project_info": {
@@ -26,7 +29,7 @@ def synthetic_config(*, package: str = "com.healthia.one.bridge", project: str =
                     "mobilesdk_app_id": "1:123456789012:android:abcDEF123456",
                     "android_client_info": {"package_name": package},
                 },
-                "api_key": [{"current_key": "AIzaSyntheticKey12345678901234567890"}],
+                "api_key": [{"current_key": SYNTHETIC_KEY}],
             }
         ],
     }
@@ -43,7 +46,7 @@ def test_base64_config_extracts_only_controlled_android_values() -> None:
 
     assert values == {
         "HEALTHIA_FIREBASE_APP_ID": "1:123456789012:android:abcDEF123456",
-        "HEALTHIA_FIREBASE_API_KEY": "AIzaSyntheticKey12345678901234567890",
+        "HEALTHIA_FIREBASE_API_KEY": SYNTHETIC_KEY,
         "HEALTHIA_FIREBASE_PROJECT_ID": "healthia-6088a",
         "HEALTHIA_FIREBASE_SENDER_ID": "123456789012",
     }
@@ -98,7 +101,7 @@ def test_cli_writes_env_file_but_never_prints_values(tmp_path: Path, monkeypatch
     captured = capsys.readouterr()
     assert code == 0
     assert "values were not printed" in captured.out
-    assert "AIzaSynthetic" not in captured.out + captured.err
+    assert SYNTHETIC_KEY not in captured.out + captured.err
     assert "1:123456789012:android" not in captured.out + captured.err
     text = output.read_text(encoding="utf-8")
     assert "HEALTHIA_FIREBASE_PROJECT_ID=healthia-6088a" in text
