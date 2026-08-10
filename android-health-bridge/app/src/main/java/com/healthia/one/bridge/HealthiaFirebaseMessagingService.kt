@@ -26,19 +26,19 @@ class HealthiaFirebaseMessagingService : FirebaseMessagingService() {
         val kind = message.data["kind"].orEmpty()
         if (kind != "healthia_update" || !validProofId(proofId)) return
 
-        showNeutralNotification()
-        FirebaseRuntime.acknowledgeDelivery(applicationContext, proofId)
+        val notificationShown = showNeutralNotification()
+        FirebaseRuntime.acknowledgeDelivery(applicationContext, proofId, notificationShown)
     }
 
     private fun validProofId(value: String): Boolean =
         value.length in 8..128 && value.all { it.isLetterOrDigit() || it in "._:-" }
 
-    private fun showNeutralNotification() {
+    private fun showNeutralNotification(): Boolean {
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
-            return
+            return false
         }
 
         val channelId = "healthia_updates"
@@ -73,5 +73,6 @@ class HealthiaFirebaseMessagingService : FirebaseMessagingService() {
             .build()
 
         manager.notify(42001, notification)
+        return true
     }
 }
