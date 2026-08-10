@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, HTTPException
 from healthia_one.auth import patient_scope
 from healthia_one.fcm_registration import (
     FCMDeliveryAckRequest,
+    FCMDeviceReenableRequest,
     FCMDeviceRegistrationRequest,
     FCMRegistrationStore,
     build_fcm_registration_store,
@@ -32,6 +33,9 @@ def build_fcm_device_router(
     Raw FCM registration tokens are accepted and stored server-side only. Delivery
     evidence contains a short synthetic proof id and timestamp, never notification
     content, patient identifiers or the raw registration token.
+
+    Notification opt-out is sticky: automatic token refreshes cannot re-enable a
+    disabled registration. Re-enabling requires the explicit opt-in endpoint.
     """
 
     verifier = pairing_manager or DevicePairingManager()
@@ -54,26 +58,55 @@ def build_fcm_device_router(
             raise HTTPException(status_code=401, detail="La identidad del dispositivo no coincide con la conexión.")
         return principal
 
+    def registration_for(principal, registration_token: str):
+        return build_registration(
+            patient_id=principal.patient_id,
+            connection_id=principal.connection_id,
+            device_id=principal.device_id,
+            registration_token=registration_token,
+        )
+
     @router.post("/register")
     async def register_fcm_device(
         payload: FCMDeviceRegistrationRequest,
         authorization: str | None = Header(default=None),
     ) -> dict:
         principal = await active_principal(authorization, payload.device_id)
-        registration = build_registration(
-            patient_id=principal.patient_id,
-            connection_id=principal.connection_id,
-            device_id=principal.device_id,
-            registration_token=payload.registration_token,
-        )
-        registrations.save(registration)
+        candidate = registration_for(principal, payload.registration_token)
+        registrations.save(candidate)
+        current = registrations.load(principal.patient_id, principal.connection_id)
+        enabled = bool(current and current.enabled)
+        return {
+            "registered": enabled,
+            "notifications_enabled": enabled,
+            "connection_id": principal.connection_id,
+            "device_id": principal.device_id,
+            "token_stored_server_side": enabled,
+            "token_returned": False,
+            "sticky_opt_out_respected": bool(current and not current.enabled),
+            "updated_at": current.updated_at.isoformat() if current else candidate.updated_at.isoformat(),
+        }
+
+    @router.post("/register/enable")
+    async def explicitly_reenable_fcm_device(
+        payload: FCMDeviceReenableRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        principal = await active_principal(authorization, payload.device_id)
+        candidate = registration_for(principal, payload.registration_token)
+        registrations.save(candidate, allow_reenable=True)
+        current = registrations.load(principal.patient_id, principal.connection_id)
+        if current is None or not current.enabled:
+            raise HTTPException(status_code=409, detail="No se pudo reactivar el registro FCM.")
         return {
             "registered": True,
+            "notifications_enabled": True,
+            "explicit_opt_in": True,
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
             "token_stored_server_side": True,
             "token_returned": False,
-            "updated_at": registration.updated_at.isoformat(),
+            "updated_at": current.updated_at.isoformat(),
         }
 
     @router.post("/ack")
@@ -109,6 +142,8 @@ def build_fcm_device_router(
         disabled = registrations.disable_connection(principal.patient_id, principal.connection_id)
         return {
             "unregistered": bool(disabled),
+            "notifications_enabled": False,
+            "sticky_opt_out": bool(disabled),
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
             "token_returned": False,
@@ -121,8 +156,10 @@ def build_fcm_device_router(
     ) -> dict:
         principal = await active_principal(authorization, device_id)
         registration = registrations.load(principal.patient_id, principal.connection_id)
+        enabled = bool(registration and registration.enabled)
         return {
-            "registered": bool(registration and registration.enabled),
+            "registered": enabled,
+            "notifications_enabled": enabled,
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
             "token_returned": False,
