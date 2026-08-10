@@ -10,22 +10,16 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: healthia-google-cloud-audit-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   audit:
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-health-constellation')
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 8
     env:
       PROJECT_ID: healthia-6088a
-      REGION: us-central1
-      BASE_SERVICE: healthia-one-demo
     steps:
       - uses: actions/checkout@v4
-      - name: Authenticate to Google Cloud read-only audit
+      - name: Authenticate read-only API audit
         uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
@@ -34,137 +28,30 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Collect sanitized capability inventory
+      - name: Check Wave 2 API enablement only
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/google-cloud-audit
-          out="dist/google-cloud-audit/inventory.md"
-          active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
-          runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)"
-          service_url="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
-          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || true)"
-          pubsub_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
-
-          gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > service.json
-          python - <<'PY' > service-surface.txt
-          import json
-          data=json.load(open('service.json', encoding='utf-8'))
-          annotations=(data.get('metadata') or {}).get('annotations') or {}
-          template=((data.get('spec') or {}).get('template') or {})
-          containers=((template.get('spec') or {}).get('containers') or [])
-          env=(containers[0].get('env') or []) if containers else []
-          names=sorted(str(item.get('name') or '') for item in env if item.get('name'))
-          secret_backed=[]
-          for item in env:
-              vf=item.get('valueFrom') or {}
-              ref=vf.get('secretKeyRef') or {}
-              if item.get('name') and ref:
-                  secret_backed.append(str(item['name']))
-          print('Invoker IAM disabled annotation:', annotations.get('run.googleapis.com/invoker-iam-disabled','<absent>'))
-          print('Environment variable names only:')
-          for name in names: print('-', name)
-          print('Secret-backed environment variable names only:')
-          for name in sorted(secret_backed): print('-', name)
-          print('GOOGLE_MAPS_API_KEY configured:', 'YES' if 'GOOGLE_MAPS_API_KEY' in names else 'NO')
-          print('HEALTHIA_GOOGLE_OAUTH_STATE_SECRET configured:', 'YES' if 'HEALTHIA_GOOGLE_OAUTH_STATE_SECRET' in names else 'NO')
-          print('HEALTHIA_GOOGLE_OAUTH_CLIENT_SECRET_RESOURCE configured:', 'YES' if 'HEALTHIA_GOOGLE_OAUTH_CLIENT_SECRET_RESOURCE' in names else 'NO')
-          print('HEALTHIA_GOOGLE_OAUTH_REDIRECT_URI configured:', 'YES' if 'HEALTHIA_GOOGLE_OAUTH_REDIRECT_URI' in names else 'NO')
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          python - "$enabled" <<'PY'
+          import json,sys
+          enabled=set((sys.argv[1] or '').splitlines())
+          names=['speech.googleapis.com','documentai.googleapis.com','healthcare.googleapis.com','texttospeech.googleapis.com','aiplatform.googleapis.com','fcm.googleapis.com','firebase.googleapis.com']
+          out={
+              'status':'READ_ONLY_AUDIT',
+              'apis':{name:(name in enabled) for name in names},
+              'api_enable_mutation':False,
+              'iam_mutation':False,
+              'secret_material_exposed':False,
+          }
+          open('dist/google-cloud-audit/wave2-api-enablement.json','w',encoding='utf-8').write(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
           PY
-          rm -f service.json
-
-          root_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/" || true)"
-          login_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/login" || true)"
-          session_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/api/auth/session" || true)"
-          oauth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/api/google-constellation/oauth/readiness" || true)"
-
-          {
-            echo "# HealthIA Google Cloud capability audit"
-            echo
-            echo "Project: $PROJECT_ID"
-            echo "Region: $REGION"
-            echo "Commit: $GITHUB_SHA"
-            echo "Mode: read-only inventory; no secret values requested"
-            echo "Audit principal: $active_account"
-            echo "Existing demo runtime identity: $runtime_sa"
-            echo "Pub/Sub service agent: $pubsub_agent"
-            echo
-            echo "## Browser/OAuth surface"
-            echo "Cloud Run URL: $service_url"
-            echo "Candidate OAuth callback: ${service_url}/api/google-constellation/oauth/callback"
-            echo "Unauthenticated GET /: ${root_status:-none}"
-            echo "Unauthenticated GET /login: ${login_status:-none}"
-            echo "Unauthenticated GET /api/auth/session: ${session_status:-none}"
-            echo "Unauthenticated GET /api/google-constellation/oauth/readiness: ${oauth_status:-none}"
-            cat service-surface.txt
-            echo
-            echo "## Enabled relevant APIs"
-            gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' \
-              | grep -E '^(run|firestore|secretmanager|pubsub|cloudscheduler|artifactregistry|cloudbuild|eventarc|aiplatform|places|places-backend|routes|gmail|calendar|calendar-json|people|tasks|drive|documentai|healthcare|speech|texttospeech|translate|fcm|firebase)\.googleapis\.com$' \
-              | sort || true
-            echo
-            echo "## Cloud Run services"
-            gcloud run services list --project "$PROJECT_ID" --region "$REGION" \
-              --format='table(metadata.name,status.url,status.latestReadyRevisionName)' || true
-            echo
-            echo "## Service accounts"
-            gcloud iam service-accounts list --project "$PROJECT_ID" \
-              --format='value(email)' | sort || true
-            echo
-            echo "## Existing project IAM relevant to private push"
-            gcloud projects get-iam-policy "$PROJECT_ID" \
-              --flatten='bindings[].members' \
-              --filter='bindings.role:(roles/run.invoker roles/iam.serviceAccountTokenCreator roles/iam.serviceAccountUser roles/pubsub.serviceAgent)' \
-              --format='table(bindings.role,bindings.members)' || true
-            echo
-            echo "## Existing base-service IAM"
-            gcloud run services get-iam-policy "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" \
-              --flatten='bindings[].members' \
-              --format='table(bindings.role,bindings.members)' || true
-            echo
-            echo "## Existing runtime service-account IAM"
-            if [[ -n "$runtime_sa" ]]; then
-              gcloud iam service-accounts get-iam-policy "$runtime_sa" --project "$PROJECT_ID" \
-                --flatten='bindings[].members' \
-                --filter='bindings.role:(roles/iam.serviceAccountTokenCreator roles/iam.serviceAccountUser)' \
-                --format='table(bindings.role,bindings.members)' || true
-            fi
-            echo
-            echo "## Pub/Sub topics"
-            gcloud pubsub topics list --project "$PROJECT_ID" --format='value(name)' | sort || true
-            echo
-            echo "## Pub/Sub subscriptions"
-            gcloud pubsub subscriptions list --project "$PROJECT_ID" \
-              --format='table(name,topic,pushConfig.pushEndpoint)' || true
-            echo
-            echo "## Cloud Scheduler jobs"
-            gcloud scheduler jobs list --project "$PROJECT_ID" --location "$REGION" \
-              --format='table(name,schedule,state,httpTarget.uri)' || true
-            echo
-            echo "## Artifact Registry repositories"
-            gcloud artifacts repositories list --project "$PROJECT_ID" --location "$REGION" \
-              --format='table(name,format)' || true
-            echo
-            echo "## Secret Manager secret names only"
-            gcloud secrets list --project "$PROJECT_ID" --format='value(name)' | sort || true
-            echo
-            echo "## Firestore databases"
-            gcloud firestore databases list --project "$PROJECT_ID" \
-              --format='table(name,locationId,type)' || true
-          } > "$out"
-          rm -f service-surface.txt
-
-          # Reject accidental credential/token-shaped content before upload.
-          if grep -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret["=: ]|access_token["=: ]|ya29\.|sk-[A-Za-z0-9])' "$out"; then
-            echo "Sensitive-looking material appeared in the audit output; refusing artifact upload."
-            rm -f "$out"
-            exit 1
-          fi
-          cat "$out"
-      - name: Upload sanitized Cloud inventory
+      - name: Upload sanitized API enablement evidence
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-Google-Cloud-audit
-          path: dist/google-cloud-audit/inventory.md
+          name: HealthIA-Wave2-API-Enablement
+          path: dist/google-cloud-audit/wave2-api-enablement.json
           if-no-files-found: error
           retention-days: 7
