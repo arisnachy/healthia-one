@@ -44,15 +44,6 @@ jobs:
           import json, os
           data=json.load(open('/tmp/build.json', encoding='utf-8'))
           failure=data.get('failureInfo') or {}
-          steps=[]
-          for i, step in enumerate(data.get('steps') or []):
-              steps.append({
-                  'index': i,
-                  'id': str(step.get('id') or ''),
-                  'name': str(step.get('name') or ''),
-                  'status': str(step.get('status') or ''),
-                  'exit_code': step.get('exitCode'),
-              })
           out={
               'build_id': str(data.get('id') or ''),
               'status': str(data.get('status') or ''),
@@ -60,23 +51,36 @@ jobs:
               'service_account_resource': str(data.get('serviceAccount') or ''),
               'failure_type': str(failure.get('type') or ''),
               'failure_detail': str(failure.get('detail') or '')[:700],
-              'steps': steps,
+              'steps': [
+                  {'index':i,'id':str(s.get('id') or ''),'name':str(s.get('name') or ''),'status':str(s.get('status') or ''),'exit_code':s.get('exitCode')}
+                  for i,s in enumerate(data.get('steps') or [])
+              ],
               'worker_revision_after_rollback': os.environ.get('CURRENT_REVISION',''),
               'wave2_image_still_active': '/healthia-gmail-wave2:' in os.environ.get('CURRENT_IMAGE',''),
               'read_only': True,
           }
-          path='dist/google-cloud-audit/build-diagnostic.json'
-          open(path,'w',encoding='utf-8').write(json.dumps(out,sort_keys=True,indent=2)+'\n')
-          print(json.dumps(out,sort_keys=True,indent=2))
+          open('dist/google-cloud-audit/build-diagnostic.json','w',encoding='utf-8').write(json.dumps(out,sort_keys=True,indent=2)+'\n')
           PY
-          if grep -Eiq '(refresh_token|client_secret|access_token|id_token|ya29\.|BEGIN PRIVATE KEY)' dist/google-cloud-audit/build-diagnostic.json; then
-            rm -f dist/google-cloud-audit/build-diagnostic.json
+
+          (gcloud builds log "$BUILD_ID" --project "$PROJECT_ID" --region "$REGION" --stream 2>&1 || true) \
+            | grep -Ei '(FAIL|ERROR|PERMISSION|DENIED|Forbidden|RuntimeError|Google REST|Scheduler|Firestore|expected exactly|Traceback|status)' \
+            | tail -n 120 \
+            | sed -E \
+                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g' \
+                -e 's/(refresh_token|client_secret|access_token|id_token)[^[:space:]]*/[credential-field]/gi' \
+                -e 's/ya29\.[A-Za-z0-9._-]+/[token]/g' \
+            > dist/google-cloud-audit/build-error-sanitized.txt || true
+
+          if grep -REiq '(BEGIN PRIVATE KEY|refresh_token|client_secret["=: ]|access_token["=: ]|ya29\.)' dist/google-cloud-audit; then
+            rm -rf dist/google-cloud-audit
             exit 1
           fi
+          cat dist/google-cloud-audit/build-diagnostic.json
+          cat dist/google-cloud-audit/build-error-sanitized.txt || true
       - name: Upload sanitized diagnostic
         uses: actions/upload-artifact@v4
         with:
           name: HealthIA-Wave2-CloudBuild-diagnostic
-          path: dist/google-cloud-audit/build-diagnostic.json
+          path: dist/google-cloud-audit
           if-no-files-found: error
           retention-days: 7
