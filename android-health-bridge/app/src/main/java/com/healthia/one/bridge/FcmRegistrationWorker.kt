@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit
 
 class FcmRegistrationWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
+        if (!FirebaseRuntime.notificationsEnabled(applicationContext)) return Result.success()
         if (!FirebaseRuntime.initialize(applicationContext)) return Result.success()
 
         val preferences = applicationContext.getSharedPreferences("healthia", Context.MODE_PRIVATE)
@@ -31,6 +32,7 @@ class FcmRegistrationWorker(appContext: Context, params: WorkerParameters) : Cor
                 TimeUnit.SECONDS,
             ).orEmpty()
             if (registrationToken.isBlank()) return@runCatching retryOrFail()
+            if (!FirebaseRuntime.notificationsEnabled(applicationContext)) return@runCatching Result.success()
             HealthiaApi.registerFcm(baseUrl, accessToken, deviceId, registrationToken)
             Result.success()
         }.getOrElse {
@@ -47,6 +49,7 @@ class FcmRegistrationWorker(appContext: Context, params: WorkerParameters) : Cor
         private const val MAX_RETRY_ATTEMPTS = 5
 
         fun enqueue(context: Context) {
+            if (!FirebaseRuntime.notificationsEnabled(context.applicationContext)) return
             val request = OneTimeWorkRequestBuilder<FcmRegistrationWorker>()
                 .setConstraints(
                     Constraints.Builder()
@@ -61,6 +64,10 @@ class FcmRegistrationWorker(appContext: Context, params: WorkerParameters) : Cor
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
+        }
+
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context.applicationContext).cancelUniqueWork(UNIQUE_WORK)
         }
     }
 }
