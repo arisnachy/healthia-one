@@ -25,6 +25,11 @@ class FCMDeviceRegistrationRequest(BaseModel):
         return token
 
 
+class FCMDeliveryAckRequest(BaseModel):
+    device_id: str = Field(min_length=3, max_length=240)
+    proof_id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
 class FCMDeviceRegistration(BaseModel):
     patient_id: str
     connection_id: str
@@ -33,6 +38,8 @@ class FCMDeviceRegistration(BaseModel):
     token_sha256: str = Field(min_length=64, max_length=64)
     enabled: bool = True
     updated_at: datetime = Field(default_factory=utc_now)
+    last_delivery_proof_id: str | None = Field(default=None, min_length=8, max_length=128)
+    last_delivery_ack_at: datetime | None = None
 
 
 class FCMRegistrationStore(Protocol):
@@ -40,6 +47,7 @@ class FCMRegistrationStore(Protocol):
     def load(self, patient_id: str, connection_id: str) -> FCMDeviceRegistration | None: ...
     def list_active(self, patient_id: str) -> list[FCMDeviceRegistration]: ...
     def disable_connection(self, patient_id: str, connection_id: str) -> bool: ...
+    def acknowledge(self, patient_id: str, connection_id: str, proof_id: str) -> FCMDeviceRegistration | None: ...
 
 
 def build_registration(*, patient_id: str, connection_id: str, device_id: str, registration_token: str) -> FCMDeviceRegistration:
@@ -60,7 +68,13 @@ class MemoryFCMRegistrationStore:
         self._values: dict[tuple[str, str], FCMDeviceRegistration] = {}
 
     def save(self, registration: FCMDeviceRegistration) -> None:
-        self._values[(registration.patient_id, registration.connection_id)] = registration.model_copy(deep=True)
+        key = (registration.patient_id, registration.connection_id)
+        existing = self._values.get(key)
+        value = registration.model_copy(deep=True)
+        if existing is not None and value.last_delivery_proof_id is None:
+            value.last_delivery_proof_id = existing.last_delivery_proof_id
+            value.last_delivery_ack_at = existing.last_delivery_ack_at
+        self._values[key] = value
 
     def load(self, patient_id: str, connection_id: str) -> FCMDeviceRegistration | None:
         value = self._values.get((patient_id, connection_id))
@@ -83,6 +97,17 @@ class MemoryFCMRegistrationStore:
         self._values[key] = value
         return True
 
+    def acknowledge(self, patient_id: str, connection_id: str, proof_id: str) -> FCMDeviceRegistration | None:
+        key = (patient_id, connection_id)
+        value = self._values.get(key)
+        if value is None or not value.enabled:
+            return None
+        value.last_delivery_proof_id = str(proof_id)
+        value.last_delivery_ack_at = utc_now()
+        value.updated_at = value.last_delivery_ack_at
+        self._values[key] = value
+        return value.model_copy(deep=True)
+
 
 class FirestoreFCMRegistrationStore:
     COLLECTION = "healthia_fcm_registrations"
@@ -96,8 +121,11 @@ class FirestoreFCMRegistrationStore:
         return self.client.collection(self.COLLECTION).document(patient_id).collection("devices")
 
     def save(self, registration: FCMDeviceRegistration) -> None:
+        # A token refresh must not erase an already-recorded delivery proof before
+        # the verifier can reread it, so optional ACK fields are merged only when set.
         self._devices(registration.patient_id).document(registration.connection_id).set(
-            registration.model_dump(mode="json")
+            registration.model_dump(mode="json", exclude_none=True),
+            merge=True,
         )
 
     def load(self, patient_id: str, connection_id: str) -> FCMDeviceRegistration | None:
@@ -115,6 +143,28 @@ class FirestoreFCMRegistrationStore:
             return False
         ref.set({"enabled": False, "updated_at": utc_now().isoformat()}, merge=True)
         return True
+
+    def acknowledge(self, patient_id: str, connection_id: str, proof_id: str) -> FCMDeviceRegistration | None:
+        ref = self._devices(patient_id).document(connection_id)
+        snapshot = ref.get()
+        if not snapshot.exists:
+            return None
+        current = FCMDeviceRegistration.model_validate(snapshot.to_dict())
+        if not current.enabled:
+            return None
+        acknowledged_at = utc_now()
+        ref.set(
+            {
+                "last_delivery_proof_id": str(proof_id),
+                "last_delivery_ack_at": acknowledged_at.isoformat(),
+                "updated_at": acknowledged_at.isoformat(),
+            },
+            merge=True,
+        )
+        current.last_delivery_proof_id = str(proof_id)
+        current.last_delivery_ack_at = acknowledged_at
+        current.updated_at = acknowledged_at
+        return current
 
 
 def build_fcm_registration_store(settings) -> FCMRegistrationStore:
