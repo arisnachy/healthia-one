@@ -47,6 +47,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Bind exact source head
         shell: bash
         run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
@@ -75,26 +79,36 @@ jobs:
           import json, os
           from pathlib import Path
           from google.cloud import firestore
-          from google.cloud.firestore_v1.base_query import FieldFilter
 
           client=firestore.Client(project=os.environ['PROJECT_ID'])
-          query=client.collection_group('devices').where(filter=FieldFilter('enabled','==',True))
-          candidates=[]
           try:
-              snapshots=list(query.stream())
+              snapshots=list(client.collection_group('devices').stream())
           except Exception:
-              raise RuntimeError('Firestore FCM registration query failed') from None
+              raise RuntimeError('Firestore FCM registration scan failed') from None
+
+          candidates=[]
+          total=0
+          valid_hashes=0
           for snapshot in snapshots:
               fields=snapshot.to_dict() or {}
+              if 'registration_token' not in fields or 'token_sha256' not in fields:
+                  continue
+              total += 1
               raw=str(fields.get('registration_token') or '')
               digest=str(fields.get('token_sha256') or '')
-              if len(raw)>=16 and len(digest)==64:
+              valid_digest=len(digest)==64 and all(c in '0123456789abcdefABCDEF' for c in digest)
+              if valid_digest:
+                  valid_hashes += 1
+              if bool(fields.get('enabled', True)) and len(raw)>=16 and valid_digest:
                   candidates.append({'path':snapshot.reference.path,'token':raw,'digest':digest})
+
           status='READY_DEVICE_PRESENT' if len(candidates)==1 else ('BLOCKED_DEVICE' if not candidates else 'BLOCKED_AMBIGUOUS_DEVICES')
           out={
             'status':status,
             'source_sha':os.environ.get('SOURCE_SHA',''),
+            'fcm_registration_documents':total,
             'active_fcm_registration_count':len(candidates),
+            'registrations_with_valid_sha256':valid_hashes,
             'registration_hash_count':len({item['digest'] for item in candidates}),
             'raw_token_exposed':False,
             'provider_write':False,
@@ -103,6 +117,7 @@ jobs:
           }
           Path('dist/wave2-fcm-live/preflight.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
           print(json.dumps(out,sort_keys=True))
+
           if os.environ.get('LIVE_MODE','').lower()=='true':
               if len(candidates)!=1:
                   raise SystemExit('LIVE FCM proof requires exactly one active controlled-device registration')
