@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit
 class FcmDeliveryAckWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val proofId = inputData.getString(KEY_PROOF_ID).orEmpty()
+        val notificationShown = inputData.getBoolean(KEY_NOTIFICATION_SHOWN, false)
         if (!validProofId(proofId)) return Result.failure()
 
         val preferences = applicationContext.getSharedPreferences("healthia", Context.MODE_PRIVATE)
@@ -26,7 +27,7 @@ class FcmDeliveryAckWorker(appContext: Context, params: WorkerParameters) : Coro
         if (baseUrl.isBlank() || accessToken.isBlank() || deviceId.isBlank()) return retryOrFail()
 
         return runCatching {
-            HealthiaApi.acknowledgeFcm(baseUrl, accessToken, deviceId, proofId)
+            HealthiaApi.acknowledgeFcm(baseUrl, accessToken, deviceId, proofId, notificationShown)
             Result.success()
         }.getOrElse {
             retryOrFail()
@@ -38,12 +39,18 @@ class FcmDeliveryAckWorker(appContext: Context, params: WorkerParameters) : Coro
 
     companion object {
         private const val KEY_PROOF_ID = "proof_id"
+        private const val KEY_NOTIFICATION_SHOWN = "notification_shown"
         private const val MAX_RETRY_ATTEMPTS = 5
 
-        fun enqueue(context: Context, proofId: String) {
+        fun enqueue(context: Context, proofId: String, notificationShown: Boolean) {
             if (!validProofId(proofId)) return
             val request = OneTimeWorkRequestBuilder<FcmDeliveryAckWorker>()
-                .setInputData(workDataOf(KEY_PROOF_ID to proofId))
+                .setInputData(
+                    workDataOf(
+                        KEY_PROOF_ID to proofId,
+                        KEY_NOTIFICATION_SHOWN to notificationShown,
+                    )
+                )
                 .setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(NetworkType.CONNECTED)
