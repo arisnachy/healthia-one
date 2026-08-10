@@ -32,6 +32,7 @@ class FCMDeviceReenableRequest(FCMDeviceRegistrationRequest):
 class FCMDeliveryAckRequest(BaseModel):
     device_id: str = Field(min_length=3, max_length=240)
     proof_id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    notification_shown: bool
 
 
 class FCMDeviceRegistration(BaseModel):
@@ -44,6 +45,7 @@ class FCMDeviceRegistration(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
     last_delivery_proof_id: str | None = Field(default=None, min_length=8, max_length=128)
     last_delivery_ack_at: datetime | None = None
+    last_delivery_notification_shown: bool | None = None
 
 
 class FCMRegistrationStore(Protocol):
@@ -51,7 +53,13 @@ class FCMRegistrationStore(Protocol):
     def load(self, patient_id: str, connection_id: str) -> FCMDeviceRegistration | None: ...
     def list_active(self, patient_id: str) -> list[FCMDeviceRegistration]: ...
     def disable_connection(self, patient_id: str, connection_id: str) -> bool: ...
-    def acknowledge(self, patient_id: str, connection_id: str, proof_id: str) -> FCMDeviceRegistration | None: ...
+    def acknowledge(
+        self,
+        patient_id: str,
+        connection_id: str,
+        proof_id: str,
+        notification_shown: bool,
+    ) -> FCMDeviceRegistration | None: ...
 
 
 def build_registration(*, patient_id: str, connection_id: str, device_id: str, registration_token: str) -> FCMDeviceRegistration:
@@ -89,6 +97,7 @@ def _merged_registration(
     if existing is not None and value.last_delivery_proof_id is None:
         value.last_delivery_proof_id = existing.last_delivery_proof_id
         value.last_delivery_ack_at = existing.last_delivery_ack_at
+        value.last_delivery_notification_shown = existing.last_delivery_notification_shown
     return value
 
 
@@ -125,13 +134,20 @@ class MemoryFCMRegistrationStore:
         self._values[key] = value
         return True
 
-    def acknowledge(self, patient_id: str, connection_id: str, proof_id: str) -> FCMDeviceRegistration | None:
+    def acknowledge(
+        self,
+        patient_id: str,
+        connection_id: str,
+        proof_id: str,
+        notification_shown: bool,
+    ) -> FCMDeviceRegistration | None:
         key = (patient_id, connection_id)
         value = self._values.get(key)
         if value is None or not value.enabled:
             return None
         value.last_delivery_proof_id = str(proof_id)
         value.last_delivery_ack_at = utc_now()
+        value.last_delivery_notification_shown = bool(notification_shown)
         value.updated_at = value.last_delivery_ack_at
         self._values[key] = value
         return value.model_copy(deep=True)
@@ -182,7 +198,13 @@ class FirestoreFCMRegistrationStore:
         ref.set({"enabled": False, "updated_at": utc_now().isoformat()}, merge=True)
         return True
 
-    def acknowledge(self, patient_id: str, connection_id: str, proof_id: str) -> FCMDeviceRegistration | None:
+    def acknowledge(
+        self,
+        patient_id: str,
+        connection_id: str,
+        proof_id: str,
+        notification_shown: bool,
+    ) -> FCMDeviceRegistration | None:
         ref = self._devices(patient_id).document(connection_id)
         snapshot = ref.get()
         if not snapshot.exists:
@@ -195,12 +217,14 @@ class FirestoreFCMRegistrationStore:
             {
                 "last_delivery_proof_id": str(proof_id),
                 "last_delivery_ack_at": acknowledged_at.isoformat(),
+                "last_delivery_notification_shown": bool(notification_shown),
                 "updated_at": acknowledged_at.isoformat(),
             },
             merge=True,
         )
         current.last_delivery_proof_id = str(proof_id)
         current.last_delivery_ack_at = acknowledged_at
+        current.last_delivery_notification_shown = bool(notification_shown)
         current.updated_at = acknowledged_at
         return current
 
