@@ -1,3 +1,3 @@
-Google OAuth live-promotion inventory requested 2026-08-09T20:18:00-04:00
-Purpose: resolve exact Cloud Run callback, existing secret names, APIs and runtime identity before patient OAuth provisioning.
-No secret payloads may be emitted.
+Wave 2 read-only diagnostic requested 2026-08-09T23:31:00-04:00
+Purpose: inspect Cloud Build 71fc2bd2-cf8b-436b-9005-39214b5d07bc failure cause and verify Gmail worker rollback.
+No secret payloads or IAM mutations permitted.
