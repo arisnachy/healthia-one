@@ -19,6 +19,7 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     env:
+      HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON: ${{ secrets.HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON }}
       HEALTHIA_FIREBASE_APP_ID: ${{ secrets.HEALTHIA_FIREBASE_APP_ID }}
       HEALTHIA_FIREBASE_API_KEY: ${{ secrets.HEALTHIA_FIREBASE_API_KEY }}
       HEALTHIA_FIREBASE_PROJECT_ID: ${{ secrets.HEALTHIA_FIREBASE_PROJECT_ID }}
@@ -33,6 +34,51 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/android-apk-readiness
+          config_source=NONE
+
+          # Preferred path: one protected google-services.json copied verbatim into
+          # the HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON Actions secret. Extract only
+          # the client matching the controlled Android package and never write the
+          # source JSON to the repository, logs, or artifacts.
+          if [[ -n "${HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON:-}" ]]; then
+            echo "::add-mask::$HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON"
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          package='com.healthia.one.bridge'
+          try:
+              raw=json.loads(os.environ['HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON'])
+          except Exception as exc:
+              raise SystemExit('Protected Firebase Android config is not valid JSON') from exc
+          project=raw.get('project_info') or {}
+          matches=[]
+          for client in raw.get('client') or []:
+              info=((client.get('client_info') or {}).get('android_client_info') or {})
+              if str(info.get('package_name') or '') == package:
+                  matches.append(client)
+          if len(matches) != 1:
+              raise SystemExit('Protected Firebase Android config must contain exactly one HealthIA bridge client')
+          client=matches[0]
+          values={
+              'HEALTHIA_FIREBASE_APP_ID':str((client.get('client_info') or {}).get('mobilesdk_app_id') or '').strip(),
+              'HEALTHIA_FIREBASE_API_KEY':str(((client.get('api_key') or [{}])[0] or {}).get('current_key') or '').strip(),
+              'HEALTHIA_FIREBASE_PROJECT_ID':str(project.get('project_id') or '').strip(),
+              'HEALTHIA_FIREBASE_SENDER_ID':str(project.get('project_number') or '').strip(),
+          }
+          if any(not value for value in values.values()):
+              raise SystemExit('Protected Firebase Android config is missing a required client value')
+          Path('/tmp/healthia-firebase.env').write_text(''.join(f'{name}={value}\n' for name,value in values.items()),encoding='utf-8')
+          PY
+            while IFS='=' read -r name value; do
+              [[ -z "$name" || -z "$value" ]] && continue
+              echo "::add-mask::$value"
+              printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
+              export "$name=$value"
+            done < /tmp/healthia-firebase.env
+            rm -f /tmp/healthia-firebase.env
+            config_source=GOOGLE_SERVICES_JSON_SECRET
+          fi
+
           ready=true
           for name in \
             HEALTHIA_FIREBASE_APP_ID \
@@ -48,26 +94,32 @@ jobs:
             fi
           done
 
+          if [[ "$ready" == true && "$config_source" == NONE ]]; then
+            config_source=FOUR_ACTIONS_SECRETS
+          fi
+
           if [[ "$ready" == true ]]; then
             if [[ "$HEALTHIA_FIREBASE_PROJECT_ID" != "healthia-6088a" ]]; then
               echo "Firebase config is present but belongs to an unexpected project." >&2
               exit 1
             fi
             python - <<'PY'
-          import os
+          import os, re
+          app_id=os.environ['HEALTHIA_FIREBASE_APP_ID'].strip()
           checks = {
-              "app_id_shape": len(os.environ["HEALTHIA_FIREBASE_APP_ID"].strip()) >= 12,
-              "api_key_shape": len(os.environ["HEALTHIA_FIREBASE_API_KEY"].strip()) >= 20,
-              "project_id_shape": len(os.environ["HEALTHIA_FIREBASE_PROJECT_ID"].strip()) >= 6,
-              "sender_id_shape": os.environ["HEALTHIA_FIREBASE_SENDER_ID"].strip().isdigit(),
+              'app_id_shape': bool(re.fullmatch(r'1:[0-9]+:android:[0-9A-Za-z]+', app_id)),
+              'api_key_shape': len(os.environ['HEALTHIA_FIREBASE_API_KEY'].strip()) >= 20,
+              'project_id_shape': len(os.environ['HEALTHIA_FIREBASE_PROJECT_ID'].strip()) >= 6,
+              'sender_id_shape': os.environ['HEALTHIA_FIREBASE_SENDER_ID'].strip().isdigit(),
           }
           if not all(checks.values()):
-              raise SystemExit("Firebase build configuration failed non-secret shape validation")
+              raise SystemExit('Firebase build configuration failed non-secret shape validation')
           PY
           fi
 
           echo "fcm_ready=$ready" >> "$GITHUB_OUTPUT"
-          export FCM_READY="$ready"
+          echo "config_source=$config_source" >> "$GITHUB_OUTPUT"
+          export FCM_READY="$ready" CONFIG_SOURCE="$config_source"
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -75,6 +127,7 @@ jobs:
           out={
               'status':'FCM_READY_BUILD_CONFIG' if ready else 'BLOCKED_FIREBASE_CONFIG',
               'fcm_ready':ready,
+              'config_source':os.environ.get('CONFIG_SOURCE','NONE'),
               'apk_publish_allowed':ready,
               'compile_allowed':True,
               'truth_rule':'CODE PASS != FCM-READY APK',
