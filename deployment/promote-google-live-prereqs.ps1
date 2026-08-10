@@ -32,7 +32,7 @@ Write-Host "Private backend healthia-one-demo is not modified by this script."
 
 if (-not $Confirmed) {
     Write-Host "HEALTHIA_GOOGLE_LIVE_PREREQS_NOT_CONFIRMED"
-    Write-Host "Planned mutations: enable Calendar/Tasks/Places/API Keys; create a Places-only server key if needed; store it in Secret Manager; make only the isolated web demo publicly reachable; verify app-session 401 boundaries."
+    Write-Host "Planned mutations: enable Calendar/Tasks/Places/API Keys; create a Places-only server key if needed; store it in Secret Manager; grant only the web runtime access to that secret; make only the isolated web demo publicly reachable; verify app-session 401 boundaries."
     exit 0
 }
 
@@ -49,8 +49,9 @@ foreach ($api in $requiredApis) {
 }
 
 $serviceUrl = (& gcloud run services describe $WebServiceName --project $ProjectId --region $Region --format="value(status.url)").Trim()
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($serviceUrl)) {
-    throw "The isolated HealthIA ONE web service does not exist. Run the repository public-web promotion workflow first."
+$runtimeEmail = (& gcloud run services describe $WebServiceName --project $ProjectId --region $Region --format="value(spec.template.spec.serviceAccountName)").Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($serviceUrl) -or [string]::IsNullOrWhiteSpace($runtimeEmail)) {
+    throw "The isolated HealthIA ONE web service does not exist or has no runtime identity. Run the repository public-web preparation first."
 }
 
 # Make only the isolated patient-facing web service reachable. HealthIA's own
@@ -97,8 +98,16 @@ try {
     $mapsKey = $null
 }
 
-# The runtime identity already uses Secret Manager for session/device secrets.
-# Cloud Run validates secret access while creating the new revision.
+# The server-side Places key is readable only by the exact Cloud Run runtime
+# identity. Do not grant project-wide Secret Manager roles for this key.
+Invoke-Gcloud @(
+    "secrets", "add-iam-policy-binding", $MapsSecretName,
+    "--project", $ProjectId,
+    "--member", "serviceAccount:$runtimeEmail",
+    "--role", "roles/secretmanager.secretAccessor",
+    "--quiet"
+)
+
 Invoke-Gcloud @(
     "run", "services", "update", $WebServiceName,
     "--project", $ProjectId,
@@ -141,4 +150,5 @@ Write-Host "Exact OAuth callback: $callback"
 Write-Host "Places API key resource: $keyResource"
 Write-Host "Places API key secret version: $mapsVersion"
 Write-Host "Places API key value: not displayed"
+Write-Host "Places secret accessor: serviceAccount:$runtimeEmail"
 Write-Host "Protected anonymous probes: 401 PASS"
