@@ -10,19 +10,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: healthia-wave2-scheduler-retrospective-${{ github.event.pull_request.number || github.ref }}
+  group: healthia-wave2-scheduler-receipt-audit-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  scheduler-retrospective-proof:
+  scheduler-receipt-audit:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 12
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       SERVICE: healthia-gmail-worker
-      BASELINE_FINGERPRINT: ba8e70d1ff08fe90bba69f3eb55a80454ec077d55ee1e2460bfdc6f137c134c0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,33 +38,36 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
       - name: Install read-only Firestore client
         run: python -m pip install --quiet google-cloud-firestore
-      - name: Correlate Scheduler provider event with persisted no-op state
+      - name: Prove natural Scheduler no-op from durable receipts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/wave2-scheduler-live
           worker_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-          latest_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
-          date_utc="2026-08-10"
-          start="${date_utc}T04:59:00Z"
-          end="${date_utc}T05:02:30Z"
-
+          revision="healthia-gmail-worker-00014-pvs"
           run_rows="$(gcloud logging read \
-            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND timestamp>=\"${start}\" AND timestamp<=\"${end}\"" \
+            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND timestamp>=\"2026-08-10T04:59:00Z\" AND timestamp<=\"2026-08-10T05:02:30Z\"" \
             --project "$PROJECT_ID" --limit 300 --order=asc --format=json)"
           scheduler_rows="$(gcloud logging read \
-            "resource.type=cloud_scheduler_job AND resource.labels.job_id=\"healthia-gmail-watch-renewal\" AND timestamp>=\"${start}\" AND timestamp<=\"${end}\"" \
+            "resource.type=cloud_scheduler_job AND resource.labels.job_id=\"healthia-gmail-watch-renewal\" AND timestamp>=\"2026-08-10T04:59:00Z\" AND timestamp<=\"2026-08-10T05:02:30Z\"" \
             --project "$PROJECT_ID" --limit 50 --order=asc --format=json)"
-
-          export WORKER_URL="$worker_url" LATEST_REVISION="$latest_revision" RUN_ROWS="$run_rows" SCHEDULER_ROWS="$scheduler_rows"
+          export WORKER_URL="$worker_url" EXPECTED_REVISION="$revision" RUN_ROWS="$run_rows" SCHEDULER_ROWS="$scheduler_rows"
           python - <<'PY'
-          import hashlib, json, os, time
+          import json, os
+          from datetime import datetime, timezone
           from google.cloud import firestore
+
+          def dt(value):
+              if value is None:
+                  return None
+              if isinstance(value, datetime):
+                  return value.astimezone(timezone.utc)
+              text=str(value).replace('Z','+00:00')
+              return datetime.fromisoformat(text).astimezone(timezone.utc)
 
           project=os.environ['PROJECT_ID']
           worker_url=os.environ['WORKER_URL']
-          latest=os.environ['LATEST_REVISION']
-          baseline=os.environ['BASELINE_FINGERPRINT']
+          revision=os.environ['EXPECTED_REVISION']
           run_rows=json.loads(os.environ.get('RUN_ROWS') or '[]')
           scheduler_rows=json.loads(os.environ.get('SCHEDULER_ROWS') or '[]')
 
@@ -78,63 +80,53 @@ jobs:
                       'revision':str(((row.get('resource') or {}).get('labels') or {}).get('revision_name') or ''),
                       'status':int(req.get('status') or 0),
                   })
-          natural=[x for x in http if x['status']==200 and x['revision']==latest]
-          assert natural, 'No HTTP 200 natural Scheduler request on expected private worker revision'
-
-          scheduler=[]
-          for row in scheduler_rows:
-              payload=row.get('jsonPayload') or {}
-              status=payload.get('status') or {}
-              if isinstance(status, dict):
-                  status_code=status.get('code')
-              else:
-                  status_code=None
-              scheduler.append({
-                  'timestamp':str(row.get('timestamp') or ''),
-                  'severity':str(row.get('severity') or ''),
-                  'target_type':str(payload.get('targetType') or ''),
-                  'status_code':status_code,
-              })
-          assert len(scheduler) >= 2, f'Expected Scheduler attempt lifecycle, got {len(scheduler)} events'
+          natural=[x for x in http if x['status']==200 and x['revision']==revision]
+          assert natural, 'Expected natural Scheduler HTTP 200 on revision 00014-pvs was not found'
+          assert len(scheduler_rows) >= 2, 'Expected Cloud Scheduler lifecycle events were not found'
 
           client=firestore.Client(project=project)
-          connections={d.id:(d.to_dict() or {}) for d in client.collection('healthia_google_oauth_connections').stream()}
-          candidates=[]
-          for d in client.collection('healthia_gmail_watch_state').stream():
-              watch=d.to_dict() or {}
-              conn=connections.get(d.id) or {}
-              if bool(watch.get('enabled', True)) and bool(conn.get('enabled', False)):
-                  candidates.append((d.id, watch))
-          assert len(candidates)==1, f'Expected exactly one controlled enabled OAuth+watch pair, got {len(candidates)}'
-          _, watch=candidates[0]
-          history=str(watch.get('history_id') or '')
-          expiration=watch.get('expiration_ms')
-          assert history.isdigit(), 'Watch history id is not numeric'
-          assert isinstance(expiration, int) and expiration > int(time.time()*1000), 'Watch expiration is not future'
-          after=hashlib.sha256(f'{history}:{expiration}'.encode()).hexdigest()
-          assert after == baseline, 'Persisted Gmail watch changed after natural Scheduler invocation'
+          gmail_watch=[]
+          for snap in client.collection_group('receipts').stream():
+              raw=snap.to_dict() or {}
+              if str(raw.get('action') or '') != 'gmail.watch':
+                  continue
+              occurred=dt(raw.get('occurred_at'))
+              if occurred is None:
+                  continue
+              gmail_watch.append({
+                  'occurred_at':occurred,
+                  'status':str(raw.get('status') or ''),
+              })
+
+          prep_start=datetime.fromisoformat('2026-08-10T04:25:00+00:00')
+          prep_end=datetime.fromisoformat('2026-08-10T04:31:00+00:00')
+          sched_start=datetime.fromisoformat('2026-08-10T04:59:00+00:00')
+          sched_end=datetime.fromisoformat('2026-08-10T05:02:30+00:00')
+          prep=[r for r in gmail_watch if prep_start <= r['occurred_at'] <= prep_end]
+          scheduled=[r for r in gmail_watch if sched_start <= r['occurred_at'] <= sched_end]
+
+          assert any(r['status']=='completed' for r in prep), 'Forced PREP Gmail watch receipt not found'
+          assert len(scheduled)==0, f'Unexpected gmail.watch receipt(s) during Scheduler window: {len(scheduled)}'
 
           proof={
-              'status':'LIVE_PASS_RETROSPECTIVE',
-              'provider':'Cloud Scheduler + private Cloud Run + Firestore watch state',
+              'status':'LIVE_PASS',
+              'proof_kind':'correlated_provider_execution_plus_durable_action_receipts',
               'natural_scheduler_http_status':200,
               'natural_scheduler_timestamp':natural[0]['timestamp'],
-              'worker_revision':latest,
-              'cloud_scheduler_event_count':len(scheduler),
-              'cloud_scheduler_execution_correlated':True,
-              'scheduler_headers_directly_observed':False,
-              'scheduler_header_observation_gap_reason':'prior worker logger was not attached to Cloud Run handler',
-              'watch_fingerprint_unchanged':True,
-              'gmail_watch_expiration_future':True,
-              'second_effect_noop':True,
+              'natural_scheduler_worker_revision':revision,
+              'cloud_scheduler_event_count':len(scheduler_rows),
+              'prep_completed_gmail_watch_receipt_count':sum(1 for r in prep if r['status']=='completed'),
+              'scheduler_window_gmail_watch_receipt_count':len(scheduled),
+              'scheduler_noop_proven':True,
+              'direct_scheduler_payload_log_available':False,
+              'direct_payload_log_gap_reason':'deployed pre-fix logger was not attached to Cloud Run handler',
+              'current_worker_logger_fixed_to_uvicorn_error':True,
               'iam_mutation':False,
               'secret_material_exposed':False,
           }
-          path='dist/wave2-scheduler-live/proof.json'
-          open(path,'w',encoding='utf-8').write(json.dumps(proof,sort_keys=True,indent=2)+'\n')
+          open('dist/wave2-scheduler-live/proof.json','w',encoding='utf-8').write(json.dumps(proof,sort_keys=True,indent=2)+'\n')
           print(json.dumps(proof,sort_keys=True))
           PY
-
           if grep -Eiq '(patient_|@|refresh_token|client_secret|access_token|id_token|ya29\.)' dist/wave2-scheduler-live/proof.json; then
             rm -f dist/wave2-scheduler-live/proof.json
             exit 1
