@@ -35,7 +35,7 @@ Para iniciar sin Google AI:
 
 El teléfono y la computadora deben estar en la misma red Wi-Fi. En el teléfono no funciona `127.0.0.1`; usa la dirección LAN impresa por el lanzador. También puedes encontrarla con `ipconfig` buscando **Dirección IPv4** en el adaptador Wi-Fi activo.
 
-Para la prueba FCM LIVE del hackathon, el bridge debe apuntar al endpoint HealthIA controlado que tenga desplegados `/api/devices/fcm/register` y `/api/devices/fcm/ack`; un APK conectado a un backend antiguo no puede producir la evidencia de entrega completa.
+Para la prueba FCM LIVE del hackathon, el bridge debe apuntar al endpoint HealthIA controlado que tenga desplegados `/api/devices/fcm/register`, `/api/devices/fcm/register/enable` y `/api/devices/fcm/ack`; un APK conectado a un backend antiguo no puede producir la evidencia de entrega completa.
 
 ## 2. Obtener la aplicación Android
 
@@ -177,44 +177,56 @@ El código es temporal y solo puede reclamarse una vez. El bearer final del disp
 
 La variante `debug` admite HTTP solo para pruebas sintéticas en una red local confiable. La variante de producción exige HTTPS y deshabilita tráfico en texto claro.
 
-## 4. Vincular el teléfono
+## 4. Vincular el teléfono y activar notificaciones de forma explícita
 
 En **HealthIA Android Bridge**:
 
 1. Escribe la dirección del servidor HealthIA.
 2. Escribe el código temporal de ocho dígitos.
 3. Pulsa **Vincular con HealthIA**.
-4. Autoriza notificaciones cuando Android lo solicite.
-5. Instala o actualiza Health Connect si la aplicación lo solicita.
-6. Pulsa **Autorizar datos en Health Connect**.
-7. Concede únicamente los tipos que desees compartir.
-8. Pulsa **Sincronizar ahora** si quieres enviar datos de Health Connect.
+4. Las notificaciones privadas permanecen **desactivadas por defecto**; vincular el teléfono no registra FCM automáticamente.
+5. Si deseas avisos privados, pulsa **Reactivar notificaciones privadas**.
+6. En Android 13 o posterior, concede primero `POST_NOTIFICATIONS`; HealthIA no habilita FCM en servidor hasta que el permiso ya esté concedido. Si Android acaba de mostrar el diálogo, pulsa **Reactivar notificaciones privadas** otra vez después de aceptarlo.
+7. El bridge obtiene entonces el token actual de Firebase y llama al endpoint explícito `/api/devices/fcm/register/enable` con `notifications_opt_in=true`.
+8. Instala o actualiza Health Connect si la aplicación lo solicita.
+9. Pulsa **Autorizar datos en Health Connect** y concede únicamente los tipos que desees compartir.
+10. Pulsa **Sincronizar ahora** si quieres enviar datos de Health Connect.
 
-Tras vincularse, el bridge solicita a Firebase su registration token y lo envía al endpoint firmado `/api/devices/fcm/register`. El token no debe copiarse manualmente ni aparecer en GitHub, logs o artefactos.
+Una vez realizado el opt-in, `HealthiaFirebaseMessagingService.onNewToken()` puede renovar el registro de forma automática. Esa renovación respeta tanto el estado local como el tombstone del servidor y **no puede reactivar** una cuenta que haya desactivado las notificaciones.
 
-Cuando Firebase rote ese token, `HealthiaFirebaseMessagingService.onNewToken()` vuelve a registrar el nuevo valor automáticamente.
+Al pulsar **Desactivar notificaciones privadas**:
+
+- Android cancela el trabajo de registro FCM pendiente y deja de registrar tokens;
+- el backend marca el registro como `enabled=false`;
+- Firestore elimina `registration_token` y `token_sha256` del documento mediante un tombstone de privacidad;
+- una rotación posterior del token no puede revertir el opt-out;
+- para reactivar se requiere nuevamente el botón explícito y un token Firebase actual.
+
+El token no debe copiarse manualmente ni aparecer en GitHub, logs o artefactos.
 
 ## 5. Prueba FCM LIVE controlada
 
-El gate FCM no considera suficiente que Google acepte un mensaje.
+El gate FCM no considera suficiente que Google acepte un mensaje, ni siquiera que Android firme un ACK si la notificación no llegó a mostrarse.
 
 La prueba completa es:
 
 ```text
-registro real del Android
+opt-in explícito + registro real del Android
         ↓
 1 mensaje FCM data-only, PHI-neutral
         ↓
 Android recibe kind=healthia_update + proof_id
         ↓
-notificación local fija, sin texto clínico enviado por servidor
+notificación local fija realmente mostrada
         ↓
-Android firma ACK al backend
+ACK durable: notification_shown=true
         ↓
-Firestore conserva proof_id + timestamp
+Firestore conserva proof_id + timestamp + visibilidad
         ↓
 LIVE PASS
 ```
+
+Si el teléfono recibe FCM pero Android bloquea la notificación —por ejemplo, porque `POST_NOTIFICATIONS` no está concedido— el dispositivo puede registrar la recepción con `notification_shown=false`, pero **no existe LIVE PASS**.
 
 El texto visible está fijado dentro de la aplicación:
 
@@ -223,7 +235,7 @@ HealthIA
 Tienes una actualización disponible en HealthIA.
 ```
 
-El `proof_id` es evidencia operativa sintética; no contiene diagnóstico, resultado, medicamento, nombre de paciente ni otro contenido clínico.
+El `proof_id` es evidencia operativa sintética; no contiene diagnóstico, resultado, medicamento, nombre de paciente ni otro contenido clínico. El workflow genera un nonce aleatorio, conserva sólo su SHA-256 en el artefacto y exige que Firestore reread demuestre simultáneamente el ACK correcto y `last_delivery_notification_shown=true`.
 
 ## 6. De dónde salen los datos
 
