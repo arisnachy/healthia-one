@@ -52,9 +52,53 @@ HealthIA-Android-APK-Readiness
 
 Si su `status.json` indica `BLOCKED_FIREBASE_CONFIG`, el código Android puede estar verde pero **no existe un APK válido para probar FCM**. En ese estado el workflow elimina el APK compilado y no publica `HealthIA-Bridge-debug`.
 
-### Configuración recomendada: un solo secret Base64
+### Configuración preferida: Firebase Management API efímera
 
-En Firebase Console, abre el proyecto HealthIA, entra a la aplicación Android con package name:
+La vía preferida evita copiar manualmente `google-services.json` a GitHub. El build usa la identidad Google Cloud ya controlada por `GCP_CREDENTIALS` y consulta únicamente la configuración oficial de Firebase necesaria para el Android Bridge.
+
+El flujo esperado es:
+
+```text
+GCP_CREDENTIALS
+      ↓
+Firebase Management API
+      ↓
+localizar exactamente 1 app Android
+package=com.healthia.one.bridge
+project=healthia-6088a
+      ↓
+getConfig
+      ↓
+google-services.json Base64 sólo en /tmp
+      ↓
+extractor validado
+      ↓
+BuildConfig efímero
+      ↓
+FCM-READY APK
+```
+
+El workflow nunca publica ni imprime el JSON, su Base64, la API key, el access token ni los identificadores derivados. Los archivos temporales se eliminan antes de terminar el runner.
+
+Si Firebase Management responde `403`, el estado correcto es `BLOCKED_FIREBASE_READ_IAM`. No significa que la app Firebase exista o no exista; significa que la identidad de CI no puede leer todavía esa metadata.
+
+Para ese caso existe el workflow **Google Firebase CI read-only IAM gate**. En PR normal es estrictamente read-only. El modo de autorización sólo acepta la frase exacta:
+
+```text
+I_AUTHORIZE_FCM_VIEWER_FOR_CI
+```
+
+y limita el cambio a:
+
+```text
+roles/firebasecloudmessaging.viewer
+```
+
+para la identidad de servicio ya activa en CI. Tras verificar HTTP 200, ese gate dispara automáticamente **Android bridge compile + FCM-ready APK** sobre `kira/google-constellation-wave2-live`. Si la verificación no converge, el build no se dispara.
+
+### Fallback manual: un solo secret Base64
+
+Si no se desea autorizar lectura Firebase a la identidad de CI, puede usarse el método manual. En Firebase Console, abre el proyecto HealthIA, entra a la aplicación Android con package name:
 
 ```text
 com.healthia.one.bridge
@@ -74,7 +118,7 @@ Guarda el resultado como un GitHub Actions repository secret llamado:
 HEALTHIA_FIREBASE_ANDROID_CONFIG_B64
 ```
 
-Ésta es la vía preferida porque mantiene un solo valor de secret, evita depender de un JSON/multilínea para el enmascaramiento y no requiere copiar cuatro identificadores por separado. El workflow:
+El workflow:
 
 1. decodifica Base64 únicamente dentro del runner;
 2. valida que el contenido sea un `google-services.json` válido;
@@ -91,7 +135,7 @@ Por compatibilidad, el workflow también acepta el JSON completo en:
 HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON
 ```
 
-pero Base64 es la vía recomendada para una configuración nueva. Como segundo fallback admite cuatro Actions Secrets separados:
+Como último fallback admite cuatro Actions Secrets separados:
 
 ```text
 HEALTHIA_FIREBASE_APP_ID
@@ -100,7 +144,7 @@ HEALTHIA_FIREBASE_PROJECT_ID
 HEALTHIA_FIREBASE_SENDER_ID
 ```
 
-No es necesario configurar más de una vía; Base64 tiene prioridad, luego JSON, y por último los cuatro valores individuales.
+No es necesario configurar más de una vía. El orden es: Base64 secret, JSON secret, Firebase Management API efímera y, finalmente, los cuatro valores individuales.
 
 Cuando la configuración es válida, el workflow verifica que el `BuildConfig` generado no tenga identificadores vacíos y publica:
 
@@ -114,7 +158,7 @@ El artefacto es un ZIP. Extráelo para obtener:
 HealthIA-Bridge-debug.apk
 ```
 
-No pegues `google-services.json`, su Base64 ni los valores Firebase en chats, logs, issues, PRs o artefactos de evidencia. Guárdalos directamente como Actions Secret.
+No pegues `google-services.json`, su Base64 ni los valores Firebase en chats, logs, issues, PRs o artefactos de evidencia. Si utilizas el fallback manual, guárdalos directamente como Actions Secret.
 
 También puedes abrir `android-health-bridge` en Android Studio y ejecutar la aplicación directamente en un teléfono, pero una prueba FCM real sigue requiriendo la configuración Firebase válida.
 
