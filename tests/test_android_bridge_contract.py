@@ -138,6 +138,9 @@ def test_firebase_readonly_iam_gate_is_narrow_and_chains_only_after_success() ->
     assert "firebase.clients.get" in workflow
     assert "firebase.clients.list" in workflow
     assert "firebase.projects.get" in workflow
+    assert "resourcemanager.projects.setIamPolicy" in workflow
+    assert "testIamPermissions" in workflow
+    assert "can_set_iam_policy" in workflow
     assert "firebase_ready: ${{ steps.postcheck.outputs.firebase_ready }}" in workflow
     assert "needs.firebase-ci-readonly-iam.outputs.firebase_ready == 'true'" in workflow
     assert "actions: write" in workflow
