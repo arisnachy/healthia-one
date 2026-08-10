@@ -18,28 +18,102 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    env:
+      HEALTHIA_FIREBASE_APP_ID: ${{ secrets.HEALTHIA_FIREBASE_APP_ID }}
+      HEALTHIA_FIREBASE_API_KEY: ${{ secrets.HEALTHIA_FIREBASE_API_KEY }}
+      HEALTHIA_FIREBASE_PROJECT_ID: ${{ secrets.HEALTHIA_FIREBASE_PROJECT_ID }}
+      HEALTHIA_FIREBASE_SENDER_ID: ${{ secrets.HEALTHIA_FIREBASE_SENDER_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Require real Firebase build configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in \
+            HEALTHIA_FIREBASE_APP_ID \
+            HEALTHIA_FIREBASE_API_KEY \
+            HEALTHIA_FIREBASE_PROJECT_ID \
+            HEALTHIA_FIREBASE_SENDER_ID
+          do
+            value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              echo "${name} is missing; refusing to build an APK that cannot initialize Firebase." >&2
+              missing=1
+            else
+              echo "::add-mask::$value"
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+          if [[ "$HEALTHIA_FIREBASE_PROJECT_ID" != "healthia-6088a" ]]; then
+            echo "Firebase project id does not match the controlled HealthIA project; refusing build." >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import os
+          checks = {
+              "app_id_shape": len(os.environ["HEALTHIA_FIREBASE_APP_ID"].strip()) >= 12,
+              "api_key_shape": len(os.environ["HEALTHIA_FIREBASE_API_KEY"].strip()) >= 20,
+              "project_id_shape": len(os.environ["HEALTHIA_FIREBASE_PROJECT_ID"].strip()) >= 6,
+              "sender_id_shape": os.environ["HEALTHIA_FIREBASE_SENDER_ID"].strip().isdigit(),
+          }
+          if not all(checks.values()):
+              raise SystemExit("Firebase build configuration failed non-secret shape validation")
+          print("Firebase build configuration present and shape-valid; values remain masked.")
+          PY
+
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
       - name: Install Android API 36
         run: sdkmanager "platforms;android-36"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.11.1'
           cache-provider: basic
-      - name: Build debug APK
+
+      - name: Build debug APK with Firebase enabled
         working-directory: android-health-bridge
         run: gradle :app:assembleDebug --stacktrace
+
+      - name: Verify generated BuildConfig is Firebase-capable without exposing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_config="$(find android-health-bridge/app/build/generated -type f -name 'BuildConfig.java' -path '*debug*' | head -n 1)"
+          test -n "$build_config" && test -f "$build_config"
+          python - "$build_config" <<'PY'
+          import re, sys
+          from pathlib import Path
+          text = Path(sys.argv[1]).read_text(encoding="utf-8")
+          names = (
+              "FIREBASE_APP_ID",
+              "FIREBASE_API_KEY",
+              "FIREBASE_PROJECT_ID",
+              "FIREBASE_SENDER_ID",
+          )
+          for name in names:
+              match = re.search(rf'{name}\s*=\s*"([^"]*)"', text)
+              if not match or not match.group(1).strip():
+                  raise SystemExit(f"Generated BuildConfig has empty {name}; refusing artifact upload")
+          print("Generated BuildConfig contains all Firebase identifiers; values not printed.")
+          PY
+
       - name: Rename APK
         run: cp android-health-bridge/app/build/outputs/apk/debug/app-debug.apk android-health-bridge/app/build/outputs/apk/debug/HealthIA-Bridge-debug.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
