@@ -38,7 +38,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Enable bounded mega-loop APIs and create OAuth secret shells
+      - name: Bootstrap OAuth secrets and probe API promotion
         shell: bash
         run: |
           set -euo pipefail
@@ -51,9 +51,53 @@ jobs:
           test -n "$service_url" && test -n "$runtime_sa"
           callback="${service_url}/api/google-constellation/oauth/callback"
 
-          # User explicitly authorized this live promotion. Enabling an API does
-          # not itself perform Workspace side effects; billable Maps calls remain
-          # behind the application connector/cost policy.
+          secret_status="CREATED_OR_PRESENT"
+          state_version=""
+          client_version=""
+          secret_error=""
+
+          # Create app-global OAuth secrets first. Secret values never enter an
+          # artifact or command line. A random state secret is generated only
+          # inside the ephemeral runner and piped directly into Secret Manager.
+          if ! gcloud secrets describe "$STATE_SECRET" --project "$PROJECT_ID" >/dev/null 2>&1; then
+            state_value="$(openssl rand -base64 48 | tr -d '\n')"
+            if ! printf '%s' "$state_value" | gcloud secrets create "$STATE_SECRET" \
+              --project "$PROJECT_ID" --replication-policy=automatic --data-file=- --quiet >/dev/null 2>secret-error.txt; then
+              secret_status="BLOCKED_IAM"
+              secret_error="$(head -n 1 secret-error.txt | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[principal]/g')"
+            fi
+            unset state_value
+          fi
+
+          if [[ "$secret_status" != "BLOCKED_IAM" ]]; then
+            state_version="$(gcloud secrets versions list "$STATE_SECRET" --project "$PROJECT_ID" \
+              --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)' 2>/dev/null || true)"
+            if [[ -z "$state_version" ]]; then
+              state_value="$(openssl rand -base64 48 | tr -d '\n')"
+              if ! printf '%s' "$state_value" | gcloud secrets versions add "$STATE_SECRET" \
+                --project "$PROJECT_ID" --data-file=- --quiet >/dev/null 2>secret-error.txt; then
+                secret_status="BLOCKED_IAM"
+                secret_error="$(head -n 1 secret-error.txt | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[principal]/g')"
+              fi
+              unset state_value
+              state_version="$(gcloud secrets versions list "$STATE_SECRET" --project "$PROJECT_ID" \
+                --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)' 2>/dev/null || true)"
+            fi
+          fi
+
+          if [[ "$secret_status" != "BLOCKED_IAM" ]]; then
+            if ! gcloud secrets describe "$CLIENT_SECRET" --project "$PROJECT_ID" >/dev/null 2>&1; then
+              if ! gcloud secrets create "$CLIENT_SECRET" --project "$PROJECT_ID" \
+                --replication-policy=automatic --quiet >/dev/null 2>secret-error.txt; then
+                secret_status="BLOCKED_IAM"
+                secret_error="$(head -n 1 secret-error.txt | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[principal]/g')"
+              fi
+            fi
+            client_version="$(gcloud secrets versions list "$CLIENT_SECRET" --project "$PROJECT_ID" \
+              --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)' 2>/dev/null || true)"
+          fi
+          rm -f secret-error.txt
+
           required_apis=(
             calendar-json.googleapis.com
             tasks.googleapis.com
@@ -62,37 +106,20 @@ jobs:
             places.googleapis.com
             routes.googleapis.com
           )
-          gcloud services enable "${required_apis[@]}" --project "$PROJECT_ID" --quiet
-
-          if ! gcloud secrets describe "$STATE_SECRET" --project "$PROJECT_ID" >/dev/null 2>&1; then
-            state_value="$(openssl rand -base64 48 | tr -d '\n')"
-            printf '%s' "$state_value" | gcloud secrets create "$STATE_SECRET" \
-              --project "$PROJECT_ID" --replication-policy=automatic --data-file=- --quiet >/dev/null
-            unset state_value
-          fi
-          state_version="$(gcloud secrets versions list "$STATE_SECRET" --project "$PROJECT_ID" \
-            --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)')"
-          if [[ -z "$state_version" ]]; then
-            state_value="$(openssl rand -base64 48 | tr -d '\n')"
-            printf '%s' "$state_value" | gcloud secrets versions add "$STATE_SECRET" \
-              --project "$PROJECT_ID" --data-file=- --quiet >/dev/null
-            unset state_value
-            state_version="$(gcloud secrets versions list "$STATE_SECRET" --project "$PROJECT_ID" \
-              --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)')"
-          fi
-          test -n "$state_version"
-
-          if ! gcloud secrets describe "$CLIENT_SECRET" --project "$PROJECT_ID" >/dev/null 2>&1; then
-            gcloud secrets create "$CLIENT_SECRET" --project "$PROJECT_ID" \
-              --replication-policy=automatic --quiet >/dev/null
-          fi
-          client_version="$(gcloud secrets versions list "$CLIENT_SECRET" --project "$PROJECT_ID" \
-            --filter='state=ENABLED' --sort-by='~createTime' --limit=1 --format='value(name)' 2>/dev/null || true)"
-
-          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
-          for api in "${required_apis[@]}" gmail.googleapis.com pubsub.googleapis.com run.googleapis.com secretmanager.googleapis.com; do
-            grep -Fxq "$api" <<<"$enabled"
+          api_results=()
+          for api in "${required_apis[@]}"; do
+            if gcloud services list --project "$PROJECT_ID" --enabled --filter="config.name=${api}" --format='value(config.name)' | grep -Fxq "$api"; then
+              api_results+=("${api}|ALREADY_ENABLED")
+              continue
+            fi
+            if gcloud services enable "$api" --project "$PROJECT_ID" --quiet >/dev/null 2>api-error.txt; then
+              api_results+=("${api}|ENABLED_NOW")
+            else
+              reason="$(head -n 1 api-error.txt | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[principal]/g')"
+              api_results+=("${api}|BLOCKED_IAM:${reason}")
+            fi
           done
+          rm -f api-error.txt
 
           {
             echo "# Google OAuth live bootstrap"
@@ -104,19 +131,26 @@ jobs:
             echo "Runtime identity: $runtime_sa"
             echo "Exact HTTPS callback: $callback"
             echo
-            echo "## Enabled for the live mega-loop"
-            for api in "${required_apis[@]}"; do echo "- $api"; done
-            echo "- gmail.googleapis.com (already enabled)"
-            echo "- pubsub.googleapis.com (already enabled)"
-            echo
             echo "## Secret Manager"
-            echo "- OAuth state secret version: projects/${PROJECT_ID}/secrets/${STATE_SECRET}/versions/${state_version}"
-            echo "- OAuth client secret: projects/${PROJECT_ID}/secrets/${CLIENT_SECRET}"
-            if [[ -n "$client_version" ]]; then
-              echo "- OAuth client JSON version already exists: projects/${PROJECT_ID}/secrets/${CLIENT_SECRET}/versions/${client_version}"
+            echo "- Bootstrap status: $secret_status"
+            if [[ "$secret_status" == "BLOCKED_IAM" ]]; then
+              echo "- Secret mutation blocker: ${secret_error:-permission denied}"
             else
-              echo "- OAuth client JSON version: PENDING HUMAN WEB-CLIENT CREATION"
+              echo "- OAuth state secret version: projects/${PROJECT_ID}/secrets/${STATE_SECRET}/versions/${state_version}"
+              echo "- OAuth client secret shell: projects/${PROJECT_ID}/secrets/${CLIENT_SECRET}"
+              if [[ -n "$client_version" ]]; then
+                echo "- OAuth client JSON version already exists: projects/${PROJECT_ID}/secrets/${CLIENT_SECRET}/versions/${client_version}"
+              else
+                echo "- OAuth client JSON version: PENDING HUMAN WEB-CLIENT CREATION"
+              fi
             fi
+            echo
+            echo "## Mega-loop API promotion"
+            for item in "${api_results[@]}"; do
+              api="${item%%|*}"
+              status="${item#*|}"
+              echo "- ${api}: ${status}"
+            done
             echo
             echo "No secret payload was printed or uploaded. No Gmail, Calendar, Tasks, Drive, People, Places or Routes request was executed."
           } > "$out"
@@ -133,5 +167,5 @@ jobs:
         with:
           name: HealthIA-Google-OAuth-bootstrap
           path: dist/google-oauth-bootstrap/bootstrap.md
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
