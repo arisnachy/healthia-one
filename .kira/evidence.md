@@ -32,9 +32,10 @@
 ## Android Firebase build truth
 
 - Android workflow now separates `CODE PASS` from `FCM-READY APK` and never publishes an APK when the Firebase client configuration is absent.
-- Current Android compile/readiness run `31412142437` SUCCESS. `Compile Android debug application` passed, but FCM BuildConfig verification, APK rename and APK upload were skipped because Firebase config was absent. The temporary non-FCM-ready APK was deleted from the runner.
+- Android compile/readiness run `31412142437` SUCCESS. `Compile Android debug application` passed, but FCM BuildConfig verification, APK rename and APK upload were skipped because Firebase config was absent. The temporary non-FCM-ready APK was deleted from the runner.
 - Android readiness artifact `HealthIA-Android-APK-Readiness`, id `9072059305`, digest `sha256:8321ab51187b12cbde4d465b6f30c39cbde57e8074d79318d0b1183c93418cd3` records `status=BLOCKED_FIREBASE_CONFIG`, `fcm_ready=false`, `apk_publish_allowed=false`, `compile_allowed=true`, `config_source=NONE`, `secret_material_exposed=false`.
-- Preferred configuration path is a single protected Actions secret `HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON` containing the official Firebase `google-services.json`. The workflow requires exactly one Android client for `com.healthia.one.bridge`, project id `healthia-6088a`, extracts/masks client values inside the runner and never uploads the source JSON. Four individual `HEALTHIA_FIREBASE_*` Actions secrets remain a fallback.
+- Preferred configuration path is one single-line protected Actions secret `HEALTHIA_FIREBASE_ANDROID_CONFIG_B64` containing Base64 of the official Firebase `google-services.json`. The workflow decodes the content only in the runner, requires exactly one Android client for `com.healthia.one.bridge`, requires project id `healthia-6088a`, extracts/masks client values and never uploads the decoded source JSON.
+- Raw `HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON` remains a backward-compatible one-secret fallback. Four individual `HEALTHIA_FIREBASE_*` Actions secrets remain the final fallback. Base64 has first priority.
 - Read-only Firebase config discovery run `31412141346` SUCCESS; artifact `HealthIA-Firebase-Config-Readiness`, id `9071998497`, digest `sha256:dc2db080d5c591ab0d6bafd9a0bc7906f8b692538c928bc622a100fe18f11821`.
 - Firebase-config audit provider truth: project number readable; Secret Manager metadata list readable but 0 Firebase-like secret names and 0 exact HealthIA Firebase secret names; Cloud Run has none of the exact Firebase env names; Firebase Management Android-app list returned 403; API Keys metadata list returned 403; Cloud Asset FirebaseAppInfo search returned 403. No API key string or secret value was read, no IAM mutation occurred and no provider write occurred.
 - The 403s are permission limits only and are not used to assert that the Firebase Android app exists or is absent.
@@ -53,7 +54,7 @@
 ## Current verification
 
 - Functional Wave 2 head `3bdd8d56dcb7da68e171f07187dfc5fe289dfe04` passed HealthIA ONE verification run `31412142396` completely: pytest, Full System, DialogBench, Chromium, browser clinical E2E, LAB OMEGA Core/Secondary, compileall, smoke, JUDGE OMEGA, frontend gates, PowerShell, release build/verification and pytest inside the extracted release.
-- Opportunity Autopilot run `31412141450`: SUCCESS.
-- Canonical Google Health Constellation live-proof job was skipped on this Wave 2 head rather than manufacturing a provider PASS.
+- Documentation-only checkpoint `ab4a70faf8383b4ed494bf7e01e6e50ccf75d555` also passed HealthIA ONE verification run `31412740751` completely through the same gates; Opportunity Autopilot run `31412740374` succeeded.
+- Canonical Google Health Constellation live-proof jobs are skipped on Wave 2 PR heads rather than manufacturing a provider PASS.
 - `.github/workflows/google-cloud-capability-audit.yml` remains restored to Golden blob `1c505b8292b3fea3b595971e6d9e7d29ea42ea0a`.
-- Current security invariant: no credentials, OAuth material, raw FCM device tokens, Firebase client JSON, patient IDs, clinical content or key strings are permitted in proof artifacts.
+- Current security invariant: no credentials, OAuth material, raw FCM device tokens, Firebase client JSON/Base64, patient IDs, clinical content or key strings are permitted in proof artifacts.
