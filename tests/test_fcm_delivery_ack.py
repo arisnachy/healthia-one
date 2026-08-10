@@ -74,18 +74,23 @@ def test_token_refresh_preserves_existing_delivery_ack_until_next_proof():
     assert reread.last_delivery_notification_shown is True
 
 
-def test_disabled_registration_cannot_acknowledge_delivery():
+def test_disabled_registration_erases_token_material_and_cannot_acknowledge():
     store = MemoryFCMRegistrationStore()
     store.save(registration())
     assert store.disable_connection("patient_test", "hc_test_connection") is True
 
+    tombstone = store.load("patient_test", "hc_test_connection")
+    assert tombstone is not None
+    assert tombstone.enabled is False
+    assert tombstone.registration_token is None
+    assert tombstone.token_sha256 is None
+    assert tombstone.usable() is False
     assert store.acknowledge("patient_test", "hc_test_connection", "fcmproof_abcdefgh", True) is None
 
 
-def test_automatic_token_refresh_cannot_override_sticky_notification_opt_out():
+def test_automatic_token_refresh_cannot_override_privacy_tombstone():
     store = MemoryFCMRegistrationStore()
-    original = registration()
-    store.save(original)
+    store.save(registration())
     assert store.disable_connection("patient_test", "hc_test_connection") is True
 
     automatic_refresh = registration("automatic-refresh-token-0987654321")
@@ -94,12 +99,13 @@ def test_automatic_token_refresh_cannot_override_sticky_notification_opt_out():
 
     assert reread is not None
     assert reread.enabled is False
-    assert reread.registration_token == original.registration_token
-    assert reread.token_sha256 == original.token_sha256
+    assert reread.registration_token is None
+    assert reread.token_sha256 is None
+    assert reread.usable() is False
     assert store.list_active("patient_test") == []
 
 
-def test_explicit_notification_opt_in_can_reenable_with_current_token():
+def test_explicit_notification_opt_in_rehydrates_tombstone_with_current_token():
     store = MemoryFCMRegistrationStore()
     store.save(registration())
     assert store.disable_connection("patient_test", "hc_test_connection") is True
@@ -110,7 +116,9 @@ def test_explicit_notification_opt_in_can_reenable_with_current_token():
 
     assert reread is not None
     assert reread.enabled is True
+    assert reread.usable() is True
     assert reread.registration_token == "explicit-opt-in-current-token-123456"
+    assert reread.token_sha256 is not None
     assert len(store.list_active("patient_test")) == 1
 
 
