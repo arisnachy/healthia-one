@@ -77,12 +77,10 @@ jobs:
         run: |
           set -euo pipefail
           seconds="$(python - <<'PY'
-          from datetime import datetime, timedelta, timezone
+          from datetime import datetime, timezone
           now=datetime.now(timezone.utc)
           target=now.replace(hour=5,minute=3,second=0,microsecond=0)
           if now >= target:
-              # This observer is intended for today's just-imminent 05:00 run.
-              # If it starts shortly after 05:03, inspect immediately; do not wait a day.
               print(0)
           else:
               print(max(0,int((target-now).total_seconds())))
@@ -107,10 +105,12 @@ jobs:
           date_utc="$(date -u +%Y-%m-%d)"
           since="${date_utc}T04:55:00Z"
 
-          request_json="$(gcloud logging read \
-            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND resource.labels.revision_name=${WORKER_REVISION} AND httpRequest.requestUrl=\"${WORKER_URL}/scheduled/renew-gmail-watches\" AND timestamp>=\"${since}\"" \
-            --project "$PROJECT_ID" --limit 10 --order=desc --format=json)"
-          python - <<'PY' "$request_json" > /tmp/request-safe.json
+          found=0
+          for _ in $(seq 1 20); do
+            request_json="$(gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND resource.labels.revision_name=${WORKER_REVISION} AND httpRequest.requestUrl=\"${WORKER_URL}/scheduled/renew-gmail-watches\" AND timestamp>=\"${since}\"" \
+              --project "$PROJECT_ID" --limit 10 --order=desc --format=json)"
+            if python - <<'PY' "$request_json" > /tmp/request-safe.json
           import json,sys
           rows=json.loads(sys.argv[1] or '[]')
           good=[]
@@ -120,18 +120,25 @@ jobs:
               if status == 200:
                   good.append({'timestamp':str(row.get('timestamp') or ''),'status':status})
           if not good:
-              raise SystemExit('No HTTP 200 natural Scheduler request observed on expected worker revision')
+              raise SystemExit(1)
           print(json.dumps(good[0],sort_keys=True))
           PY
-
-          scheduler_log="$(gcloud logging read \
-            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND resource.labels.revision_name=${WORKER_REVISION} AND textPayload:\"healthia_gmail_watch_scheduler\" AND timestamp>=\"${since}\"" \
-            --project "$PROJECT_ID" --limit 20 --order=desc --format='value(textPayload)' | head -n1)"
-          test -n "$scheduler_log"
-          echo "$scheduler_log" | grep -F '"scheduler_request_bound":true' >/dev/null
-          echo "$scheduler_log" | grep -F '"scheduler_job_bound":true' >/dev/null
-          echo "$scheduler_log" | grep -F '"processed_count":0' >/dev/null
-          echo "$scheduler_log" | grep -F '"renewed_count":0' >/dev/null
+            then
+              scheduler_log="$(gcloud logging read \
+                "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND resource.labels.revision_name=${WORKER_REVISION} AND textPayload:\"healthia_gmail_watch_scheduler\" AND timestamp>=\"${since}\"" \
+                --project "$PROJECT_ID" --limit 20 --order=desc --format='value(textPayload)' | head -n1)"
+              if [[ -n "$scheduler_log" ]] \
+                && grep -Fq '"scheduler_request_bound":true' <<<"$scheduler_log" \
+                && grep -Fq '"scheduler_job_bound":true' <<<"$scheduler_log" \
+                && grep -Fq '"processed_count":0' <<<"$scheduler_log" \
+                && grep -Fq '"renewed_count":0' <<<"$scheduler_log"; then
+                found=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          [[ "$found" == "1" ]] || { echo "Natural Scheduler proof not visible after bounded log-propagation window" >&2; exit 1; }
 
           id_token="$(gcloud auth print-identity-token --audiences="$WORKER_URL")"
           echo "::add-mask::$id_token"
