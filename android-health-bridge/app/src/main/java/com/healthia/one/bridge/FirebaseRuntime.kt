@@ -17,7 +17,7 @@ object FirebaseRuntime {
 
     fun notificationsEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(NOTIFICATIONS_ENABLED, true)
+            .getBoolean(NOTIFICATIONS_ENABLED, false)
 
     fun setNotificationsEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
