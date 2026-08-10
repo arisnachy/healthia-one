@@ -53,4 +53,19 @@ object FirebaseRuntime {
             // Deliberately do not log the registration token or server response.
         }
     }
+
+    fun acknowledgeDelivery(context: Context, proofId: String) {
+        if (proofId.length !in 8..128 || proofId.any { !(it.isLetterOrDigit() || it in "._:-") }) return
+        val preferences = context.getSharedPreferences("healthia", Context.MODE_PRIVATE)
+        val baseUrl = preferences.getString("base_url", "").orEmpty()
+        val accessToken = preferences.getString("access_token", "").orEmpty()
+        val deviceId = preferences.getString("device_id", "").orEmpty()
+        if (baseUrl.isBlank() || accessToken.isBlank() || deviceId.isBlank()) return
+        scope.launch {
+            runCatching {
+                HealthiaApi.acknowledgeFcm(baseUrl, accessToken, deviceId, proofId)
+            }
+            // The proof id is synthetic operational evidence; never log payload data.
+        }
+    }
 }
