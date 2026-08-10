@@ -127,6 +127,8 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-autopilot-schedules.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/deploy-gmail-push-worker.ps1")) | Out-Null
           [scriptblock]::Create((Get-Content -Raw "deployment/configure-google-oauth.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/import-google-oauth-client.ps1")) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw "deployment/promote-google-live-prereqs.ps1")) | Out-Null
       - name: Build verified release archive
         run: python scripts/build_release_zip.py --source-ref "$GITHUB_SHA"
       - name: Verify release archive
