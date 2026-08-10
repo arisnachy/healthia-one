@@ -124,6 +124,24 @@ def test_expiring_watch_is_renewed_without_mailbox_polling():
     assert guard.calls[0].payload["renewal_window"] == "2026-08-09"
 
 
+def test_forced_watch_repairs_use_unique_idempotency_windows():
+    service = service_with_connection()
+    guard = WatchGuard(history_id="201")
+    service.runtime.guarded_executor = guard
+    manager = GmailWatchManager(
+        constellation=service,
+        watch_store=MemoryGmailWatchDirectory(),
+        topic_name="projects/demo/topics/healthia-gmail",
+    )
+
+    manager.ensure_watch("patient_demo", force=True, now=NOW)
+    manager.ensure_watch("patient_demo", force=True, now=NOW + timedelta(seconds=1))
+
+    assert len(guard.calls) == 2
+    assert guard.calls[0].payload["renewal_window"] != guard.calls[1].payload["renewal_window"]
+    assert "T" in guard.calls[0].payload["renewal_window"]
+
+
 def test_account_change_disables_old_cursor_before_new_watch():
     service = service_with_connection(mailbox="new@example.com")
     watches = MemoryGmailWatchDirectory()

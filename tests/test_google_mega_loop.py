@@ -311,6 +311,22 @@ def test_guarded_mega_loop_maps_gmail_push_calendar_tasks_has_receipts_and_no_du
     assert len(tasks.calls) == 1
     assert all(authorizations.get(patient_id, item.id).consumed_at is not None for item in final_auths)
 
+    # Exact replay recovers durable receipts without duplicating Google calls
+    # or patient-visible mission projections.
+    replayed = service.coordinator.finalize_appointment(
+        mission,
+        service.grants(patient_id),
+        summary="Support center appointment",
+        time_zone="America/Santo_Domingo",
+        create_followup_task=True,
+    )
+    assert replayed.state == MissionState.COMPLETED
+    assert replayed.task_ids == ["task_1"]
+    assert len(calendar.calls) == 2
+    assert len(tasks.calls) == 1
+    assert len([event for event in replayed.public_events if event.event_type == "calendar.booked"]) == 1
+    assert len([event for event in replayed.public_events if event.event_type == "mission.completed"]) == 1
+
     completed_receipts = [item for item in receipts._values.values() if item.status == "completed"]
     actions = {item.action for item in completed_receipts}
     assert GoogleAction.MAPS_SEARCH_NEARBY in actions

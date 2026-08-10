@@ -14,7 +14,58 @@ function Require-Command([string] $Name) {
     }
 }
 
+function Add-SecretVersionFromMemory([string] $Name, [string] $Payload) {
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    if ($GcloudSdkRoot) {
+        $startInfo.FileName = Join-Path $GcloudSdkRoot "platform\bundledpython\python.exe"
+        $gcloudEntrypoint = Join-Path $GcloudSdkRoot "lib\gcloud.py"
+        $startInfo.Arguments = "-S `"$gcloudEntrypoint`" secrets versions add $Name --project $ProjectId --data-file=- --format=`"value(name)`" --quiet"
+    } else {
+        $startInfo.FileName = $GcloudCommand
+        $startInfo.Arguments = "secrets versions add $Name --project $ProjectId --data-file=- --format=`"value(name)`" --quiet"
+    }
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $previousInputEncoding = [Console]::InputEncoding
+    [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        # StandardInput writes the in-memory ASCII JSON directly and does not
+        # prepend the UTF-8 BOM that Windows PowerShell native pipelines can
+        # emit when piping to gcloud --data-file=-.
+        $process.StandardInput.Write($Payload)
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Secret Manager rejected the OAuth client payload without exposing it"
+        }
+        return $stdout.Trim()
+    } finally {
+        [Console]::InputEncoding = $previousInputEncoding
+        $process.Dispose()
+        $stderr = $null
+        $stdout = $null
+        $previousInputEncoding = $null
+    }
+}
+
 Require-Command "gcloud"
+$gcloudCmd = Get-Command "gcloud.cmd" -ErrorAction SilentlyContinue
+$GcloudCommand = if ($gcloudCmd) { $gcloudCmd.Source } else { (Get-Command "gcloud").Source }
+$GcloudSdkRoot = if ($gcloudCmd) { Split-Path (Split-Path $gcloudCmd.Source -Parent) -Parent } else { $null }
+
+if ($ProjectId -notmatch "^[a-z][a-z0-9-]{4,61}[a-z0-9]$") {
+    throw "ProjectId is not a valid Google Cloud project id"
+}
+if ($SecretName -notmatch "^[A-Za-z0-9_-]{1,255}$") {
+    throw "SecretName is invalid"
+}
 
 if (-not (Test-Path -LiteralPath $ClientSecretJsonPath -PathType Leaf)) {
     throw "ClientSecretJsonPath does not exist or is not a file"
@@ -66,14 +117,18 @@ if (-not $Confirmed) {
     exit 0
 }
 
-$enabled = @(gcloud services list --project $ProjectId --enabled --format="value(config.name)")
+$enabled = @(& $GcloudCommand services list --project $ProjectId --enabled --format="value(config.name)")
 if ($enabled -notcontains "secretmanager.googleapis.com") {
     throw "Secret Manager API is not enabled. This script will not enable APIs silently."
 }
 
-$existing = gcloud secrets describe $SecretName --project $ProjectId --format="value(name)" 2>$null
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($existing)) {
-    & gcloud secrets create $SecretName --project $ProjectId --replication-policy automatic --quiet | Out-Null
+$secretNames = @(& $GcloudCommand secrets list --project $ProjectId --format="value(name)")
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to list Secret Manager containers"
+}
+$existing = @($secretNames | Where-Object { $_ -eq $SecretName -or $_ -like "*/secrets/$SecretName" })
+if ($existing.Count -eq 0) {
+    & $GcloudCommand secrets create $SecretName --project $ProjectId --replication-policy automatic --quiet | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to create the OAuth client Secret Manager container"
     }
@@ -88,12 +143,8 @@ $compact = [ordered]@{
 } | ConvertTo-Json -Compress
 
 try {
-    $version = $compact | & gcloud secrets versions add $SecretName `
-        --project $ProjectId `
-        --data-file=- `
-        --format="value(name)" `
-        --quiet
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string] $version)) {
+    $version = Add-SecretVersionFromMemory $SecretName $compact
+    if ([string]::IsNullOrWhiteSpace([string] $version)) {
         throw "Secret Manager did not return a new OAuth client version"
     }
 } finally {

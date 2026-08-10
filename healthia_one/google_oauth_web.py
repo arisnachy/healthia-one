@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timezone
@@ -190,9 +191,19 @@ class SecretManagerOAuthConnectionSecretWriter:
         except Exception as exc:
             raise GoogleOAuthFlowError(f"OAuth secret version write failed: {type(exc).__name__}") from exc
         resource = str(getattr(version, "name", "") or "").strip()
-        if not resource.startswith(f"{secret_name}/versions/"):
+        # Secret Manager canonicalizes the project segment to the numeric
+        # project number even when the request used the textual project ID.
+        # Keep validating the exact hashed secret and a numeric version, then
+        # store the configured-project alias so subsequent rotations remain
+        # confined to the same project and secret.
+        secret_id = secret_name.rsplit("/", 1)[-1]
+        match = re.fullmatch(
+            rf"projects/[^/]+/secrets/{re.escape(secret_id)}/versions/([0-9]+)",
+            resource,
+        )
+        if match is None:
             raise GoogleOAuthFlowError("Secret Manager returned an invalid OAuth secret version resource")
-        return resource
+        return f"{secret_name}/versions/{match.group(1)}"
 
 
 def _b64encode(value: bytes) -> str:

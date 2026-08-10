@@ -296,6 +296,15 @@ class SecretClient:
         return SimpleNamespace(name=f"{request['parent']}/versions/1")
 
 
+class CanonicalProjectNumberSecretClient(SecretClient):
+    def add_secret_version(self, request):
+        self.versions.append(request)
+        secret_id = request["parent"].rsplit("/", 1)[-1]
+        return SimpleNamespace(
+            name=f"projects/1038180719788/secrets/{secret_id}/versions/2"
+        )
+
+
 def test_secret_manager_writer_uses_hashed_patient_secret_name_and_returns_only_version_reference():
     client = SecretClient()
     writer = SecretManagerOAuthConnectionSecretWriter("demo", client=client)
@@ -313,3 +322,20 @@ def test_secret_manager_writer_uses_hashed_patient_secret_name_and_returns_only_
     assert "patient_sensitive_identifier" not in json.dumps(client.created)
     payload = json.loads(client.versions[0]["payload"]["data"].decode("utf-8"))
     assert payload["refresh_token"] == "secret-refresh"
+
+
+def test_secret_manager_writer_normalizes_canonical_numeric_project_resource():
+    client = CanonicalProjectNumberSecretClient()
+    writer = SecretManagerOAuthConnectionSecretWriter("healthia-6088a", client=client)
+
+    resource = writer.write(
+        "patient_sensitive_identifier",
+        OAuthSecretMaterial(
+            refresh_token="secret-refresh",
+            client_id="client-id.apps.googleusercontent.com",
+            client_secret="client-secret-value",
+        ),
+    )
+
+    assert resource.startswith("projects/healthia-6088a/secrets/healthia-google-oauth-")
+    assert resource.endswith("/versions/2")

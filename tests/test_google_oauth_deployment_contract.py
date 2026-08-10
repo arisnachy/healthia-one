@@ -44,3 +44,16 @@ def test_patient_token_secret_name_is_hashed_and_empty_until_consent():
     assert 'return "healthia-google-oauth-$($hex.Substring(0, 24))"' in SCRIPT
     assert "contains no token until patient consent callback succeeds" in SCRIPT
     assert "PatientId must be a HealthIA patient_ identifier" in SCRIPT
+
+
+def test_configure_script_targets_only_the_isolated_web_runtime():
+    assert '$ServiceName -ne "healthia-one-web-demo"' in SCRIPT
+    assert "refusing to inject patient OAuth configuration" in SCRIPT
+    assert '$clientSecret.Secret -ne "healthia-google-oauth-client"' in SCRIPT
+    assert '$stateSecret.Secret -ne "healthia-google-oauth-state"' in SCRIPT
+    assert "[System.Security.Cryptography.SHA256]::Create()" in SCRIPT
+    assert "[System.BitConverter]::ToString($hash)" in SCRIPT
+    assert 'Get-Command "gcloud.cmd"' in SCRIPT
+    assert "& $GcloudCommand @Arguments" in SCRIPT
+    assert 'secrets list --project $ProjectId --format="value(name)"' in SCRIPT
+    assert '$_ -like "*/secrets/$patientSecretName"' in SCRIPT

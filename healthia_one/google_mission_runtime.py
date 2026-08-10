@@ -206,12 +206,22 @@ class GoogleHealthMissionCoordinator:
             explicit_authorization_id=auth_id,
         )
         receipt, outcome = self.executor.execute(request, grants)
-        mission.record(
-            f"tool.{action}",
-            receipt.safe_summary,
-            resource_id=receipt.resource_id,
-            evidence_ids=receipt.evidence_ids,
+        event_type = f"tool.{action}"
+        already_projected = bool(
+            outcome is not None
+            and outcome.recovered_existing
+            and any(
+                event.event_type == event_type and event.resource_id == receipt.resource_id
+                for event in mission.public_events
+            )
         )
+        if not already_projected:
+            mission.record(
+                event_type,
+                receipt.safe_summary,
+                resource_id=receipt.resource_id,
+                evidence_ids=receipt.evidence_ids,
+            )
         return receipt, outcome
 
     def discover(
@@ -417,6 +427,21 @@ class GoogleHealthMissionCoordinator:
         time_zone: str,
         create_followup_task: bool = True,
     ) -> GoogleHealthMission:
+        was_completed = mission.state == MissionState.COMPLETED
+        if was_completed:
+            # Repair any legacy replay projection before executing the durable
+            # idempotent receipts again. Distinct Gmail messages remain distinct
+            # because their resource IDs differ.
+            mission.task_ids = list(dict.fromkeys(mission.task_ids))
+            seen_events: set[tuple[str, str, str]] = set()
+            deduplicated_events = []
+            for event in mission.public_events:
+                marker = (event.event_type, event.resource_id, event.summary)
+                if marker in seen_events:
+                    continue
+                seen_events.add(marker)
+                deduplicated_events.append(event)
+            mission.public_events = deduplicated_events
         try:
             calendar_payload = calendar_event_payload(mission, summary=summary, time_zone=time_zone)
         except ValueError as exc:
@@ -441,12 +466,13 @@ class GoogleHealthMissionCoordinator:
             mission.state = MissionState.FAILED
             self.store.save(mission)
             return mission
-        mission.calendar_event_id = receipt.resource_id
-        mission.record(
-            "calendar.booked",
-            f"Calendar event created for the selected provider slot at {place_name}.",
-            resource_id=receipt.resource_id,
-        )
+        if mission.calendar_event_id != receipt.resource_id:
+            mission.calendar_event_id = receipt.resource_id
+            mission.record(
+                "calendar.booked",
+                f"Calendar event created for the selected provider slot at {place_name}.",
+                resource_id=receipt.resource_id,
+            )
 
         if create_followup_task:
             task_receipt, _ = self._execute(
@@ -455,7 +481,11 @@ class GoogleHealthMissionCoordinator:
                 GoogleAction.TASKS_CREATE,
                 followup_task_payload(mission),
             )
-            if task_receipt.status == "completed" and task_receipt.resource_id:
+            if (
+                task_receipt.status == "completed"
+                and task_receipt.resource_id
+                and task_receipt.resource_id not in mission.task_ids
+            ):
                 mission.task_ids.append(task_receipt.resource_id)
             elif task_receipt.status == "blocked":
                 mission.state = MissionState.FOLLOWUP_AUTHORIZATION_PENDING
@@ -467,9 +497,10 @@ class GoogleHealthMissionCoordinator:
                 return mission
 
         mission.state = MissionState.COMPLETED
-        mission.record(
-            "mission.completed",
-            "The navigation mission has a verifiable scheduled outcome and remains linked to its receipts.",
-        )
+        if not was_completed:
+            mission.record(
+                "mission.completed",
+                "The navigation mission has a verifiable scheduled outcome and remains linked to its receipts.",
+            )
         self.store.save(mission)
         return mission

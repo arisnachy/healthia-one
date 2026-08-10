@@ -4,6 +4,7 @@ import json
 import pytest
 
 from healthia_one.gmail_mission_events import (
+    GeminiAdministrativeReplyInterpreter,
     GmailMessageChange,
     GmailMissionEventBridge,
     GmailPushNotification,
@@ -204,3 +205,29 @@ def test_low_confidence_reply_keeps_mission_waiting_and_advances_processed_curso
     assert resumed[0].state == MissionState.AWAITING_EXTERNAL_EVENT
     assert resumed[0].public_events[-1].event_type == "gmail.reply_ambiguous"
     assert watches.load("patient_demo").history_id == "101"
+
+
+def test_explicit_iso_appointment_offer_is_parsed_from_exact_new_message_without_llm():
+    class Settings:
+        llm_backend = "disabled"
+        adk_ready = False
+
+    mission = waiting_mission()
+    interpreter = GeminiAdministrativeReplyInterpreter(Settings())
+    signal = interpreter.interpret(
+        mission,
+        {
+            "id": "thread_1",
+            "messages": [
+                {"id": "old", "snippet": "APPOINTMENT OFFERED. Start: 2026-01-01T01:00:00-04:00. End: 2026-01-01T02:00:00-04:00. Time zone: America/Santo_Domingo."},
+                {"id": "m1", "snippet": "APPOINTMENT OFFERED. Start: 2026-08-12T10:30:00-04:00. End: 2026-08-12T11:00:00-04:00. Time zone: America/Santo_Domingo."},
+            ],
+        },
+        message_id="m1",
+        history_id="101",
+    )
+
+    assert signal.classification == "appointment_offered"
+    assert signal.confidence == 1.0
+    assert signal.offered_slots[0].start == "2026-08-12T10:30:00-04:00"
+    assert signal.offered_slots[0].source_message_id == "m1"

@@ -22,7 +22,52 @@ function Invoke-Gcloud([string[]] $Arguments) {
     }
 }
 
+function Add-SecretVersionFromMemory([string] $Name, [string] $Payload) {
+    $Payload = $Payload.TrimStart([char] 0xFEFF)
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    if ($GcloudSdkRoot) {
+        $startInfo.FileName = Join-Path $GcloudSdkRoot "platform\bundledpython\python.exe"
+        $gcloudEntrypoint = Join-Path $GcloudSdkRoot "lib\gcloud.py"
+        $startInfo.Arguments = "-S `"$gcloudEntrypoint`" secrets versions add $Name --project $ProjectId --data-file=- --format=`"value(name)`" --quiet"
+    } else {
+        $startInfo.FileName = $GcloudCommand
+        $startInfo.Arguments = "secrets versions add $Name --project $ProjectId --data-file=- --format=`"value(name)`" --quiet"
+    }
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    try {
+        # Write the key directly from memory. Windows PowerShell native
+        # pipelines can prepend a BOM, which makes the API-key HTTP header
+        # invalid at runtime.
+        $process.StandardInput.Write($Payload)
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Secret Manager rejected the Places key without exposing it"
+        }
+        return $stdout.Trim()
+    } finally {
+        $process.Dispose()
+        $stderr = $null
+        $stdout = $null
+    }
+}
+
 Require-Command "gcloud"
+$gcloudCmd = Get-Command "gcloud.cmd" -ErrorAction SilentlyContinue
+$GcloudCommand = if ($gcloudCmd) { $gcloudCmd.Source } else { (Get-Command "gcloud").Source }
+$GcloudSdkRoot = if ($gcloudCmd) { Split-Path (Split-Path $gcloudCmd.Source -Parent) -Parent } else { $null }
+
+if ($WebServiceName -ne "healthia-one-web-demo") {
+    throw "WebServiceName must be the isolated healthia-one-web-demo service; refusing to expose any other Cloud Run service"
+}
 
 Write-Host "KIRA Google live prerequisite promotion"
 Write-Host "Project: $ProjectId"
@@ -34,6 +79,13 @@ if (-not $Confirmed) {
     Write-Host "HEALTHIA_GOOGLE_LIVE_PREREQS_NOT_CONFIRMED"
     Write-Host "Planned mutations: enable Calendar/Tasks/Places/API Keys; create a Places-only server key if needed; store it in Secret Manager; grant only the web runtime access to that secret; make only the isolated web demo publicly reachable; verify app-session 401 boundaries."
     exit 0
+}
+
+$enabled = @(gcloud services list --project $ProjectId --enabled --format="value(config.name)")
+foreach ($api in @("run.googleapis.com", "secretmanager.googleapis.com")) {
+    if ($enabled -notcontains $api) {
+        throw "Required existing API is not enabled: $api. No live promotion was attempted."
+    }
 }
 
 $requiredApis = @(
@@ -75,7 +127,16 @@ if ([string]::IsNullOrWhiteSpace($keyResource)) {
     }
 }
 
-$mapsKey = (& gcloud services api-keys get-key-string $keyResource --project $ProjectId --format="value(keyString)").Trim()
+$keyMetadata = & gcloud services api-keys describe $keyResource --project $ProjectId --format=json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $null -eq $keyMetadata) {
+    throw "Unable to verify the Places API key restrictions"
+}
+$apiTargets = @($keyMetadata.restrictions.apiTargets)
+if ($apiTargets.Count -ne 1 -or [string] $apiTargets[0].service -ne "places.googleapis.com") {
+    throw "Refusing to reuse an API key that is not restricted exclusively to places.googleapis.com"
+}
+
+$mapsKey = (& gcloud services api-keys get-key-string $keyResource --project $ProjectId --format="value(keyString)").Trim().TrimStart([char] 0xFEFF)
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($mapsKey)) {
     throw "Unable to retrieve the Places API key string"
 }
@@ -86,12 +147,8 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string] $secretExists)
 }
 
 try {
-    $mapsVersion = $mapsKey | & gcloud secrets versions add $MapsSecretName `
-        --project $ProjectId `
-        --data-file=- `
-        --format="value(name)" `
-        --quiet
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string] $mapsVersion)) {
+    $mapsVersion = Add-SecretVersionFromMemory $MapsSecretName $mapsKey
+    if ([string]::IsNullOrWhiteSpace([string] $mapsVersion)) {
         throw "Secret Manager did not return a Places key version"
     }
 } finally {
@@ -117,18 +174,36 @@ Invoke-Gcloud @(
 )
 
 function Probe([string] $Path) {
+    $request = [System.Net.HttpWebRequest]::Create($serviceUrl.TrimEnd('/') + $Path)
+    $request.Method = "GET"
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 15000
     try {
-        $response = Invoke-WebRequest -Uri ($serviceUrl.TrimEnd('/') + $Path) -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 15
-        return [int] $response.StatusCode
+        $response = $request.GetResponse()
+        try {
+            return [int] ([System.Net.HttpWebResponse] $response).StatusCode
+        } finally {
+            $response.Dispose()
+        }
     } catch {
-        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-            return [int] $_.Exception.Response.StatusCode
+        $webException = $_.Exception
+        while ($webException -and -not ($webException -is [System.Net.WebException])) {
+            $webException = $webException.InnerException
+        }
+        if ($webException -and $webException.Response) {
+            $errorResponse = [System.Net.HttpWebResponse] $webException.Response
+            try {
+                return [int] $errorResponse.StatusCode
+            } finally {
+                $errorResponse.Dispose()
+            }
         }
         return 0
     }
 }
 
-$health = Probe "/healthz"
+$readiness = Probe "/api/readiness"
+$healthz = Probe "/healthz"
 $login = Probe "/login"
 $session = Probe "/api/auth/session"
 $bootstrap = Probe "/api/bootstrap"
@@ -136,7 +211,7 @@ $opportunities = Probe "/api/opportunities"
 $googleCaps = Probe "/api/google-constellation/capabilities"
 $oauthReadiness = Probe "/api/google-constellation/oauth/readiness"
 
-if ($health -ne 200 -or $login -ne 200 -or $session -ne 200) {
+if ($readiness -ne 200 -or $login -ne 200 -or $session -ne 200) {
     throw "Public web transport did not expose only the expected unauthenticated entry points"
 }
 if ($bootstrap -ne 401 -or $opportunities -ne 401 -or $googleCaps -ne 401 -or $oauthReadiness -ne 401) {
@@ -151,4 +226,6 @@ Write-Host "Places API key resource: $keyResource"
 Write-Host "Places API key secret version: $mapsVersion"
 Write-Host "Places API key value: not displayed"
 Write-Host "Places secret accessor: serviceAccount:$runtimeEmail"
+Write-Host "Cloud Run readiness probe: /api/readiness 200 PASS"
+Write-Host "Cloud Run reserved /healthz observation: HTTP $healthz (not used as the deployed readiness gate)"
 Write-Host "Protected anonymous probes: 401 PASS"

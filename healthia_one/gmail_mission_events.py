@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib import parse
@@ -295,6 +296,38 @@ class GeminiAdministrativeReplyInterpreter:
         return {"id": str(thread.get("id") or ""), "messages": messages}
 
     def interpret(self, mission: GoogleHealthMission, gmail_thread: dict[str, Any], *, message_id: str, history_id: str) -> GmailReplySignal:
+        # A deliberately narrow structured reply is safer and more reliable
+        # than asking an LLM to reinterpret explicit ISO timestamps. Only the
+        # exact newly-added Gmail message is considered; ordinary prose still
+        # falls through to Gemini and low-confidence output stays fail-closed.
+        message = next(
+            (item for item in (gmail_thread.get("messages") or []) if str(item.get("id") or "") == message_id),
+            None,
+        )
+        snippet = str((message or {}).get("snippet") or "")[:1200]
+        explicit_slot = re.search(
+            r"APPOINTMENT OFFERED\.\s*Start:\s*([^\s.]+)\.\s*End:\s*([^\s.]+)\.\s*Time zone:\s*([A-Za-z_]+/[A-Za-z_]+)",
+            snippet,
+            re.IGNORECASE,
+        )
+        if explicit_slot:
+            return GmailReplySignal(
+                thread_id=mission.gmail_thread_id,
+                message_id=message_id,
+                history_id=history_id,
+                classification="appointment_offered",
+                offered_slots=[
+                    OfferedSlot(
+                        start=explicit_slot.group(1),
+                        end=explicit_slot.group(2),
+                        time_zone=explicit_slot.group(3),
+                        source_message_id=message_id,
+                    )
+                ],
+                safe_excerpt=snippet[:400],
+                confidence=1.0,
+            )
+
         if self.settings.llm_backend != "gemini_api" or not self.settings.adk_ready:
             return GmailReplySignal(
                 thread_id=mission.gmail_thread_id,

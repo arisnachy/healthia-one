@@ -147,7 +147,14 @@ class GmailWatchManager:
         if not force and not self.due(existing, now=current):
             return existing, "unchanged"
 
-        renewal_window = current.strftime("%Y-%m-%d")
+        # Scheduled daily renewal remains idempotent for the day. An explicit
+        # force is an operator repair and must reach Gmail instead of recovering
+        # a stale daily receipt that may move the history cursor backwards.
+        renewal_window = (
+            current.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            if force
+            else current.strftime("%Y-%m-%d")
+        )
         request_value = GoogleActionRequest(
             patient_id=patient_id,
             mission_id=f"gmail_watch:{patient_id}",
@@ -202,6 +209,9 @@ class GmailWatchManager:
                 self.watch_store.save(watch)
                 results.append((watch.patient_id, "disabled_disconnected"))
                 continue
-            renewed, status = self.ensure_watch(watch.patient_id, force=True, now=current)
+            # The directory already selected only due watches, so the scheduled
+            # path can retain its daily idempotency key. `force=True` is reserved
+            # for an explicit operator repair.
+            renewed, status = self.ensure_watch(watch.patient_id, force=False, now=current)
             results.append((renewed.patient_id, status))
         return results

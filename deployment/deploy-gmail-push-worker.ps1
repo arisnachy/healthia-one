@@ -96,8 +96,8 @@ Run-Gcloud @(
     "--image", $Image,
     "--service-account", $runtimeEmail,
     "--no-allow-unauthenticated",
-    "--min", "0",
-    "--max", "2",
+    "--min-instances", "0",
+    "--max-instances", "2",
     "--concurrency", "8",
     "--memory", "512Mi",
     "--cpu", "1",
@@ -121,8 +121,9 @@ foreach ($invoker in @($pushEmail, $schedulerEmail)) {
     )
 }
 
-$existingSubscription = gcloud pubsub subscriptions describe $SubscriptionName --project $ProjectId --format="value(name)" 2>$null
-if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingSubscription)) {
+$subscriptionNames = @(gcloud pubsub subscriptions list --project $ProjectId --format="value(name)")
+$existingSubscription = @($subscriptionNames | Where-Object { $_ -eq $SubscriptionName -or $_ -eq "projects/$ProjectId/subscriptions/$SubscriptionName" })
+if ($existingSubscription.Count -gt 0) {
     throw "Pub/Sub subscription '$SubscriptionName' already exists. Inspect/delete/update it explicitly instead of silently changing its authenticated push target."
 }
 
@@ -137,8 +138,9 @@ Run-Gcloud @(
     "--message-retention-duration", "1d"
 )
 
-$existingJob = gcloud scheduler jobs describe $RenewJobName --project $ProjectId --location $SchedulerLocation --format="value(name)" 2>$null
-if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingJob)) {
+$jobNames = @(gcloud scheduler jobs list --project $ProjectId --location $SchedulerLocation --format="value(name)")
+$existingJob = @($jobNames | Where-Object { $_ -eq $RenewJobName -or $_ -like "*/jobs/$RenewJobName" })
+if ($existingJob.Count -gt 0) {
     throw "Cloud Scheduler job '$RenewJobName' already exists. Inspect/update it explicitly instead of silently changing renewal cadence."
 }
 

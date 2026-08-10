@@ -9,6 +9,10 @@ LIVE_PROOF = Path(".github/workflows/google-cloud-live-proof.yml").read_text(enc
 def test_gmail_worker_deploy_is_private_and_never_enables_apis_silently():
     assert "--no-allow-unauthenticated" in SCRIPT
     assert "--allow-unauthenticated" not in SCRIPT
+    assert '"--min-instances", "0"' in SCRIPT
+    assert '"--max-instances", "2"' in SCRIPT
+    assert '"--min", "0"' not in SCRIPT
+    assert '"--max", "2"' not in SCRIPT
     assert "gcloud services enable" not in SCRIPT.lower()
     assert "HEALTHIA_GMAIL_WORKER_NOT_CONFIRMED" in SCRIPT
     assert "[switch] $Confirmed" in SCRIPT
@@ -35,6 +39,13 @@ def test_watch_renewal_uses_private_scheduler_oidc_not_mailbox_polling():
     assert "/scheduled/renew-gmail-watches" in SCRIPT
     assert "renew expiring patient-authorized gmail api watches" in SCRIPT.lower()
     assert "event-driven via pub/sub" in SCRIPT.lower()
+
+
+def test_missing_subscription_and_job_checks_are_windows_powershell_safe():
+    assert 'pubsub subscriptions list' in SCRIPT
+    assert 'scheduler jobs list' in SCRIPT
+    assert 'subscriptions describe $SubscriptionName' not in SCRIPT
+    assert 'jobs describe $RenewJobName' not in SCRIPT
 
 
 def test_deployment_does_not_grant_broad_secret_access():

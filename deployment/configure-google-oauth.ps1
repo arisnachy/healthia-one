@@ -18,7 +18,7 @@ function Require-Command([string] $Name) {
 }
 
 function Run-Gcloud([string[]] $Arguments) {
-    & gcloud @Arguments
+    & $GcloudCommand @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "gcloud failed without exposing secret payloads: gcloud $($Arguments -join ' ')"
     }
@@ -55,14 +55,31 @@ function Patient-SecretId([string] $Value) {
         throw "PatientId must be a HealthIA patient_ identifier"
     }
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
-    $hash = [System.Security.Cryptography.SHA256]::HashData($bytes)
-    $hex = [System.Convert]::ToHexString($hash).ToLowerInvariant()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha256.ComputeHash($bytes)
+    } finally {
+        $sha256.Dispose()
+    }
+    $hex = ([System.BitConverter]::ToString($hash)).Replace("-", "").ToLowerInvariant()
     return "healthia-google-oauth-$($hex.Substring(0, 24))"
 }
 
 Require-Command "gcloud"
+$gcloudCmd = Get-Command "gcloud.cmd" -ErrorAction SilentlyContinue
+$GcloudCommand = if ($gcloudCmd) { $gcloudCmd.Source } else { "gcloud" }
 $clientSecret = Parse-SecretVersionResource $OAuthClientSecretResource "OAuthClientSecretResource"
 $stateSecret = Parse-SecretVersionResource $OAuthStateSecretResource "OAuthStateSecretResource"
+
+if ($ServiceName -ne "healthia-one-web-demo") {
+    throw "ServiceName must be the isolated healthia-one-web-demo service; refusing to inject patient OAuth configuration into any other runtime"
+}
+if ($clientSecret.Secret -ne "healthia-google-oauth-client") {
+    throw "OAuthClientSecretResource must reference healthia-google-oauth-client"
+}
+if ($stateSecret.Secret -ne "healthia-google-oauth-state") {
+    throw "OAuthStateSecretResource must reference healthia-google-oauth-state"
+}
 
 $redirect = $null
 if (-not [uri]::TryCreate($RedirectUri, [System.UriKind]::Absolute, [ref] $redirect)) {
@@ -85,7 +102,7 @@ if (-not $Confirmed) {
     exit 0
 }
 
-$enabled = @(gcloud services list --project $ProjectId --enabled --format="value(config.name)")
+$enabled = @(& $GcloudCommand services list --project $ProjectId --enabled --format="value(config.name)")
 foreach ($api in @("run.googleapis.com", "secretmanager.googleapis.com")) {
     if ($enabled -notcontains $api) {
         throw "Required API is not enabled: $api. This script will not enable APIs silently."
@@ -93,7 +110,7 @@ foreach ($api in @("run.googleapis.com", "secretmanager.googleapis.com")) {
 }
 
 Run-Gcloud @("run", "services", "describe", $ServiceName, "--project", $ProjectId, "--region", $Region, "--format=value(metadata.name)")
-$runtimeEmail = gcloud run services describe $ServiceName --project $ProjectId --region $Region --format="value(spec.template.spec.serviceAccountName)"
+$runtimeEmail = & $GcloudCommand run services describe $ServiceName --project $ProjectId --region $Region --format="value(spec.template.spec.serviceAccountName)"
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($runtimeEmail)) {
     throw "Unable to resolve the Cloud Run runtime service account"
 }
@@ -112,8 +129,12 @@ foreach ($secret in @($clientSecret, $stateSecret)) {
 $patientSecretName = ""
 if (-not [string]::IsNullOrWhiteSpace($PatientId)) {
     $patientSecretName = Patient-SecretId $PatientId
-    $existing = gcloud secrets describe $patientSecretName --project $ProjectId --format="value(name)" 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($existing)) {
+    $secretNames = @(& $GcloudCommand secrets list --project $ProjectId --format="value(name)")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to check whether the patient OAuth secret exists"
+    }
+    $existing = @($secretNames | Where-Object { $_ -eq $patientSecretName -or $_ -like "*/secrets/$patientSecretName" })
+    if ($existing.Count -eq 0) {
         Run-Gcloud @(
             "secrets", "create", $patientSecretName,
             "--project", $ProjectId,
@@ -140,7 +161,7 @@ Run-Gcloud @(
     "--quiet"
 )
 
-$revision = gcloud run services describe $ServiceName --project $ProjectId --region $Region --format="value(status.latestReadyRevisionName)"
+$revision = & $GcloudCommand run services describe $ServiceName --project $ProjectId --region $Region --format="value(status.latestReadyRevisionName)"
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($revision)) {
     throw "OAuth configuration update completed but the ready Cloud Run revision could not be resolved"
 }

@@ -133,7 +133,10 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     server_token_provider = ServerAdcTokenProvider()
     connectors: dict[GoogleService, object] = {}
 
-    maps_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+    # Cloud Run secret env values can inherit a UTF-8 BOM from legacy Windows
+    # provisioning. It is never part of an API key and is invalid in an HTTP
+    # header, so remove it defensively at the trust boundary.
+    maps_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip().lstrip("\ufeff")
     if maps_key:
         connectors[GoogleService.MAPS] = HealthIAMapsConnector(maps_key)
 
