@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,6 +25,10 @@ class FCMDeviceRegistrationRequest(BaseModel):
         return token
 
 
+class FCMDeviceReenableRequest(FCMDeviceRegistrationRequest):
+    notifications_opt_in: Literal[True]
+
+
 class FCMDeliveryAckRequest(BaseModel):
     device_id: str = Field(min_length=3, max_length=240)
     proof_id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -43,7 +47,7 @@ class FCMDeviceRegistration(BaseModel):
 
 
 class FCMRegistrationStore(Protocol):
-    def save(self, registration: FCMDeviceRegistration) -> None: ...
+    def save(self, registration: FCMDeviceRegistration, *, allow_reenable: bool = False) -> None: ...
     def load(self, patient_id: str, connection_id: str) -> FCMDeviceRegistration | None: ...
     def list_active(self, patient_id: str) -> list[FCMDeviceRegistration]: ...
     def disable_connection(self, patient_id: str, connection_id: str) -> bool: ...
@@ -63,17 +67,41 @@ def build_registration(*, patient_id: str, connection_id: str, device_id: str, r
     )
 
 
+def _merged_registration(
+    existing: FCMDeviceRegistration | None,
+    registration: FCMDeviceRegistration,
+    *,
+    allow_reenable: bool,
+) -> FCMDeviceRegistration | None:
+    """Return the value that may be persisted without bypassing a user opt-out.
+
+    A normal token refresh is automatic background behavior and therefore cannot
+    turn a disabled registration back on. Re-enabling is a separate explicit
+    opt-in action. Returning ``None`` means the sticky disabled record must remain
+    untouched, including its previous token/hash.
+    """
+
+    if existing is not None and not existing.enabled and not allow_reenable:
+        return None
+
+    value = registration.model_copy(deep=True)
+    value.enabled = True
+    if existing is not None and value.last_delivery_proof_id is None:
+        value.last_delivery_proof_id = existing.last_delivery_proof_id
+        value.last_delivery_ack_at = existing.last_delivery_ack_at
+    return value
+
+
 class MemoryFCMRegistrationStore:
     def __init__(self) -> None:
         self._values: dict[tuple[str, str], FCMDeviceRegistration] = {}
 
-    def save(self, registration: FCMDeviceRegistration) -> None:
+    def save(self, registration: FCMDeviceRegistration, *, allow_reenable: bool = False) -> None:
         key = (registration.patient_id, registration.connection_id)
         existing = self._values.get(key)
-        value = registration.model_copy(deep=True)
-        if existing is not None and value.last_delivery_proof_id is None:
-            value.last_delivery_proof_id = existing.last_delivery_proof_id
-            value.last_delivery_ack_at = existing.last_delivery_ack_at
+        value = _merged_registration(existing, registration, allow_reenable=allow_reenable)
+        if value is None:
+            return
         self._values[key] = value
 
     def load(self, patient_id: str, connection_id: str) -> FCMDeviceRegistration | None:
@@ -115,18 +143,28 @@ class FirestoreFCMRegistrationStore:
     def __init__(self, project: str | None = None) -> None:
         from google.cloud import firestore
 
+        self.firestore = firestore
         self.client = firestore.Client(project=project)
 
     def _devices(self, patient_id: str):
         return self.client.collection(self.COLLECTION).document(patient_id).collection("devices")
 
-    def save(self, registration: FCMDeviceRegistration) -> None:
-        # A token refresh must not erase an already-recorded delivery proof before
-        # the verifier can reread it, so optional ACK fields are merged only when set.
-        self._devices(registration.patient_id).document(registration.connection_id).set(
-            registration.model_dump(mode="json", exclude_none=True),
-            merge=True,
-        )
+    def save(self, registration: FCMDeviceRegistration, *, allow_reenable: bool = False) -> None:
+        # The read/write decision is transactional so a concurrent token refresh
+        # cannot race a user opt-out and accidentally set enabled=True again.
+        ref = self._devices(registration.patient_id).document(registration.connection_id)
+        transaction = self.client.transaction()
+
+        @self.firestore.transactional
+        def persist(txn):
+            snapshot = ref.get(transaction=txn)
+            existing = FCMDeviceRegistration.model_validate(snapshot.to_dict()) if snapshot.exists else None
+            value = _merged_registration(existing, registration, allow_reenable=allow_reenable)
+            if value is None:
+                return
+            txn.set(ref, value.model_dump(mode="json", exclude_none=True), merge=True)
+
+        persist(transaction)
 
     def load(self, patient_id: str, connection_id: str) -> FCMDeviceRegistration | None:
         snapshot = self._devices(patient_id).document(connection_id).get()
