@@ -29,7 +29,7 @@ jobs:
           create_credentials_file: true
       - name: Install Firestore client
         run: python -m pip install --quiet 'google-cloud-firestore>=2.21,<3'
-      - name: Count active FCM registrations without reading tokens into output
+      - name: Count active FCM registrations without token disclosure
         shell: bash
         run: |
           set -euo pipefail
@@ -42,8 +42,6 @@ jobs:
           active=0
           valid_hashes=0
           for snap in client.collection_group('devices').stream():
-              # Only documents with the FCM registration schema count. Other nested
-              # `devices` collections are ignored without emitting their contents.
               data=snap.to_dict() or {}
               if 'registration_token' not in data or 'token_sha256' not in data:
                   continue
@@ -58,7 +56,7 @@ jobs:
               'fcm_registration_documents':total,
               'active_fcm_registrations':active,
               'registrations_with_valid_sha256':valid_hashes,
-              'raw_registration_token_emitted':False,
+              'raw_device_secret_emitted':False,
               'iam_mutation':False,
               'secret_material_exposed':False,
           }
