@@ -39,8 +39,6 @@ class FCMDeviceRegistration(BaseModel):
     patient_id: str
     connection_id: str
     device_id: str
-    # Disabled registrations are privacy tombstones: token material is deleted,
-    # while enabled registrations always carry both the raw token and its digest.
     registration_token: str | None = Field(default=None, repr=False)
     token_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     enabled: bool = True
@@ -90,7 +88,6 @@ def _merged_registration(
 
     if existing is not None and not existing.enabled and not allow_reenable:
         return None
-
     if not registration.registration_token or not registration.token_sha256:
         raise ValueError("Enabled FCM registration requires token material")
 
@@ -170,8 +167,6 @@ class FirestoreFCMRegistrationStore:
         return self.client.collection(self.COLLECTION).document(patient_id).collection("devices")
 
     def save(self, registration: FCMDeviceRegistration, *, allow_reenable: bool = False) -> None:
-        # The read/write decision is transactional so a concurrent token refresh
-        # cannot race a user opt-out and accidentally set enabled=True again.
         ref = self._devices(registration.patient_id).document(registration.connection_id)
         transaction = self.client.transaction()
 
@@ -204,7 +199,7 @@ class FirestoreFCMRegistrationStore:
             snapshot = ref.get(transaction=txn)
             if not snapshot.exists:
                 return False
-            txn.set(
+            txn.update(
                 ref,
                 {
                     "enabled": False,
@@ -212,7 +207,6 @@ class FirestoreFCMRegistrationStore:
                     "token_sha256": self.firestore.DELETE_FIELD,
                     "updated_at": utc_now().isoformat(),
                 },
-                merge=True,
             )
             return True
 
