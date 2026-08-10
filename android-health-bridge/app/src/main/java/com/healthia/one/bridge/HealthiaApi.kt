@@ -54,6 +54,14 @@ object HealthiaApi {
         return request(baseUrl, "/api/devices/fcm/register", payload, token)
     }
 
+    fun acknowledgeFcm(baseUrl: String, token: String, deviceId: String, proofId: String): String {
+        val payload = JSONObject().apply {
+            put("device_id", deviceId)
+            put("proof_id", proofId)
+        }
+        return request(baseUrl, "/api/devices/fcm/ack", payload, token)
+    }
+
     private fun request(baseUrl: String, path: String, payload: JSONObject, token: String?): String {
         val connection = (URL("${baseUrl.trimEnd('/')}$path").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
