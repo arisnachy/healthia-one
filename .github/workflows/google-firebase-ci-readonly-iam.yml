@@ -1,0 +1,195 @@
+name: Google Firebase CI read-only IAM gate
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/google-firebase-ci-readonly-iam.yml'
+      - '.github/workflows/android-bridge.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'preflight is read-only; authorize grants Firebase Viewer only to the active CI service account'
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - authorize
+      authorization:
+        description: 'For authorize only, type I_AUTHORIZE_FIREBASE_VIEWER_FOR_CI'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-firebase-ci-readonly-iam-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  firebase-ci-readonly-iam:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      AUTHORIZE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'authorize' }}
+      AUTHORIZATION: ${{ github.event_name == 'workflow_dispatch' && inputs.authorization || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Bind source SHA
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Read-only Firebase IAM preflight
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/firebase-ci-readonly-iam
+          account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
+          test -n "$account"
+          case "$account" in
+            *.iam.gserviceaccount.com) ;;
+            *) echo 'Active CI identity is not a service account; refusing IAM workflow.' >&2; exit 1 ;;
+          esac
+          echo "::add-mask::$account"
+          export CI_ACCOUNT="$account"
+
+          access_token="$(gcloud auth print-access-token)"
+          test -n "$access_token"
+          echo "::add-mask::$access_token"
+          pre_code="$(curl -sS -o /tmp/firebase-apps-pre.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${access_token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
+          rm -f /tmp/firebase-apps-pre.json
+
+          echo "firebase_list_http_status=$pre_code" >> "$GITHUB_OUTPUT"
+          export PRE_CODE="$pre_code"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          account=os.environ['CI_ACCOUNT']
+          out={
+              'status':'ALREADY_AUTHORIZED' if os.environ.get('PRE_CODE') == '200' else 'BLOCKED_FIREBASE_READ_IAM',
+              'source_sha':os.environ.get('SOURCE_SHA',''),
+              'project_id':os.environ['PROJECT_ID'],
+              'firebase_management_list_http_status_before':int(os.environ.get('PRE_CODE') or 0),
+              'active_service_account_sha256':hashlib.sha256(account.encode()).hexdigest(),
+              'required_role':'roles/firebase.viewer',
+              'required_permissions':['firebase.clients.get','firebase.clients.list'],
+              'iam_mutation':False,
+              'api_enable_mutation':False,
+              'provider_write':False,
+              'secret_material_exposed':False,
+          }
+          Path('dist/firebase-ci-readonly-iam/preflight.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+      - name: Enforce explicit Firebase Viewer authorization
+        if: env.AUTHORIZE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$AUTHORIZATION" != "I_AUTHORIZE_FIREBASE_VIEWER_FOR_CI" ]]; then
+            echo 'IAM mutation blocked: exact authorization phrase is missing.' >&2
+            exit 1
+          fi
+
+      - name: Grant Firebase Viewer only to active CI service account
+        if: env.AUTHORIZE_MODE == 'true' && steps.preflight.outputs.firebase_list_http_status != '200'
+        id: grant
+        shell: bash
+        run: |
+          set -euo pipefail
+          account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
+          test -n "$account"
+          case "$account" in
+            *.iam.gserviceaccount.com) ;;
+            *) echo 'Active CI identity is not a service account; refusing IAM mutation.' >&2; exit 1 ;;
+          esac
+          echo "::add-mask::$account"
+          gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member="serviceAccount:${account}" \
+            --role='roles/firebase.viewer' \
+            --condition=None \
+            --quiet >/tmp/firebase-iam-grant.txt
+          rm -f /tmp/firebase-iam-grant.txt
+          echo 'mutated=true' >> "$GITHUB_OUTPUT"
+
+      - name: Verify Firebase read access after gate
+        if: always() && (steps.preflight.conclusion == 'success')
+        shell: bash
+        run: |
+          set -euo pipefail
+          access_token="$(gcloud auth print-access-token)"
+          test -n "$access_token"
+          echo "::add-mask::$access_token"
+          post_code="$(curl -sS -o /tmp/firebase-apps-post.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${access_token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
+          rm -f /tmp/firebase-apps-post.json
+          export POST_CODE="$post_code"
+          export MUTATED="${{ steps.grant.outputs.mutated || 'false' }}"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          post=int(os.environ.get('POST_CODE') or 0)
+          mutated=os.environ.get('MUTATED') == 'true'
+          out={
+              'status':'LIVE_PASS' if post == 200 else 'BLOCKED_FIREBASE_READ_IAM',
+              'source_sha':os.environ.get('SOURCE_SHA',''),
+              'firebase_management_list_http_status_after':post,
+              'required_role':'roles/firebase.viewer',
+              'iam_mutation':mutated,
+              'api_enable_mutation':False,
+              'provider_write':False,
+              'secret_material_exposed':False,
+          }
+          Path('dist/firebase-ci-readonly-iam/postcheck.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+          if [[ "$AUTHORIZE_MODE" == 'true' && "$post_code" != '200' ]]; then
+            echo 'Authorized Firebase Viewer IAM gate did not converge to HTTP 200.' >&2
+            exit 1
+          fi
+
+      - name: Refuse secret-like artifact content
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|client_secret|access_token|refresh_token|ya29\.|AIza[0-9A-Za-z_-]{20,}|1:[0-9]+:android:[0-9a-f]+|iam\.gserviceaccount\.com)' dist/firebase-ci-readonly-iam; then
+            rm -rf dist/firebase-ci-readonly-iam
+            echo 'Sensitive-looking IAM/Firebase material detected; refusing upload.' >&2
+            exit 1
+          fi
+
+      - name: Upload sanitized Firebase CI IAM evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Firebase-CI-Readonly-IAM
+          path: dist/firebase-ci-readonly-iam/*.json
+          if-no-files-found: error
+          retention-days: 30
