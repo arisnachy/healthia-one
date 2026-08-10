@@ -74,8 +74,11 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     api = (SOURCE / "HealthiaApi.kt").read_text(encoding="utf-8")
     runtime = (SOURCE / "FirebaseRuntime.kt").read_text(encoding="utf-8")
     service = (SOURCE / "HealthiaFirebaseMessagingService.kt").read_text(encoding="utf-8")
+    registration_worker = (SOURCE / "FcmRegistrationWorker.kt").read_text(encoding="utf-8")
+    ack_worker = (SOURCE / "FcmDeliveryAckWorker.kt").read_text(encoding="utf-8")
 
     assert "firebase-messaging" in gradle
+    assert "work-runtime-ktx" in gradle
     for build_value in (
         "HEALTHIA_FIREBASE_APP_ID",
         "HEALTHIA_FIREBASE_API_KEY",
@@ -90,15 +93,29 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "requestNotificationPermissionIfNeeded" in activity
     assert "/api/devices/fcm/register" in api
     assert "/api/devices/fcm/ack" in api
-    assert "FirebaseMessaging.getInstance().token" in runtime
-    assert "uploadRegistration" in runtime
-    assert "acknowledgeDelivery" in runtime
+    assert "FcmRegistrationWorker.enqueue" in runtime
+    assert "FcmDeliveryAckWorker.enqueue" in runtime
     assert "onNewToken" in service
+    assert "FirebaseRuntime.syncRegistration" in service
     assert "onMessageReceived" in service
     assert 'message.data["proof_id"]' in service
     assert 'kind != "healthia_update"' in service
     assert 'setContentTitle("HealthIA")' in service
     assert 'setContentText("Tienes una actualización disponible en HealthIA.")' in service
+
+    for worker in (registration_worker, ack_worker):
+        assert "CoroutineWorker" in worker
+        assert "NetworkType.CONNECTED" in worker
+        assert "BackoffPolicy.EXPONENTIAL" in worker
+        assert "setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)" in worker
+        assert "Result.retry()" in worker
+    assert "FirebaseMessaging.getInstance().token" in registration_worker
+    assert "Tasks.await" in registration_worker
+    assert "ExistingWorkPolicy.REPLACE" in registration_worker
+    assert "HealthiaApi.registerFcm" in registration_worker
+    assert "ExistingWorkPolicy.KEEP" in ack_worker
+    assert "HealthiaApi.acknowledgeFcm" in ack_worker
+    assert "MessageDigest.getInstance(\"SHA-256\")" in ack_worker
 
 
 def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
