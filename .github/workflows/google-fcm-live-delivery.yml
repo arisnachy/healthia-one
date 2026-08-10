@@ -18,9 +18,7 @@ on:
         required: true
         default: preflight
         type: choice
-        options:
-          - preflight
-          - live
+        options: [preflight, live]
       controlled_device_authorization:
         description: "For live only, type I_AUTHORIZE_CONTROLLED_FCM_PROOF"
         required: false
@@ -64,41 +62,37 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
+      - name: Install Firestore read client
+        shell: bash
+        run: python -m pip install --quiet "google-cloud-firestore>=2.21,<3"
+
       - name: Read-only FCM device preflight
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/wave2-fcm-live
-          access_token="$(gcloud auth print-access-token)"
-          test -n "$access_token"
-          echo "::add-mask::$access_token"
-          export ACCESS_TOKEN="$access_token"
           python - <<'PY'
-          import json, os, urllib.request
+          import json, os
           from pathlib import Path
+          from google.cloud import firestore
+          from google.cloud.firestore_v1.base_query import FieldFilter
 
-          project=os.environ['PROJECT_ID']
-          token=os.environ['ACCESS_TOKEN']
-          url=f'https://firestore.googleapis.com/v1/projects/{project}/databases/(default)/documents:runQuery'
-          query={
-            'structuredQuery':{
-              'from':[{'collectionId':'devices','allDescendants':True}],
-              'where':{'fieldFilter':{'field':{'fieldPath':'enabled'},'op':'EQUAL','value':{'booleanValue':True}}},
-            }
-          }
-          request=urllib.request.Request(url,data=json.dumps(query,separators=(',',':')).encode(),headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},method='POST')
-          with urllib.request.urlopen(request,timeout=60) as response:
-              rows=json.loads(response.read().decode() or '[]')
+          client=firestore.Client(project=os.environ['PROJECT_ID'])
+          query=client.collection_group('devices').where(filter=FieldFilter('enabled','==',True))
           candidates=[]
-          for row in rows:
-              document=row.get('document') or {}
-              fields=document.get('fields') or {}
-              raw=(fields.get('registration_token') or {}).get('stringValue') or ''
-              digest=(fields.get('token_sha256') or {}).get('stringValue') or ''
+          try:
+              snapshots=list(query.stream())
+          except Exception:
+              raise RuntimeError('Firestore FCM registration query failed') from None
+          for snapshot in snapshots:
+              fields=snapshot.to_dict() or {}
+              raw=str(fields.get('registration_token') or '')
+              digest=str(fields.get('token_sha256') or '')
               if len(raw)>=16 and len(digest)==64:
-                  candidates.append({'name':str(document.get('name') or ''),'token':raw,'digest':digest})
+                  candidates.append({'path':snapshot.reference.path,'token':raw,'digest':digest})
+          status='READY_DEVICE_PRESENT' if len(candidates)==1 else ('BLOCKED_DEVICE' if not candidates else 'BLOCKED_AMBIGUOUS_DEVICES')
           out={
-            'status':'READY_DEVICE_PRESENT' if len(candidates)==1 else ('BLOCKED_DEVICE' if not candidates else 'BLOCKED_AMBIGUOUS_DEVICES'),
+            'status':status,
             'source_sha':os.environ.get('SOURCE_SHA',''),
             'active_fcm_registration_count':len(candidates),
             'registration_hash_count':len({item['digest'] for item in candidates}),
@@ -113,7 +107,7 @@ jobs:
               if len(candidates)!=1:
                   raise SystemExit('LIVE FCM proof requires exactly one active controlled-device registration')
               Path('/tmp/fcm-token.txt').write_text(candidates[0]['token'],encoding='utf-8')
-              Path('/tmp/fcm-document-name.txt').write_text(candidates[0]['name'],encoding='utf-8')
+              Path('/tmp/fcm-document-path.txt').write_text(candidates[0]['path'],encoding='utf-8')
               Path('/tmp/fcm-token-digest.txt').write_text(candidates[0]['digest'],encoding='utf-8')
           PY
 
@@ -133,22 +127,23 @@ jobs:
         run: |
           set -euo pipefail
           registration_token="$(cat /tmp/fcm-token.txt)"
-          document_name="$(cat /tmp/fcm-document-name.txt)"
+          document_path="$(cat /tmp/fcm-document-path.txt)"
           token_digest="$(cat /tmp/fcm-token-digest.txt)"
-          test -n "$registration_token" && test -n "$document_name"
+          test -n "$registration_token" && test -n "$document_path"
           echo "::add-mask::$registration_token"
           proof_id="fcmproof_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
           access_token="$(gcloud auth print-access-token)"
           test -n "$access_token"
           echo "::add-mask::$access_token"
-          export ACCESS_TOKEN="$access_token" REGISTRATION_TOKEN="$registration_token" DOCUMENT_NAME="$document_name" TOKEN_DIGEST="$token_digest" PROOF_ID="$proof_id"
+          export ACCESS_TOKEN="$access_token" REGISTRATION_TOKEN="$registration_token" DOCUMENT_PATH="$document_path" TOKEN_DIGEST="$token_digest" PROOF_ID="$proof_id"
 
           python - <<'PY'
-          import hashlib, json, os, time, urllib.error, urllib.parse, urllib.request
+          import hashlib, json, os, time, urllib.error, urllib.request
           from pathlib import Path
+          from google.cloud import firestore
 
           project=os.environ['PROJECT_ID']; access=os.environ['ACCESS_TOKEN']; registration=os.environ['REGISTRATION_TOKEN']
-          document_name=os.environ['DOCUMENT_NAME']; proof_id=os.environ['PROOF_ID']; token_digest=os.environ['TOKEN_DIGEST']
+          document_path=os.environ['DOCUMENT_PATH']; proof_id=os.environ['PROOF_ID']; token_digest=os.environ['TOKEN_DIGEST']
           payload={'message':{'token':registration,'data':{'kind':'healthia_update','proof_id':proof_id},'android':{'priority':'HIGH'}}}
           req=urllib.request.Request(
               f'https://fcm.googleapis.com/v1/projects/{project}/messages:send',
@@ -160,22 +155,23 @@ jobs:
               with urllib.request.urlopen(req,timeout=60) as response:
                   result=json.loads(response.read().decode() or '{}')
           except urllib.error.HTTPError as exc:
-              raise RuntimeError(f'FCM provider send failed with HTTP {exc.code}') from exc
+              raise RuntimeError(f'FCM provider send failed with HTTP {exc.code}') from None
           message_name=str(result.get('name') or '')
           if not message_name:
               raise RuntimeError('FCM provider did not return a message resource')
 
-          document_url='https://firestore.googleapis.com/v1/'+document_name
-          acknowledged=False; acknowledged_at=''
+          client=firestore.Client(project=project)
+          reference=client.document(document_path)
+          acknowledged=False; acknowledged_at=None
           for _ in range(30):
-              read=urllib.request.Request(document_url,headers={'Authorization':'Bearer '+access,'Accept':'application/json'})
-              with urllib.request.urlopen(read,timeout=30) as response:
-                  document=json.loads(response.read().decode() or '{}')
-              fields=document.get('fields') or {}
-              ack=(fields.get('last_delivery_proof_id') or {}).get('stringValue') or ''
-              if ack == proof_id:
+              try:
+                  snapshot=reference.get()
+              except Exception:
+                  raise RuntimeError('Firestore FCM acknowledgement reread failed') from None
+              fields=snapshot.to_dict() or {}
+              if str(fields.get('last_delivery_proof_id') or '') == proof_id:
                   acknowledged=True
-                  acknowledged_at=(fields.get('last_delivery_ack_at') or {}).get('stringValue') or ''
+                  acknowledged_at=fields.get('last_delivery_ack_at')
                   break
               time.sleep(4)
           if not acknowledged:
@@ -189,7 +185,7 @@ jobs:
             'registration_token_sha256':token_digest,
             'proof_id':proof_id,
             'controlled_device_ack':True,
-            'acknowledged_at_present':bool(acknowledged_at),
+            'acknowledged_at_present':acknowledged_at is not None,
             'data_message_kind':'healthia_update',
             'clinical_content':False,
             'notification_copy_server_supplied':False,
@@ -200,7 +196,7 @@ jobs:
           Path('dist/wave2-fcm-live/live.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
           print(json.dumps(out,sort_keys=True))
           PY
-          rm -f /tmp/fcm-token.txt /tmp/fcm-document-name.txt /tmp/fcm-token-digest.txt
+          rm -f /tmp/fcm-token.txt /tmp/fcm-document-path.txt /tmp/fcm-token-digest.txt
 
       - name: Build sanitized FCM summary
         if: always()
@@ -224,7 +220,7 @@ jobs:
             rm -rf dist/wave2-fcm-live
             exit 1
           fi
-          rm -f /tmp/fcm-token.txt /tmp/fcm-document-name.txt /tmp/fcm-token-digest.txt
+          rm -f /tmp/fcm-token.txt /tmp/fcm-document-path.txt /tmp/fcm-token-digest.txt
 
       - name: Upload sanitized FCM evidence
         if: always()
@@ -234,3 +230,25 @@ jobs:
           path: dist/wave2-fcm-live
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Enforce truth-preserving workflow conclusion
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path=Path('dist/wave2-fcm-live/summary.json')
+          if not path.exists():
+              raise SystemExit('FCM evidence summary missing')
+          summary=json.loads(path.read_text())
+          status=str(summary.get('status') or '')
+          live=os.environ.get('LIVE_MODE','').lower()=='true'
+          allowed={'BLOCKED_DEVICE','READY_DEVICE_PRESENT','BLOCKED_AMBIGUOUS_DEVICES'}
+          if live and status!='LIVE_PASS':
+              raise SystemExit('FCM LIVE proof did not receive a controlled-device ACK')
+          if not live and status not in allowed:
+              raise SystemExit('FCM preflight did not produce a valid provider-truth state')
+          print(json.dumps({'status':status,'truth_rule':'CODE PASS != LIVE PASS'},sort_keys=True))
+          PY
