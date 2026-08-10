@@ -1,0 +1,81 @@
+name: Google Health Constellation FCM readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fcm-readiness-audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      PACKAGE_NAME: com.healthia.one.bridge
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Inspect FCM readiness without exposing credentials or device tokens
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-fcm-audit
+          token="$(gcloud auth print-access-token)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          code="$(curl -sS -o /tmp/apps.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps")"
+          python - "$code" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          code=int(sys.argv[1])
+          raw=json.load(open('/tmp/apps.json',encoding='utf-8')) if Path('/tmp/apps.json').stat().st_size else {}
+          apps=(raw.get('apps') or []) if isinstance(raw,dict) else []
+          package=os.environ['PACKAGE_NAME']
+          matches=[a for a in apps if str(a.get('packageName') or '')==package]
+          gradle=Path('android-health-bridge/app/build.gradle.kts').read_text(encoding='utf-8')
+          runtime=Path('android-health-bridge/app/src/main/java/com/healthia/one/bridge/FirebaseRuntime.kt').read_text(encoding='utf-8')
+          client_sdk_present=('firebase-messaging' in gradle and 'FirebaseMessaging' in runtime)
+          out={
+              'status':'READ_ONLY_AUDIT',
+              'firebase_management_http_status':code,
+              'firebase_management_readable':code == 200,
+              'android_app_count_if_readable':len(apps) if code == 200 else None,
+              'package_name':package,
+              'matching_android_app_count_if_readable':len(matches) if code == 200 else None,
+              'matching_app_has_app_id_if_readable':bool(matches and matches[0].get('appId')) if code == 200 else None,
+              'matching_app_state_if_readable':str(matches[0].get('state') or '') if (code == 200 and matches) else None,
+              'fcm_client_sdk_present_in_repo':client_sdk_present,
+              'device_registration_status':'UNKNOWN_NOT_QUERIED',
+              'iam_mutation':False,
+              'secret_material_exposed':False,
+          }
+          if code != 200:
+              err=str((raw.get('error') or {}).get('status') or '') if isinstance(raw,dict) else ''
+              out['provider_error_status']=err[:80]
+          Path('dist/wave2-fcm-audit/readiness.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+          rm -f /tmp/apps.json
+          if grep -Eiq '(private_key|client_secret|access_token|id_token|refresh_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/wave2-fcm-audit/readiness.json; then
+            rm -f dist/wave2-fcm-audit/readiness.json
+            exit 1
+          fi
+      - name: Upload sanitized FCM readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave2-FCM-Readiness
+          path: dist/wave2-fcm-audit/readiness.json
+          if-no-files-found: error
+          retention-days: 30
