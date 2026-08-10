@@ -99,6 +99,7 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "/api/devices/fcm/register/enable" in api
     assert 'method = "DELETE"' in api
     assert "/api/devices/fcm/ack" in api
+    assert 'put("notification_shown", notificationShown)' in api
     assert "fcm_notifications_enabled" in runtime
     assert "FcmRegistrationWorker.cancel" in runtime
     assert "FcmRegistrationWorker.enqueue" in runtime
@@ -109,6 +110,8 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "onMessageReceived" in service
     assert 'message.data["proof_id"]' in service
     assert 'kind != "healthia_update"' in service
+    assert "showNeutralNotification(): Boolean" in service
+    assert "notificationShown = showNeutralNotification()" in service
     assert 'setContentTitle("HealthIA")' in service
     assert 'setContentText("Tienes una actualización disponible en HealthIA.")' in service
 
@@ -126,6 +129,8 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "HealthiaApi.registerFcm" in registration_worker
     assert "ExistingWorkPolicy.KEEP" in ack_worker
     assert "HealthiaApi.acknowledgeFcm" in ack_worker
+    assert "KEY_NOTIFICATION_SHOWN" in ack_worker
+    assert "notificationShown" in ack_worker
     assert "MessageDigest.getInstance(\"SHA-256\")" in ack_worker
 
 
@@ -178,7 +183,7 @@ def test_firebase_readonly_iam_gate_is_narrow_and_chains_only_after_success() ->
     assert "provider_write':False" in workflow
 
 
-def test_fcm_live_proof_uses_unpredictable_nonce_and_waits_for_durable_ack() -> None:
+def test_fcm_live_proof_uses_unpredictable_nonce_and_requires_visible_durable_ack() -> None:
     workflow = (ROOT / ".github/workflows/google-fcm-live-delivery.yml").read_text(encoding="utf-8")
     assert "FcmRegistrationWorker.kt" in workflow
     assert "FcmDeliveryAckWorker.kt" in workflow
@@ -187,5 +192,9 @@ def test_fcm_live_proof_uses_unpredictable_nonce_and_waits_for_durable_ack() -> 
     assert "raw_proof_id_exposed':False" in workflow
     assert "for _ in range(60)" in workflow
     assert "time.sleep(4)" in workflow
+    assert "last_delivery_notification_shown" in workflow
+    assert "controlled_device_notification_shown" in workflow
+    assert "Android did not confirm a visible notification" in workflow
+    assert "both controlled-device ACK and visible notification" in workflow
     assert "I_AUTHORIZE_CONTROLLED_FCM_PROOF" in workflow
     assert "provider accepted" not in workflow.lower()
