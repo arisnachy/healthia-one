@@ -138,7 +138,7 @@ jobs:
             exit 1
           fi
 
-      - name: Send exactly one PHI-neutral FCM data message and require device ACK
+      - name: Send exactly one PHI-neutral FCM data message and require visible device ACK
         if: env.LIVE_MODE == 'true'
         shell: bash
         run: |
@@ -179,7 +179,7 @@ jobs:
 
           client=firestore.Client(project=project)
           reference=client.document(document_path)
-          acknowledged=False; acknowledged_at=None
+          acknowledged=False; acknowledged_at=None; notification_shown=False
           # WorkManager can apply exponential backoff after a transient Android-side
           # network/process failure, so the LIVE verifier allows four minutes for the
           # durable ACK rather than assuming the first in-process request succeeds.
@@ -192,10 +192,13 @@ jobs:
               if str(fields.get('last_delivery_proof_id') or '') == proof_id:
                   acknowledged=True
                   acknowledged_at=fields.get('last_delivery_ack_at')
+                  notification_shown=fields.get('last_delivery_notification_shown') is True
                   break
               time.sleep(4)
           if not acknowledged:
               raise RuntimeError('FCM was accepted by the provider but no matching controlled-device ACK was observed')
+          if not notification_shown:
+              raise RuntimeError('Controlled-device ACK was observed but Android did not confirm a visible notification')
 
           out={
             'status':'LIVE_PASS',
@@ -205,6 +208,7 @@ jobs:
             'registration_token_sha256':token_digest,
             'proof_id_sha256':hashlib.sha256(proof_id.encode()).hexdigest(),
             'controlled_device_ack':True,
+            'controlled_device_notification_shown':True,
             'acknowledged_at_present':acknowledged_at is not None,
             'data_message_kind':'healthia_update',
             'clinical_content':False,
@@ -232,7 +236,18 @@ jobs:
           preflight=json.loads((root/'preflight.json').read_text()) if (root/'preflight.json').exists() else {}
           live=json.loads((root/'live.json').read_text()) if (root/'live.json').exists() else None
           live_mode=os.environ.get('LIVE_MODE','').lower()=='true'
-          out={'status':'LIVE_PASS' if live and live.get('controlled_device_ack') else (preflight.get('status','INCOMPLETE') if not live_mode else 'INCOMPLETE'),'source_sha':os.environ.get('SOURCE_SHA',''),'live_mode':live_mode,'controlled_device_ack':bool(live and live.get('controlled_device_ack')),'preflight':preflight,'truth_rule':'CODE PASS != LIVE PASS','iam_mutation':False,'secret_material_exposed':False}
+          live_pass=bool(live and live.get('controlled_device_ack') and live.get('controlled_device_notification_shown'))
+          out={
+              'status':'LIVE_PASS' if live_pass else (preflight.get('status','INCOMPLETE') if not live_mode else 'INCOMPLETE'),
+              'source_sha':os.environ.get('SOURCE_SHA',''),
+              'live_mode':live_mode,
+              'controlled_device_ack':bool(live and live.get('controlled_device_ack')),
+              'controlled_device_notification_shown':bool(live and live.get('controlled_device_notification_shown')),
+              'preflight':preflight,
+              'truth_rule':'CODE PASS != LIVE PASS',
+              'iam_mutation':False,
+              'secret_material_exposed':False,
+          }
           (root/'summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
           print(json.dumps(out,sort_keys=True))
           PY
@@ -268,7 +283,7 @@ jobs:
           live=os.environ.get('LIVE_MODE','').lower()=='true'
           allowed={'BLOCKED_DEVICE','READY_DEVICE_PRESENT','BLOCKED_AMBIGUOUS_DEVICES'}
           if live and status!='LIVE_PASS':
-              raise SystemExit('FCM LIVE proof did not receive a controlled-device ACK')
+              raise SystemExit('FCM LIVE proof did not prove both controlled-device ACK and visible notification')
           if not live and status not in allowed:
               raise SystemExit('FCM preflight did not produce a valid provider-truth state')
           print(json.dumps({'status':status,'truth_rule':'CODE PASS != LIVE PASS'},sort_keys=True))
