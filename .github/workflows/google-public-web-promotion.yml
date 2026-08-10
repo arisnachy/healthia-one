@@ -37,25 +37,14 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Build exact head and promote isolated web service
+      - name: Build exact head and prepare isolated web service
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/google-public-web
-          receipt="dist/google-public-web/promotion.md"
           source_sha="$(git rev-parse HEAD)"
           package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-one-web-demo"
           image="${package}:${source_sha}"
-          created_this_run=false
-
-          cleanup_on_failure() {
-            code=$?
-            if [[ $code -ne 0 && "$created_this_run" == "true" ]]; then
-              gcloud run services delete "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
-            fi
-            exit $code
-          }
-          trap cleanup_on_failure EXIT
 
           gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > base-service.json
           runtime_sa="$(python - <<'PY'
@@ -75,6 +64,8 @@ jobs:
             sleep 5
           done
           test -n "$digest"
+          printf '%s\n' "$build_id" > dist/google-public-web/build-id.txt
+          printf '%s\n' "$digest" > dist/google-public-web/image-digest.txt
 
           python - <<'PY'
           import json, os
@@ -111,20 +102,18 @@ jobs:
           set -euo pipefail
           receipt="dist/google-public-web/promotion.md"
           source_sha="$(git rev-parse HEAD)"
-          package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-one-web-demo"
-          image="${package}:${source_sha}"
-
-          existed=false
-          if gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1; then existed=true; fi
+          build_id="$(cat dist/google-public-web/build-id.txt)"
+          digest="$(cat dist/google-public-web/image-digest.txt)"
 
           # JSON is valid YAML input. It contains configuration references but no
           # Secret Manager payload values and is never uploaded as an artifact.
           gcloud run services replace web-service.json --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null
-          if [[ "$existed" == "false" ]]; then echo "created" > dist/google-public-web/created-this-run; fi
 
           public_status="PROMOTED"
+          public_error=""
           if ! gcloud run services update "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --no-invoker-iam-check --quiet >/dev/null 2>public-error.txt; then
             public_status="BLOCKED_IAM"
+            public_error="$(head -n 1 public-error.txt | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[principal]/g')"
           fi
 
           url="$(gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
@@ -141,8 +130,16 @@ jobs:
           google_caps="$(probe "$url/api/google-constellation/capabilities")"
           oauth_ready="$(probe "$url/api/google-constellation/oauth/readiness")"
 
+          state="FAILED"
           security_ok=false
           if [[ "$public_status" == "PROMOTED" && "$health" == "200" && "$login" == "200" && "$session" == "200" && "$bootstrap" == "401" && "$opportunities" == "401" && "$google_caps" == "401" && "$oauth_ready" == "401" ]]; then
+            state="PUBLIC_AND_APP_AUTH_VERIFIED"
+            security_ok=true
+          elif [[ "$public_status" == "BLOCKED_IAM" && "$login" == "403" && "$bootstrap" == "403" && "$opportunities" == "403" && "$google_caps" == "403" && "$oauth_ready" == "403" ]]; then
+            # This is safe: Cloud Run IAM is still blocking browsers before the
+            # application. Preserve the private service so a project owner can
+            # perform only the one missing service-level public-access action.
+            state="WAITING_OWNER_PUBLIC_ACCESS"
             security_ok=true
           fi
 
@@ -150,12 +147,16 @@ jobs:
             echo "# HealthIA ONE public web promotion"
             echo
             echo "Exact source head: $source_sha"
+            echo "Cloud Build: $build_id"
+            echo "Artifact digest: $digest"
             echo "Service: $WEB_SERVICE"
             echo "URL: $url"
             echo "Revision: $revision"
+            echo "Promotion state: $state"
             echo "Public transport status: $public_status"
-            echo "Application security gate: $security_ok"
+            echo "Application/transport safety gate: $security_ok"
             echo "OAuth callback candidate: ${url}/api/google-constellation/oauth/callback"
+            if [[ -n "$public_error" ]]; then echo "Public-access blocker: $public_error"; fi
             echo
             echo "## Anonymous probes"
             echo "- /healthz: $health"
@@ -171,11 +172,11 @@ jobs:
           } > "$receipt"
 
           if [[ "$security_ok" != "true" ]]; then
-            echo "Public web security gate failed; removing the isolated web service." >&2
+            echo "Web promotion reached an unexpected security state; removing the isolated web service." >&2
             gcloud run services delete "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
             exit 1
           fi
-          rm -f base-service.json web-service.json public-error.txt
+          rm -f base-service.json web-service.json public-error.txt dist/google-public-web/build-id.txt dist/google-public-web/image-digest.txt
           cat "$receipt"
       - name: Upload sanitized promotion receipt
         if: always()
