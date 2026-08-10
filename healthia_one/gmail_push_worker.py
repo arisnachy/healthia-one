@@ -29,8 +29,9 @@ from healthia_one.google_constellation_runtime import (
 from healthia_one.google_oauth_credentials import SecretManagerOAuthTokenProvider
 
 
-logger = logging.getLogger("healthia.gmail_worker")
-logger.setLevel(logging.INFO)
+# Uvicorn owns the configured stdout/stderr handlers in Cloud Run. Reuse its
+# error logger so PHI-neutral Scheduler aggregate evidence is actually emitted.
+logger = logging.getLogger("uvicorn.error")
 
 
 class EnsureWatchRequest(BaseModel):
