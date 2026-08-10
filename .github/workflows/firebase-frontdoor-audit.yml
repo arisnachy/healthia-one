@@ -1,0 +1,169 @@
+name: Firebase public front-door audit
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/firebase-frontdoor-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-health-constellation')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Authenticate to Google Cloud read-only
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Discover public Firebase front doors
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/firebase-frontdoor-audit
+          out="dist/firebase-frontdoor-audit/frontdoors.md"
+          token="$(gcloud auth print-access-token)"
+          export OAUTH_TOKEN="$token"
+          unset token
+
+          python - <<'PY' > "$out"
+          import json, os, subprocess, urllib.error, urllib.request
+
+          project=os.environ['PROJECT_ID']
+          token=os.environ['OAUTH_TOKEN']
+          headers={'Authorization': f'Bearer {token}', 'Accept':'application/json'}
+
+          def get_json(url):
+              req=urllib.request.Request(url, headers=headers, method='GET')
+              try:
+                  with urllib.request.urlopen(req, timeout=12) as r:
+                      return r.status, json.loads(r.read().decode('utf-8') or '{}')
+              except urllib.error.HTTPError as e:
+                  try:
+                      payload=json.loads(e.read().decode('utf-8') or '{}')
+                      status=(payload.get('error') or {}).get('status') or 'HTTP_ERROR'
+                      message=(payload.get('error') or {}).get('message') or ''
+                      message=message.split('\n',1)[0][:240]
+                  except Exception:
+                      status='HTTP_ERROR'; message=''
+                  return e.code, {'error_status':status,'error_message':message}
+              except Exception as e:
+                  return 0, {'error_status':type(e).__name__}
+
+          def probe(url):
+              try:
+                  p=subprocess.run(['curl','-sS','-o','/dev/null','-L','--max-time','8','-w','%{http_code}',url],text=True,capture_output=True,timeout=12)
+                  return p.stdout.strip() or '000'
+              except Exception:
+                  return '000'
+
+          print('# Firebase public front-door audit')
+          print()
+          print(f'Project: {project}')
+          print(f'Exact source head: {os.environ.get("GITHUB_SHA","")}')
+          print('Mode: read-only; access token never printed or persisted')
+          print()
+
+          candidates=[]
+          print('## Firebase App Hosting')
+          loc_code, loc_data=get_json(f'https://firebaseapphosting.googleapis.com/v1/projects/{project}/locations')
+          print(f'- locations.list HTTP: {loc_code}')
+          if loc_code != 200:
+              print(f'- status: {loc_data.get("error_status","unavailable")}')
+              if loc_data.get('error_message'): print(f'- detail: {loc_data["error_message"]}')
+          else:
+              locations=[]
+              for item in loc_data.get('locations',[]): 
+                  name=str(item.get('name') or '')
+                  if name: locations.append(name.rsplit('/',1)[-1])
+              print(f'- locations visible: {len(locations)}')
+              for location in locations:
+                  code,data=get_json(f'https://firebaseapphosting.googleapis.com/v1/projects/{project}/locations/{location}/backends')
+                  if code != 200: continue
+                  for backend in data.get('backends',[]):
+                      name=str(backend.get('name') or '')
+                      backend_id=name.rsplit('/',1)[-1] if name else ''
+                      uri=str(backend.get('uri') or '').strip()
+                      managed=str(backend.get('managedResources',{}).get('runService',{}).get('service') or '')
+                      print(f'- backend: {name or backend_id}; uri={uri or "<none>"}; managedRun={managed or "<none>"}')
+                      if uri: candidates.append(('App Hosting backend',uri))
+                      if backend_id:
+                          dcode,ddata=get_json(f'https://firebaseapphosting.googleapis.com/v1/projects/{project}/locations/{location}/backends/{backend_id}/domains')
+                          if dcode==200:
+                              for domain in ddata.get('domains',[]):
+                                  did=str(domain.get('name') or '').rsplit('/',1)[-1]
+                                  print(f'- domain: {did}')
+                                  if did and '.' in did: candidates.append(('App Hosting domain',f'https://{did}'))
+
+          print()
+          print('## Firebase Hosting')
+          hcode,hdata=get_json(f'https://firebasehosting.googleapis.com/v1beta1/projects/{project}/sites')
+          print(f'- projects.sites.list HTTP: {hcode}')
+          if hcode != 200:
+              print(f'- status: {hdata.get("error_status","unavailable")}')
+              if hdata.get('error_message'): print(f'- detail: {hdata["error_message"]}')
+          else:
+              sites=hdata.get('sites',[])
+              print(f'- sites visible: {len(sites)}')
+              for site in sites:
+                  name=str(site.get('name') or '')
+                  sid=name.rsplit('/',1)[-1] if name else ''
+                  print(f'- site: {sid or name}')
+                  if sid:
+                      candidates.append(('Firebase Hosting web.app',f'https://{sid}.web.app'))
+                      candidates.append(('Firebase Hosting firebaseapp.com',f'https://{sid}.firebaseapp.com'))
+                      ccode,cdata=get_json(f'https://firebasehosting.googleapis.com/v1beta1/projects/{project}/sites/{sid}/customDomains')
+                      if ccode==200:
+                          for domain in cdata.get('customDomains',[]):
+                              did=str(domain.get('name') or '').rsplit('/',1)[-1]
+                              if did:
+                                  print(f'- custom domain: {did}')
+                                  candidates.append(('Firebase Hosting custom domain',f'https://{did}'))
+
+          # The default Firebase Hosting names are worth probing even when the
+          # list API is permission-blocked; 404 simply means no deployed site.
+          candidates.extend([
+              ('Default Hosting guess',f'https://{project}.web.app'),
+              ('Default Hosting guess',f'https://{project}.firebaseapp.com'),
+          ])
+
+          print()
+          print('## Anonymous HTTP probes')
+          seen=set()
+          for kind,url in candidates:
+              url=url.rstrip('/')
+              if url in seen: continue
+              seen.add(url)
+              root=probe(url+'/')
+              login=probe(url+'/login')
+              print(f'- {kind}: {url} | /=HTTP {root} | /login=HTTP {login}')
+          PY
+
+          unset OAUTH_TOKEN
+          if grep -Eiq '(ya29\.|access_token|refresh_token|client_secret|BEGIN PRIVATE KEY)' "$out"; then
+            rm -f "$out"
+            echo "Sensitive-looking material appeared in front-door audit; refusing artifact upload."
+            exit 1
+          fi
+          cat "$out"
+      - name: Upload sanitized front-door inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Firebase-frontdoor-audit
+          path: dist/firebase-frontdoor-audit/frontdoors.md
+          if-no-files-found: error
+          retention-days: 7
