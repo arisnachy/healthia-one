@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'preflight is read-only; authorize grants Firebase Viewer only to the active CI service account'
+        description: 'preflight is read-only; authorize grants FCM API Viewer only to the active CI service account'
         required: true
         default: preflight
         type: choice
@@ -16,7 +16,7 @@ on:
           - preflight
           - authorize
       authorization:
-        description: 'For authorize only, type I_AUTHORIZE_FIREBASE_VIEWER_FOR_CI'
+        description: 'For authorize only, type I_AUTHORIZE_FCM_VIEWER_FOR_CI'
         required: false
         type: string
 
@@ -93,8 +93,8 @@ jobs:
               'project_id':os.environ['PROJECT_ID'],
               'firebase_management_list_http_status_before':int(os.environ.get('PRE_CODE') or 0),
               'active_service_account_sha256':hashlib.sha256(account.encode()).hexdigest(),
-              'required_role':'roles/firebase.viewer',
-              'required_permissions':['firebase.clients.get','firebase.clients.list'],
+              'required_role':'roles/firebasecloudmessaging.viewer',
+              'required_permissions':['firebase.clients.get','firebase.clients.list','firebase.projects.get'],
               'iam_mutation':False,
               'api_enable_mutation':False,
               'provider_write':False,
@@ -104,17 +104,17 @@ jobs:
           print(json.dumps(out,sort_keys=True))
           PY
 
-      - name: Enforce explicit Firebase Viewer authorization
+      - name: Enforce explicit FCM API Viewer authorization
         if: env.AUTHORIZE_MODE == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$AUTHORIZATION" != "I_AUTHORIZE_FIREBASE_VIEWER_FOR_CI" ]]; then
+          if [[ "$AUTHORIZATION" != "I_AUTHORIZE_FCM_VIEWER_FOR_CI" ]]; then
             echo 'IAM mutation blocked: exact authorization phrase is missing.' >&2
             exit 1
           fi
 
-      - name: Grant Firebase Viewer only to active CI service account
+      - name: Grant FCM API Viewer only to active CI service account
         if: env.AUTHORIZE_MODE == 'true' && steps.preflight.outputs.firebase_list_http_status != '200'
         id: grant
         shell: bash
@@ -129,7 +129,7 @@ jobs:
           echo "::add-mask::$account"
           gcloud projects add-iam-policy-binding "$PROJECT_ID" \
             --member="serviceAccount:${account}" \
-            --role='roles/firebase.viewer' \
+            --role='roles/firebasecloudmessaging.viewer' \
             --condition=None \
             --quiet >/tmp/firebase-iam-grant.txt
           rm -f /tmp/firebase-iam-grant.txt
@@ -159,7 +159,7 @@ jobs:
               'status':'LIVE_PASS' if post == 200 else 'BLOCKED_FIREBASE_READ_IAM',
               'source_sha':os.environ.get('SOURCE_SHA',''),
               'firebase_management_list_http_status_after':post,
-              'required_role':'roles/firebase.viewer',
+              'required_role':'roles/firebasecloudmessaging.viewer',
               'iam_mutation':mutated,
               'api_enable_mutation':False,
               'provider_write':False,
@@ -170,7 +170,7 @@ jobs:
           PY
 
           if [[ "$AUTHORIZE_MODE" == 'true' && "$post_code" != '200' ]]; then
-            echo 'Authorized Firebase Viewer IAM gate did not converge to HTTP 200.' >&2
+            echo 'Authorized FCM API Viewer IAM gate did not converge to HTTP 200.' >&2
             exit 1
           fi
 
