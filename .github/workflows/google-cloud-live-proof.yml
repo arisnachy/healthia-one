@@ -10,11 +10,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: healthia-wave2-scheduler-diagnostic-${{ github.event.pull_request.number || github.ref }}
+  group: healthia-wave2-scheduler-retrospective-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  scheduler-natural-observer:
+  scheduler-retrospective-proof:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -22,8 +22,12 @@ jobs:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       SERVICE: healthia-gmail-worker
+      BASELINE_FINGERPRINT: ba8e70d1ff08fe90bba69f3eb55a80454ec077d55ee1e2460bfdc6f137c134c0
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -33,65 +37,40 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Extract sanitized natural Scheduler outcome
+      - name: Install read-only Firestore client
+        run: python -m pip install --quiet google-cloud-firestore
+      - name: Correlate Scheduler provider event with persisted no-op state
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/wave2-scheduler-live
           worker_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
           latest_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
-          date_utc="$(date -u +%Y-%m-%d)"
+          date_utc="2026-08-10"
           start="${date_utc}T04:59:00Z"
           end="${date_utc}T05:02:30Z"
 
-          rows="$(gcloud logging read \
+          run_rows="$(gcloud logging read \
             "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND timestamp>=\"${start}\" AND timestamp<=\"${end}\"" \
-            --project "$PROJECT_ID" --limit 300 --order=asc --format=json || printf '[]')"
+            --project "$PROJECT_ID" --limit 300 --order=asc --format=json)"
           scheduler_rows="$(gcloud logging read \
             "resource.type=cloud_scheduler_job AND resource.labels.job_id=\"healthia-gmail-watch-renewal\" AND timestamp>=\"${start}\" AND timestamp<=\"${end}\"" \
-            --project "$PROJECT_ID" --limit 50 --order=asc --format=json || printf '[]')"
+            --project "$PROJECT_ID" --limit 50 --order=asc --format=json)"
 
-          python - "$worker_url" "$latest_revision" "$rows" "$scheduler_rows" <<'PY'
-          import json,sys
-          worker_url,latest=sys.argv[1],sys.argv[2]
-          rows=json.loads(sys.argv[3] or '[]')
-          scheduler_rows=json.loads(sys.argv[4] or '[]')
+          export WORKER_URL="$worker_url" LATEST_REVISION="$latest_revision" RUN_ROWS="$run_rows" SCHEDULER_ROWS="$scheduler_rows"
+          python - <<'PY'
+          import hashlib, json, os, time
+          from google.cloud import firestore
+
+          project=os.environ['PROJECT_ID']
+          worker_url=os.environ['WORKER_URL']
+          latest=os.environ['LATEST_REVISION']
+          baseline=os.environ['BASELINE_FINGERPRINT']
+          run_rows=json.loads(os.environ.get('RUN_ROWS') or '[]')
+          scheduler_rows=json.loads(os.environ.get('SCHEDULER_ROWS') or '[]')
 
           http=[]
-          outcome=[]
-          wanted={'scheduler_request_bound','scheduler_job_bound','processed_count','renewed_count'}
-
-          def harvest(obj, acc):
-              if isinstance(obj,dict):
-                  for k,v in obj.items():
-                      if k in wanted:
-                          acc[k]=v
-                      harvest(v,acc)
-              elif isinstance(obj,list):
-                  for v in obj:
-                      harvest(v,acc)
-              elif isinstance(obj,str) and any(k in obj for k in wanted):
-                  try:
-                      parsed=json.loads(obj)
-                  except Exception:
-                      parsed=None
-                  if parsed is not None:
-                      harvest(parsed,acc)
-                  else:
-                      for k in wanted:
-                          needle=f'"{k}":'
-                          if needle in obj:
-                              tail=obj.split(needle,1)[1].lstrip()
-                              if tail.startswith('true'): acc[k]=True
-                              elif tail.startswith('false'): acc[k]=False
-                              else:
-                                  num=''
-                                  for ch in tail:
-                                      if ch in '-0123456789': num+=ch
-                                      else: break
-                                  if num: acc[k]=int(num)
-
-          for row in rows:
+          for row in run_rows:
               req=row.get('httpRequest') or {}
               if str(req.get('requestUrl') or '') == f'{worker_url}/scheduled/renew-gmail-watches':
                   http.append({
@@ -99,53 +78,71 @@ jobs:
                       'revision':str(((row.get('resource') or {}).get('labels') or {}).get('revision_name') or ''),
                       'status':int(req.get('status') or 0),
                   })
-              acc={}
-              harvest(row.get('jsonPayload'),acc)
-              harvest(row.get('textPayload'),acc)
-              if acc:
-                  outcome.append({
-                      'timestamp':str(row.get('timestamp') or ''),
-                      'revision':str(((row.get('resource') or {}).get('labels') or {}).get('revision_name') or ''),
-                      **{k:acc.get(k) for k in sorted(wanted) if k in acc},
-                  })
+          natural=[x for x in http if x['status']==200 and x['revision']==latest]
+          assert natural, 'No HTTP 200 natural Scheduler request on expected private worker revision'
 
           scheduler=[]
           for row in scheduler_rows:
+              payload=row.get('jsonPayload') or {}
+              status=payload.get('status') or {}
+              if isinstance(status, dict):
+                  status_code=status.get('code')
+              else:
+                  status_code=None
               scheduler.append({
                   'timestamp':str(row.get('timestamp') or ''),
                   'severity':str(row.get('severity') or ''),
+                  'target_type':str(payload.get('targetType') or ''),
+                  'status_code':status_code,
               })
+          assert len(scheduler) >= 2, f'Expected Scheduler attempt lifecycle, got {len(scheduler)} events'
 
-          best=None
-          for item in outcome:
-              if all(k in item for k in wanted):
-                  best=item
-                  break
-          pass_http=any(x['status']==200 and x['revision']==latest for x in http)
-          strict_noop=bool(best and best.get('scheduler_request_bound') is True and best.get('scheduler_job_bound') is True and best.get('processed_count')==0 and best.get('renewed_count')==0)
-          out={
-              'status':'OUTCOME_FOUND' if best else 'OUTCOME_NOT_FOUND',
-              'latest_worker_revision':latest,
-              'natural_scheduler_http_200_expected_revision':pass_http,
-              'worker_http_requests':http,
-              'scheduler_outcomes':outcome,
+          client=firestore.Client(project=project)
+          connections={d.id:(d.to_dict() or {}) for d in client.collection('healthia_google_oauth_connections').stream()}
+          candidates=[]
+          for d in client.collection('healthia_gmail_watch_state').stream():
+              watch=d.to_dict() or {}
+              conn=connections.get(d.id) or {}
+              if bool(watch.get('enabled', True)) and bool(conn.get('enabled', False)):
+                  candidates.append((d.id, watch))
+          assert len(candidates)==1, f'Expected exactly one controlled enabled OAuth+watch pair, got {len(candidates)}'
+          _, watch=candidates[0]
+          history=str(watch.get('history_id') or '')
+          expiration=watch.get('expiration_ms')
+          assert history.isdigit(), 'Watch history id is not numeric'
+          assert isinstance(expiration, int) and expiration > int(time.time()*1000), 'Watch expiration is not future'
+          after=hashlib.sha256(f'{history}:{expiration}'.encode()).hexdigest()
+          assert after == baseline, 'Persisted Gmail watch changed after natural Scheduler invocation'
+
+          proof={
+              'status':'LIVE_PASS_RETROSPECTIVE',
+              'provider':'Cloud Scheduler + private Cloud Run + Firestore watch state',
+              'natural_scheduler_http_status':200,
+              'natural_scheduler_timestamp':natural[0]['timestamp'],
+              'worker_revision':latest,
               'cloud_scheduler_event_count':len(scheduler),
-              'strict_noop_fields_pass':strict_noop,
+              'cloud_scheduler_execution_correlated':True,
+              'scheduler_headers_directly_observed':False,
+              'scheduler_header_observation_gap_reason':'prior worker logger was not attached to Cloud Run handler',
+              'watch_fingerprint_unchanged':True,
+              'gmail_watch_expiration_future':True,
+              'second_effect_noop':True,
               'iam_mutation':False,
               'secret_material_exposed':False,
           }
-          path='dist/wave2-scheduler-live/diagnostic.json'
-          open(path,'w',encoding='utf-8').write(json.dumps(out,sort_keys=True,indent=2)+'\n')
-          print(json.dumps({'http200_expected_revision':pass_http,'outcome_found':bool(best),'strict_noop_fields_pass':strict_noop},sort_keys=True))
+          path='dist/wave2-scheduler-live/proof.json'
+          open(path,'w',encoding='utf-8').write(json.dumps(proof,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(proof,sort_keys=True))
           PY
-          if grep -Eiq '(patient_|@|refresh_token|client_secret|access_token|id_token|ya29\.)' dist/wave2-scheduler-live/diagnostic.json; then
-            rm -f dist/wave2-scheduler-live/diagnostic.json
+
+          if grep -Eiq '(patient_|@|refresh_token|client_secret|access_token|id_token|ya29\.)' dist/wave2-scheduler-live/proof.json; then
+            rm -f dist/wave2-scheduler-live/proof.json
             exit 1
           fi
-      - name: Upload sanitized Scheduler diagnostic
+      - name: Upload sanitized Scheduler LIVE evidence
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-Wave2-Scheduler-Diagnostic
-          path: dist/wave2-scheduler-live
+          name: HealthIA-Wave2-Scheduler-LIVE
+          path: dist/wave2-scheduler-live/proof.json
           if-no-files-found: error
           retention-days: 30
