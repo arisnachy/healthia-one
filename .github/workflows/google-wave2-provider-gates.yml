@@ -1,0 +1,300 @@
+name: Google Constellation Wave 2 provider gates
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/google-wave2-provider-gates.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preflight is read-only; live can enable/use STT, Document AI and Healthcare"
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - live
+      cost_authorization:
+        description: "For live only, type I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave2-provider-gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  provider-gates:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: healthia-6088a
+      HEALTHCARE_LOCATION: us-central1
+      DOCUMENTAI_LOCATION: us
+      LIVE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'live' }}
+      COST_AUTHORIZATION: ${{ github.event_name == 'workflow_dispatch' && inputs.cost_authorization || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Bind exact source head
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Read-only provider preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-provider-gates
+          gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' | sort > /tmp/enabled-services.txt
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          enabled = set(Path('/tmp/enabled-services.txt').read_text(encoding='utf-8').splitlines())
+          required = ['speech.googleapis.com','documentai.googleapis.com','healthcare.googleapis.com']
+          out = {
+              'status': 'READ_ONLY_PREFLIGHT',
+              'source_sha': os.environ.get('SOURCE_SHA',''),
+              'required_apis': {name: name in enabled for name in required},
+              'api_enable_mutation': False,
+              'iam_mutation': False,
+              'provider_write': False,
+              'secret_material_exposed': False,
+          }
+          Path('dist/wave2-provider-gates/preflight.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+      - name: Enforce explicit live cost authorization
+        if: env.LIVE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$COST_AUTHORIZATION" != "I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE" ]]; then
+            echo "LIVE execution blocked: exact cost authorization phrase is missing." >&2
+            exit 1
+          fi
+
+      - name: Enable only explicitly authorized APIs
+        if: env.LIVE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/enabled-services.txt /tmp/enabled-before.txt
+          gcloud services enable speech.googleapis.com documentai.googleapis.com healthcare.googleapis.com --project "$PROJECT_ID" --quiet
+          gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' | sort > /tmp/enabled-after.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          before=set(Path('/tmp/enabled-before.txt').read_text().splitlines())
+          after=set(Path('/tmp/enabled-after.txt').read_text().splitlines())
+          required={'speech.googleapis.com','documentai.googleapis.com','healthcare.googleapis.com'}
+          if not required.issubset(after):
+              raise SystemExit('Authorized API enablement did not converge')
+          out={'status':'AUTHORIZED_API_ENABLEMENT_COMPLETE','enabled_by_run':sorted(required-before),'already_enabled':sorted(required&before),'api_enable_mutation':bool(required-before),'iam_mutation':False,'secret_material_exposed':False}
+          Path('dist/wave2-provider-gates/api-enablement.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+      - name: Speech-to-Text LIVE synthetic proof
+        if: env.LIVE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq espeak-ng >/dev/null
+          espeak-ng -v en-us -s 135 -w /tmp/healthia-wave2.wav "synthetic speech test one two three"
+          ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          test -n "$ACCESS_TOKEN"
+          echo "::add-mask::$ACCESS_TOKEN"
+          export ACCESS_TOKEN
+          python - <<'PY'
+          import base64, hashlib, json, os, re, urllib.request, wave
+          from pathlib import Path
+          wav_path=Path('/tmp/healthia-wave2.wav')
+          with wave.open(str(wav_path),'rb') as wav:
+              rate=wav.getframerate(); channels=wav.getnchannels(); width=wav.getsampwidth()
+          if channels != 1 or width != 2:
+              raise SystemExit('Synthetic WAV is not mono LINEAR16')
+          payload={'config':{'encoding':'LINEAR16','sampleRateHertz':rate,'languageCode':'en-US'},'audio':{'content':base64.b64encode(wav_path.read_bytes()).decode('ascii')}}
+          req=urllib.request.Request('https://speech.googleapis.com/v1/speech:recognize',data=json.dumps(payload,separators=(',',':')).encode(),headers={'Authorization':'Bearer '+os.environ['ACCESS_TOKEN'],'Content-Type':'application/json'},method='POST')
+          with urllib.request.urlopen(req,timeout=90) as response:
+              body=json.loads(response.read().decode() or '{}')
+          transcripts=[]
+          for result in body.get('results') or []:
+              alts=result.get('alternatives') or []
+              if alts: transcripts.append(str(alts[0].get('transcript') or ''))
+          transcript=' '.join(transcripts).strip()
+          normalized=set(re.findall(r'[a-z0-9]+',transcript.lower()))
+          hits=len({'one','two','three'} & normalized)
+          if not transcript or hits < 2:
+              raise SystemExit('Speech recognition did not match the synthetic control phrase')
+          out={'status':'LIVE_PASS','provider':'speech.googleapis.com','recognized_text_sha256':hashlib.sha256(transcript.encode()).hexdigest(),'expected_control_word_hits':hits,'synthetic_audio':True,'clinical_content':False,'iam_mutation':False,'secret_material_exposed':False}
+          Path('dist/wave2-provider-gates/stt.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          wav_path.unlink(missing_ok=True)
+          PY
+
+      - name: Document AI LIVE synthetic proof
+        if: env.LIVE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          test -n "$ACCESS_TOKEN"
+          echo "::add-mask::$ACCESS_TOKEN"
+          export ACCESS_TOKEN
+          python - <<'PY'
+          import base64, hashlib, json, os, re, urllib.error, urllib.request
+          from pathlib import Path
+          project=os.environ['PROJECT_ID']; location=os.environ['DOCUMENTAI_LOCATION']; token=os.environ['ACCESS_TOKEN']
+          base=f'https://{location}-documentai.googleapis.com/v1/projects/{project}/locations/{location}'
+          def request_json(method,url,body=None):
+              data=None if body is None else json.dumps(body,separators=(',',':')).encode()
+              req=urllib.request.Request(url,data=data,headers={'Authorization':'Bearer '+token,'Accept':'application/json',**({'Content-Type':'application/json'} if data is not None else {})},method=method)
+              try:
+                  with urllib.request.urlopen(req,timeout=120) as response:
+                      raw=response.read().decode(); return response.status,json.loads(raw or '{}')
+              except urllib.error.HTTPError as exc:
+                  raise RuntimeError(f'Document AI REST call failed with HTTP {exc.code}') from exc
+          def synthetic_pdf(text):
+              safe=text.replace('\\','\\\\').replace('(','\\(').replace(')','\\)')
+              stream=f'BT /F1 22 Tf 72 700 Td ({safe}) Tj ET'.encode('ascii')
+              objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'\nendstream']
+              out=bytearray(b'%PDF-1.4\n'); offsets=[0]
+              for idx,obj in enumerate(objects,1): offsets.append(len(out)); out.extend(f'{idx} 0 obj\n'.encode()); out.extend(obj+b'\nendobj\n')
+              xref=len(out); out.extend(f'xref\n0 {len(objects)+1}\n'.encode()); out.extend(b'0000000000 65535 f \n')
+              for offset in offsets[1:]: out.extend(f'{offset:010d} 00000 n \n'.encode())
+              out.extend(f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()); return bytes(out)
+          marker='HEALTHIA SYNTHETIC DOCUMENT 12345'; processor_name=''; cleanup_requested=False
+          try:
+              _,processor=request_json('POST',base+'/processors',{'type':'OCR_PROCESSOR','displayName':'healthia-wave2-synthetic-'+os.environ.get('GITHUB_RUN_ID','run')})
+              processor_name=str(processor.get('name') or '')
+              if '/processors/' not in processor_name: raise RuntimeError('Document AI did not return a processor resource')
+              pdf=synthetic_pdf(marker)
+              _,processed=request_json('POST','https://'+location+'-documentai.googleapis.com/v1/'+processor_name+':process',{'rawDocument':{'content':base64.b64encode(pdf).decode('ascii'),'mimeType':'application/pdf'}})
+              text=str((processed.get('document') or {}).get('text') or '')
+              normalized=set(re.findall(r'[A-Z0-9]+',text.upper())); hits=len({'HEALTHIA','SYNTHETIC','DOCUMENT','12345'} & normalized)
+              if hits < 3: raise RuntimeError('Document AI OCR did not match the synthetic control document')
+              out={'status':'LIVE_PASS','provider':'documentai.googleapis.com','processor_resource':processor_name,'recognized_text_sha256':hashlib.sha256(text.encode()).hexdigest(),'expected_control_token_hits':hits,'synthetic_document':True,'private_inline_payload':True,'clinical_content':False,'iam_mutation':False,'secret_material_exposed':False}
+              Path('dist/wave2-provider-gates/documentai.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
+          finally:
+              if processor_name:
+                  try: request_json('DELETE','https://'+location+'-documentai.googleapis.com/v1/'+processor_name); cleanup_requested=True
+                  except Exception: cleanup_requested=False
+              Path('dist/wave2-provider-gates/documentai-cleanup.json').write_text(json.dumps({'processor_cleanup_requested':cleanup_requested,'iam_mutation':False,'secret_material_exposed':False},sort_keys=True,indent=2)+'\n')
+          PY
+
+      - name: Cloud Healthcare FHIR and DICOM LIVE synthetic proof
+        if: env.LIVE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          test -n "$ACCESS_TOKEN"
+          echo "::add-mask::$ACCESS_TOKEN"
+          export ACCESS_TOKEN
+          python - <<'PY'
+          import hashlib, json, os, struct, uuid, urllib.error, urllib.parse, urllib.request
+          from pathlib import Path
+          project=os.environ['PROJECT_ID']; location=os.environ['HEALTHCARE_LOCATION']; token=os.environ['ACCESS_TOKEN']
+          run_id=''.join(ch for ch in os.environ.get('GITHUB_RUN_ID','run') if ch.isalnum())[-24:]
+          dataset_id=('wave2'+run_id).lower(); fhir_id=('fhir'+run_id).lower(); dicom_id=('dicom'+run_id).lower(); patient_id=('synthetic'+run_id).lower()
+          root=f'https://healthcare.googleapis.com/v1/projects/{project}/locations/{location}'
+          dataset_name=f'projects/{project}/locations/{location}/datasets/{dataset_id}'; fhir_name=dataset_name+f'/fhirStores/{fhir_id}'; dicom_name=dataset_name+f'/dicomStores/{dicom_id}'
+          def call(method,url,body=None,content_type='application/json',accept='application/json'):
+              data=json.dumps(body,separators=(',',':')).encode() if isinstance(body,(dict,list)) else (bytes(body) if isinstance(body,(bytes,bytearray)) else None)
+              headers={'Authorization':'Bearer '+token,'Accept':accept};
+              if data is not None: headers['Content-Type']=content_type
+              req=urllib.request.Request(url,data=data,headers=headers,method=method)
+              try:
+                  with urllib.request.urlopen(req,timeout=120) as response: return response.status,response.read(),response.headers.get('Content-Type','')
+              except urllib.error.HTTPError as exc: raise RuntimeError(f'Healthcare REST call failed with HTTP {exc.code}') from exc
+          def json_call(method,url,body=None,content_type='application/json',accept='application/json'):
+              status,raw,_=call(method,url,body,content_type,accept); return status,json.loads(raw.decode() or '{}')
+          def uid(label): return '2.25.'+str(uuid.uuid5(uuid.NAMESPACE_URL,f'healthia-wave2:{run_id}:{label}').int)
+          def pad_text(vr,value):
+              raw=value.encode('ascii'); pad=b'\0' if vr=='UI' else b' '; return raw if len(raw)%2==0 else raw+pad
+          long_vr={'OB','OD','OF','OL','OW','SQ','UC','UR','UT','UN'}
+          def element(group,elem,vr,value):
+              raw=struct.pack('<H',int(value)) if vr=='US' else (struct.pack('<I',int(value)) if vr=='UL' else (value if isinstance(value,bytes) and len(value)%2==0 else (value+b'\0' if isinstance(value,bytes) else pad_text(vr,str(value)))))
+              head=struct.pack('<HH',group,elem)+vr.encode('ascii'); return head+(b'\0\0'+struct.pack('<I',len(raw))+raw if vr in long_vr else struct.pack('<H',len(raw))+raw)
+          sop_class='1.2.840.10008.5.1.4.1.1.7'; study_uid=uid('study'); series_uid=uid('series'); sop_uid=uid('instance'); impl_uid=uid('implementation')
+          meta_parts=[element(0x0002,0x0001,'OB',b'\0\1'),element(0x0002,0x0002,'UI',sop_class),element(0x0002,0x0003,'UI',sop_uid),element(0x0002,0x0010,'UI','1.2.840.10008.1.2.1'),element(0x0002,0x0012,'UI',impl_uid)]
+          meta_payload=b''.join(meta_parts); file_meta=element(0x0002,0x0000,'UL',len(meta_payload))+meta_payload
+          dataset=b''.join([element(0x0008,0x0016,'UI',sop_class),element(0x0008,0x0018,'UI',sop_uid),element(0x0008,0x0020,'DA','20260810'),element(0x0008,0x0060,'CS','OT'),element(0x0010,0x0010,'PN','SYNTHETIC^HEALTHIA'),element(0x0010,0x0020,'LO','SYNTHETIC'),element(0x0020,0x000D,'UI',study_uid),element(0x0020,0x000E,'UI',series_uid),element(0x0020,0x0011,'IS','1'),element(0x0020,0x0013,'IS','1'),element(0x0028,0x0002,'US',1),element(0x0028,0x0004,'CS','MONOCHROME2'),element(0x0028,0x0010,'US',1),element(0x0028,0x0011,'US',1),element(0x0028,0x0100,'US',8),element(0x0028,0x0101,'US',8),element(0x0028,0x0102,'US',7),element(0x0028,0x0103,'US',0),element(0x7FE0,0x0010,'OB',b'\0\0')])
+          dicom=b'\0'*128+b'DICM'+file_meta+dataset
+          created={'dataset':False,'fhir':False,'dicom':False}; cleanup={'dicom':False,'fhir':False,'dataset':False}
+          try:
+              json_call('POST',root+'/datasets?datasetId='+urllib.parse.quote(dataset_id),{}); created['dataset']=True
+              json_call('POST','https://healthcare.googleapis.com/v1/'+dataset_name+'/fhirStores?fhirStoreId='+urllib.parse.quote(fhir_id),{'version':'R4','enableUpdateCreate':True}); created['fhir']=True
+              json_call('POST','https://healthcare.googleapis.com/v1/'+dataset_name+'/dicomStores?dicomStoreId='+urllib.parse.quote(dicom_id),{}); created['dicom']=True
+              fhir_url='https://healthcare.googleapis.com/v1/'+fhir_name+'/fhir/Patient/'+patient_id
+              json_call('PUT',fhir_url,{'resourceType':'Patient','id':patient_id,'active':True,'meta':{'tag':[{'system':'https://healthia.invalid/proof','code':'synthetic-wave2'}]}},content_type='application/fhir+json',accept='application/fhir+json')
+              _,reread=json_call('GET',fhir_url,accept='application/fhir+json')
+              if reread.get('resourceType')!='Patient' or reread.get('id')!=patient_id: raise RuntimeError('FHIR create+reread did not round-trip the synthetic control resource')
+              boundary='healthia-wave2-boundary'; multipart=(('--'+boundary+'\r\nContent-Type: application/dicom\r\n\r\n').encode()+dicom+('\r\n--'+boundary+'--\r\n').encode())
+              stow_url='https://healthcare.googleapis.com/v1/'+dicom_name+'/dicomWeb/studies'; status,_,_=call('POST',stow_url,multipart,content_type=f'multipart/related; type="application/dicom"; boundary={boundary}',accept='application/dicom+json')
+              if status not in {200,202}: raise RuntimeError('DICOM STOW did not return a success status')
+              metadata_url='https://healthcare.googleapis.com/v1/'+dicom_name+'/dicomWeb/studies/'+urllib.parse.quote(study_uid,safe='.')+'/series/'+urllib.parse.quote(series_uid,safe='.')+'/instances/'+urllib.parse.quote(sop_uid,safe='.')+'/metadata'
+              _,metadata,_=call('GET',metadata_url,accept='application/dicom+json'); parsed=json.loads(metadata.decode() or '[]')
+              if not isinstance(parsed,list) or not parsed: raise RuntimeError('DICOM metadata reread was empty')
+              out={'status':'LIVE_PASS','provider':'healthcare.googleapis.com','dataset_resource':dataset_name,'fhir_store_resource':fhir_name,'dicom_store_resource':dicom_name,'fhir_create_reread':True,'dicom_stow_metadata_reread':True,'dicom_instance_sha256':hashlib.sha256(dicom).hexdigest(),'synthetic_resources_only':True,'clinical_content':False,'iam_mutation':False,'secret_material_exposed':False}
+              Path('dist/wave2-provider-gates/healthcare.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
+          finally:
+              for key,name in [('dicom',dicom_name),('fhir',fhir_name),('dataset',dataset_name)]:
+                  if created[key]:
+                      try: call('DELETE','https://healthcare.googleapis.com/v1/'+name); cleanup[key]=True
+                      except Exception: cleanup[key]=False
+              Path('dist/wave2-provider-gates/healthcare-cleanup.json').write_text(json.dumps({'cleanup_requested':cleanup,'iam_mutation':False,'secret_material_exposed':False},sort_keys=True,indent=2)+'\n')
+          PY
+
+      - name: Build sanitized Wave 2 provider summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-provider-gates
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path('dist/wave2-provider-gates'); live=os.environ.get('LIVE_MODE','').lower()=='true'; stages={}
+          for name in ('stt','documentai','healthcare'):
+              path=root/f'{name}.json'
+              if path.exists(): stages[name]=json.loads(path.read_text())
+          preflight=json.loads((root/'preflight.json').read_text()) if (root/'preflight.json').exists() else {}
+          summary={'status':'LIVE_PASS' if live and len(stages)==3 and all(v.get('status')=='LIVE_PASS' for v in stages.values()) else ('READ_ONLY_PREFLIGHT' if not live else 'INCOMPLETE'),'source_sha':os.environ.get('SOURCE_SHA',''),'live_mode':live,'preflight':preflight,'stages':{k:{'status':v.get('status'),'provider':v.get('provider')} for k,v in stages.items()},'truth_rule':'CODE PASS != LIVE PASS','iam_mutation':False,'secret_material_exposed':False}
+          (root/'summary.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n'); print(json.dumps(summary,sort_keys=True))
+          PY
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/wave2-provider-gates; then
+            echo "Sensitive-looking material appeared in Wave 2 evidence; refusing artifact upload." >&2
+            rm -rf dist/wave2-provider-gates
+            exit 1
+          fi
+
+      - name: Upload sanitized Wave 2 provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave2-Provider-Gates
+          path: dist/wave2-provider-gates
+          if-no-files-found: warn
+          retention-days: 30
