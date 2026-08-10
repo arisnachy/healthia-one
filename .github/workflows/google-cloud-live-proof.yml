@@ -33,7 +33,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Diagnose natural Scheduler execution without IAM mutation
+      - name: Extract sanitized natural Scheduler outcome
         shell: bash
         run: |
           set -euo pipefail
@@ -41,83 +41,108 @@ jobs:
           worker_url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
           latest_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           date_utc="$(date -u +%Y-%m-%d)"
-          since="${date_utc}T04:45:00Z"
+          start="${date_utc}T04:59:00Z"
+          end="${date_utc}T05:02:30Z"
 
-          run_rows="$(gcloud logging read \
-            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND httpRequest.requestUrl=\"${worker_url}/scheduled/renew-gmail-watches\" AND timestamp>=\"${since}\"" \
-            --project "$PROJECT_ID" --limit 50 --order=asc --format=json || printf '[]')"
-          app_rows="$(gcloud logging read \
-            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND textPayload:\"healthia_gmail_watch_scheduler\" AND timestamp>=\"${since}\"" \
-            --project "$PROJECT_ID" --limit 50 --order=asc --format=json || printf '[]')"
+          rows="$(gcloud logging read \
+            "resource.type=cloud_run_revision AND resource.labels.service_name=${SERVICE} AND timestamp>=\"${start}\" AND timestamp<=\"${end}\"" \
+            --project "$PROJECT_ID" --limit 300 --order=asc --format=json || printf '[]')"
           scheduler_rows="$(gcloud logging read \
-            "resource.type=cloud_scheduler_job AND timestamp>=\"${since}\"" \
-            --project "$PROJECT_ID" --limit 100 --order=asc --format=json || printf '[]')"
+            "resource.type=cloud_scheduler_job AND resource.labels.job_id=\"healthia-gmail-watch-renewal\" AND timestamp>=\"${start}\" AND timestamp<=\"${end}\"" \
+            --project "$PROJECT_ID" --limit 50 --order=asc --format=json || printf '[]')"
 
-          python - "$latest_revision" "$run_rows" "$app_rows" "$scheduler_rows" <<'PY'
+          python - "$worker_url" "$latest_revision" "$rows" "$scheduler_rows" <<'PY'
           import json,sys
-          latest=sys.argv[1]
-          run_rows=json.loads(sys.argv[2] or '[]')
-          app_rows=json.loads(sys.argv[3] or '[]')
+          worker_url,latest=sys.argv[1],sys.argv[2]
+          rows=json.loads(sys.argv[3] or '[]')
           scheduler_rows=json.loads(sys.argv[4] or '[]')
 
           http=[]
-          for row in run_rows:
-              req=row.get('httpRequest') or {}
-              http.append({
-                  'timestamp':str(row.get('timestamp') or ''),
-                  'revision':str(((row.get('resource') or {}).get('labels') or {}).get('revision_name') or ''),
-                  'status':int(req.get('status') or 0),
-              })
+          outcome=[]
+          wanted={'scheduler_request_bound','scheduler_job_bound','processed_count','renewed_count'}
 
-          app=[]
-          for row in app_rows:
-              text=str(row.get('textPayload') or '')
-              safe={
-                  'timestamp':str(row.get('timestamp') or ''),
-                  'revision':str(((row.get('resource') or {}).get('labels') or {}).get('revision_name') or ''),
-                  'scheduler_request_bound':'"scheduler_request_bound":true' in text,
-                  'scheduler_job_bound':'"scheduler_job_bound":true' in text,
-                  'processed_zero':'"processed_count":0' in text,
-                  'renewed_zero':'"renewed_count":0' in text,
-              }
-              app.append(safe)
+          def harvest(obj, acc):
+              if isinstance(obj,dict):
+                  for k,v in obj.items():
+                      if k in wanted:
+                          acc[k]=v
+                      harvest(v,acc)
+              elif isinstance(obj,list):
+                  for v in obj:
+                      harvest(v,acc)
+              elif isinstance(obj,str) and any(k in obj for k in wanted):
+                  try:
+                      parsed=json.loads(obj)
+                  except Exception:
+                      parsed=None
+                  if parsed is not None:
+                      harvest(parsed,acc)
+                  else:
+                      for k in wanted:
+                          needle=f'"{k}":'
+                          if needle in obj:
+                              tail=obj.split(needle,1)[1].lstrip()
+                              if tail.startswith('true'): acc[k]=True
+                              elif tail.startswith('false'): acc[k]=False
+                              else:
+                                  num=''
+                                  for ch in tail:
+                                      if ch in '-0123456789': num+=ch
+                                      else: break
+                                  if num: acc[k]=int(num)
+
+          for row in rows:
+              req=row.get('httpRequest') or {}
+              if str(req.get('requestUrl') or '') == f'{worker_url}/scheduled/renew-gmail-watches':
+                  http.append({
+                      'timestamp':str(row.get('timestamp') or ''),
+                      'revision':str(((row.get('resource') or {}).get('labels') or {}).get('revision_name') or ''),
+                      'status':int(req.get('status') or 0),
+                  })
+              acc={}
+              harvest(row.get('jsonPayload'),acc)
+              harvest(row.get('textPayload'),acc)
+              if acc:
+                  outcome.append({
+                      'timestamp':str(row.get('timestamp') or ''),
+                      'revision':str(((row.get('resource') or {}).get('labels') or {}).get('revision_name') or ''),
+                      **{k:acc.get(k) for k in sorted(wanted) if k in acc},
+                  })
 
           scheduler=[]
           for row in scheduler_rows:
-              labels=((row.get('resource') or {}).get('labels') or {})
-              payload=row.get('jsonPayload') or {}
-              status=payload.get('status') or {}
               scheduler.append({
                   'timestamp':str(row.get('timestamp') or ''),
-                  'job_id':str(labels.get('job_id') or ''),
                   'severity':str(row.get('severity') or ''),
-                  'status_code':status.get('code') if isinstance(status,dict) else None,
               })
 
+          best=None
+          for item in outcome:
+              if all(k in item for k in wanted):
+                  best=item
+                  break
+          pass_http=any(x['status']==200 and x['revision']==latest for x in http)
+          strict_noop=bool(best and best.get('scheduler_request_bound') is True and best.get('scheduler_job_bound') is True and best.get('processed_count')==0 and best.get('renewed_count')==0)
           out={
-              'status':'DIAGNOSTIC',
+              'status':'OUTCOME_FOUND' if best else 'OUTCOME_NOT_FOUND',
               'latest_worker_revision':latest,
+              'natural_scheduler_http_200_expected_revision':pass_http,
               'worker_http_requests':http,
-              'scheduler_app_events':app,
-              'cloud_scheduler_events':scheduler,
+              'scheduler_outcomes':outcome,
+              'cloud_scheduler_event_count':len(scheduler),
+              'strict_noop_fields_pass':strict_noop,
               'iam_mutation':False,
               'secret_material_exposed':False,
           }
           path='dist/wave2-scheduler-live/diagnostic.json'
           open(path,'w',encoding='utf-8').write(json.dumps(out,sort_keys=True,indent=2)+'\n')
-          print(json.dumps({
-              'worker_http_count':len(http),
-              'scheduler_app_count':len(app),
-              'cloud_scheduler_event_count':len(scheduler),
-              'latest_worker_revision':latest,
-          },sort_keys=True))
+          print(json.dumps({'http200_expected_revision':pass_http,'outcome_found':bool(best),'strict_noop_fields_pass':strict_noop},sort_keys=True))
           PY
           if grep -Eiq '(patient_|@|refresh_token|client_secret|access_token|id_token|ya29\.)' dist/wave2-scheduler-live/diagnostic.json; then
             rm -f dist/wave2-scheduler-live/diagnostic.json
             exit 1
           fi
       - name: Upload sanitized Scheduler diagnostic
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: HealthIA-Wave2-Scheduler-Diagnostic
