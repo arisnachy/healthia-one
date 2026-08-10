@@ -4,6 +4,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from healthia_one.auth import patient_scope
 from healthia_one.fcm_registration import (
+    FCMDeliveryAckRequest,
     FCMDeviceRegistrationRequest,
     FCMRegistrationStore,
     build_fcm_registration_store,
@@ -26,10 +27,11 @@ def build_fcm_device_router(
     pairing_manager: DevicePairingManager | None = None,
     store: FCMRegistrationStore | None = None,
 ) -> APIRouter:
-    """Register FCM client instances only through a valid paired-device bearer.
+    """Register FCM clients and record PHI-neutral delivery acknowledgements.
 
-    The raw FCM registration token is accepted once and stored server-side. It is
-    never returned in API responses, logs, action receipts or proof artifacts.
+    Raw FCM registration tokens are accepted and stored server-side only. Delivery
+    evidence contains a short synthetic proof id and timestamp, never notification
+    content, patient identifiers or the raw registration token.
     """
 
     verifier = pairing_manager or DevicePairingManager()
@@ -74,6 +76,30 @@ def build_fcm_device_router(
             "updated_at": registration.updated_at.isoformat(),
         }
 
+    @router.post("/ack")
+    async def acknowledge_fcm_delivery(
+        payload: FCMDeliveryAckRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        principal = await active_principal(authorization, payload.device_id)
+        registration = registrations.acknowledge(
+            principal.patient_id,
+            principal.connection_id,
+            payload.proof_id,
+        )
+        if registration is None:
+            raise HTTPException(status_code=409, detail="El registro FCM no está activo.")
+        return {
+            "acknowledged": True,
+            "proof_id": payload.proof_id,
+            "connection_id": principal.connection_id,
+            "device_id": principal.device_id,
+            "token_returned": False,
+            "acknowledged_at": registration.last_delivery_ack_at.isoformat()
+            if registration.last_delivery_ack_at
+            else None,
+        }
+
     @router.delete("/register/{device_id}")
     async def unregister_fcm_device(
         device_id: str,
@@ -100,6 +126,7 @@ def build_fcm_device_router(
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
             "token_returned": False,
+            "has_delivery_ack": bool(registration and registration.last_delivery_ack_at),
         }
 
     return router
