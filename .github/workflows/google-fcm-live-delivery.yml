@@ -7,6 +7,8 @@ on:
       - "healthia_one/fcm_registration.py"
       - "healthia_one/fcm_device_api.py"
       - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/FirebaseRuntime.kt"
+      - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/FcmRegistrationWorker.kt"
+      - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/FcmDeliveryAckWorker.kt"
       - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/HealthiaFirebaseMessagingService.kt"
       - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/HealthiaApi.kt"
       - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/MainActivity.kt"
