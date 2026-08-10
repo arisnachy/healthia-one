@@ -91,12 +91,21 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "com.google.firebase.MESSAGING_EVENT" in manifest
     assert activity.count("FirebaseRuntime.syncRegistration") >= 2
     assert "requestNotificationPermissionIfNeeded" in activity
+    assert "Desactivar notificaciones privadas" in activity
+    assert "Reactivar notificaciones privadas" in activity
+    assert "HealthiaApi.disableFcm" in activity
+    assert "HealthiaApi.explicitlyEnableFcm" in activity
     assert "/api/devices/fcm/register" in api
+    assert "/api/devices/fcm/register/enable" in api
+    assert 'method = "DELETE"' in api
     assert "/api/devices/fcm/ack" in api
+    assert "fcm_notifications_enabled" in runtime
+    assert "FcmRegistrationWorker.cancel" in runtime
     assert "FcmRegistrationWorker.enqueue" in runtime
     assert "FcmDeliveryAckWorker.enqueue" in runtime
     assert "onNewToken" in service
     assert "FirebaseRuntime.syncRegistration" in service
+    assert "FirebaseRuntime.notificationsEnabled" in service
     assert "onMessageReceived" in service
     assert 'message.data["proof_id"]' in service
     assert 'kind != "healthia_update"' in service
@@ -109,9 +118,11 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
         assert "BackoffPolicy.EXPONENTIAL" in worker
         assert "setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)" in worker
         assert "Result.retry()" in worker
+    assert "FirebaseRuntime.notificationsEnabled" in registration_worker
     assert "FirebaseMessaging.getInstance().token" in registration_worker
     assert "Tasks.await" in registration_worker
     assert "ExistingWorkPolicy.REPLACE" in registration_worker
+    assert "cancelUniqueWork" in registration_worker
     assert "HealthiaApi.registerFcm" in registration_worker
     assert "ExistingWorkPolicy.KEEP" in ack_worker
     assert "HealthiaApi.acknowledgeFcm" in ack_worker
