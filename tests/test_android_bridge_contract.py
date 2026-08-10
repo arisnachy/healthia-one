@@ -104,10 +104,13 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
 def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
     workflow = (ROOT / ".github/workflows/android-bridge.yml").read_text(encoding="utf-8")
     guide = (ROOT / "docs/CONNECT_ANDROID.md").read_text(encoding="utf-8")
+    extractor = (ROOT / "scripts/extract_firebase_android_config.py").read_text(encoding="utf-8")
     assert "gradle :app:assembleDebug" in workflow
     assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_B64" in workflow
     assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON" in workflow
-    assert "base64.b64decode" in workflow
+    assert "scripts/extract_firebase_android_config.py" in workflow
+    assert "--format base64" in workflow
+    assert "base64.b64decode" in extractor
     assert "com.healthia.one.bridge" in workflow
     assert "GOOGLE_SERVICES_JSON_BASE64_SECRET" in workflow
     assert "GOOGLE_SERVICES_JSON_SECRET" in workflow
