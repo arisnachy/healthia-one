@@ -52,7 +52,31 @@ HealthIA-Android-APK-Readiness
 
 Si su `status.json` indica `BLOCKED_FIREBASE_CONFIG`, el código Android puede estar verde pero **no existe un APK válido para probar FCM**. En ese estado el workflow elimina el APK compilado y no publica `HealthIA-Bridge-debug`.
 
-Solo cuando están configurados de forma segura estos cuatro valores en GitHub Actions:
+### Configuración recomendada: un solo secret
+
+En Firebase Console, abre el proyecto HealthIA, entra a la aplicación Android con package name:
+
+```text
+com.healthia.one.bridge
+```
+
+y descarga su `google-services.json`. Copia el contenido completo del archivo como un GitHub Actions repository secret llamado:
+
+```text
+HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON
+```
+
+Ésta es la vía preferida. El workflow:
+
+1. interpreta el JSON únicamente dentro del runner;
+2. exige exactamente un cliente Android con package `com.healthia.one.bridge`;
+3. extrae `mobilesdk_app_id`, `current_key`, `project_id` y `project_number`;
+4. exige que `project_id` sea `healthia-6088a`;
+5. enmascara cada valor;
+6. inyecta los valores únicamente durante Gradle;
+7. nunca escribe el `google-services.json` en el repositorio ni en artifacts.
+
+Como fallback también admite cuatro Actions Secrets separados:
 
 ```text
 HEALTHIA_FIREBASE_APP_ID
@@ -61,7 +85,9 @@ HEALTHIA_FIREBASE_PROJECT_ID
 HEALTHIA_FIREBASE_SENDER_ID
 ```
 
-el workflow verifica que el `BuildConfig` generado no tenga identificadores vacíos y publica:
+No es necesario configurar ambas vías. El JSON protegido tiene prioridad.
+
+Cuando la configuración es válida, el workflow verifica que el `BuildConfig` generado no tenga identificadores vacíos y publica:
 
 ```text
 HealthIA-Bridge-debug
@@ -73,7 +99,7 @@ El artefacto es un ZIP. Extráelo para obtener:
 HealthIA-Bridge-debug.apk
 ```
 
-No copies esos valores a logs, issues, PRs ni artefactos de evidencia. El workflow los consume desde GitHub Actions y los enmascara durante el build.
+No copies la configuración Firebase a logs, issues, PRs ni artefactos de evidencia. El workflow la consume desde GitHub Actions y la enmascara durante el build.
 
 También puedes abrir `android-health-bridge` en Android Studio y ejecutar la aplicación directamente en un teléfono, pero una prueba FCM real sigue requiriendo la configuración Firebase válida.
 
