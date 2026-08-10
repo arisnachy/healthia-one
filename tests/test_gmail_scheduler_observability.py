@@ -16,7 +16,7 @@ class Manager:
 def test_scheduler_operational_log_is_aggregate_only(caplog):
     runtime = SimpleNamespace(watch_manager=Manager())
     client = TestClient(create_app(lambda: runtime))
-    with caplog.at_level(logging.INFO, logger="healthia.gmail_worker"):
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
         response = client.post(
             "/scheduled/renew-gmail-watches",
             headers={
