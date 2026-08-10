@@ -5,7 +5,9 @@ on:
     paths:
       - ".github/workflows/google-cloud-live-proof.yml"
       - "healthia_one/gmail_push_worker.py"
+      - "healthia_one/gmail_watch_runtime.py"
       - "deployment/deploy-gmail-push-worker.ps1"
+      - "scripts/verify_gmail_scheduler_live.py"
   workflow_dispatch:
 
 permissions:
@@ -56,7 +58,6 @@ jobs:
           runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
           compute_sa="${project_number}-compute@developer.gserviceaccount.com"
-
           cleanup() {
             set +e
             gcloud pubsub subscriptions delete "$subscription" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
@@ -65,14 +66,6 @@ jobs:
             gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1
           }
           trap cleanup EXIT
-
-          sanitize_logs() {
-            sed -E \
-              -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g' \
-              -e 's/(refresh_token|client_secret|access_token|id_token)[^[:space:]]*/[credential-field]/gi' \
-              -e 's/ya29\.[A-Za-z0-9._-]+/[token]/g'
-          }
-
           {
             echo "# Google Health Constellation live proof"
             echo
@@ -82,14 +75,9 @@ jobs:
             echo "Mode: temporary/reversible; no IAM mutation"
             echo
           } > "$proof"
-
           gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
-
-          build_id="$(gcloud builds submit . \
-            --project "$PROJECT_ID" --region "$REGION" --tag "$image" \
-            --async --format='value(id)' --quiet)"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
           test -n "$build_id"
-
           image_digest=""
           for _ in $(seq 1 48); do
             image_digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
@@ -97,61 +85,28 @@ jobs:
             sleep 5
           done
           test -n "$image_digest"
-
-          gcloud run deploy "$service" \
-            --project "$PROJECT_ID" --region "$REGION" --image "$image" \
-            --service-account "$runtime_sa" --no-allow-unauthenticated \
-            --min 0 --max 1 --concurrency 4 --memory 512Mi --cpu 1 \
-            --command uvicorn \
-            --args 'healthia_one.gmail_push_worker:app,--host,0.0.0.0,--port,8080' \
-            --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_GMAIL_PUBSUB_TOPIC=${full_topic}" \
-            --quiet
-
+          gcloud run deploy "$service" --project "$PROJECT_ID" --region "$REGION" --image "$image" --service-account "$runtime_sa" --no-allow-unauthenticated --min 0 --max 1 --concurrency 4 --memory 512Mi --cpu 1 --command uvicorn --args 'healthia_one.gmail_push_worker:app,--host,0.0.0.0,--port,8080' --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_GMAIL_PUBSUB_TOPIC=${full_topic}" --quiet
           service_url="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
           revision="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           test -n "$service_url" && test -n "$revision"
-
           unauth_status="$(curl -sS -o /dev/null -w '%{http_code}' "$service_url/healthz" || true)"
-          if [[ -z "$unauth_status" || "$unauth_status" =~ ^2 ]]; then
-            echo "Private Cloud Run unexpectedly allowed unauthenticated access: ${unauth_status:-empty}" >&2
-            exit 1
-          fi
-
+          if [[ -z "$unauth_status" || "$unauth_status" =~ ^2 ]]; then exit 1; fi
           gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
-
           push_sa=""
-          subscription_error=""
           for candidate in "$active_account" "$compute_sa"; do
-            if output="$(gcloud pubsub subscriptions create "$subscription" \
-              --project "$PROJECT_ID" --topic "$topic" \
-              --push-endpoint "${service_url}/events/gmail-push" \
-              --push-auth-service-account "$candidate" \
-              --push-auth-token-audience "$service_url" \
-              --ack-deadline 20 --message-retention-duration 10m --quiet 2>&1)"; then
-              push_sa="$candidate"
-              break
-            fi
-            subscription_error="$output"
+            if gcloud pubsub subscriptions create "$subscription" --project "$PROJECT_ID" --topic "$topic" --push-endpoint "${service_url}/events/gmail-push" --push-auth-service-account "$candidate" --push-auth-token-audience "$service_url" --ack-deadline 20 --message-retention-duration 10m --quiet >/dev/null 2>&1; then push_sa="$candidate"; break; fi
             gcloud pubsub subscriptions delete "$subscription" --project "$PROJECT_ID" --quiet >/dev/null 2>&1 || true
           done
-          if [[ -z "$push_sa" ]]; then
-            echo "$subscription_error" >&2
-            exit 1
-          fi
-
+          test -n "$push_sa"
           payload='{"emailAddress":"unknown-proof@example.invalid","historyId":"100"}'
           message_id="$(gcloud pubsub topics publish "$topic" --project "$PROJECT_ID" --message "$payload" --format='value(messageIds[0])')"
-          test -n "$message_id"
-
           push_status=""
           for _ in $(seq 1 15); do
-            push_status="$(gcloud logging read \
-              "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND httpRequest.requestUrl=\"${service_url}/events/gmail-push\"" \
-              --project "$PROJECT_ID" --limit 10 --freshness 5m --format='value(httpRequest.status)' 2>/dev/null | head -n1 || true)"
+            push_status="$(gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND httpRequest.requestUrl=\"${service_url}/events/gmail-push\"" --project "$PROJECT_ID" --limit 10 --freshness 5m --format='value(httpRequest.status)' 2>/dev/null | head -n1 || true)"
             [[ -n "$push_status" ]] && break
             sleep 4
           done
-
+          [[ "$push_status" == "204" ]]
           {
             echo "## Infrastructure"
             echo "- Cloud Build id: $build_id"
@@ -160,34 +115,7 @@ jobs:
             echo "- Unauthenticated /healthz status: $unauth_status"
             echo "- Authenticated Pub/Sub push identity: $push_sa"
             echo "- Synthetic message id: $message_id"
-            echo "- Worker request status: ${push_status:-not_visible}"
-          } >> "$proof"
-
-          if [[ "$push_status" != "204" ]]; then
-            stderr_log="$(gcloud logging read \
-              "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Fstderr\"" \
-              --project "$PROJECT_ID" --limit 80 --freshness 10m --order=asc --format='value(textPayload)' 2>/dev/null \
-              | tail -n 100 | sanitize_logs || true)"
-            printf '%s\n' "$stderr_log" > dist/google-live-proof/worker-error-sanitized.txt
-            echo "--- SANITIZED WORKER STDERR ---" >&2
-            printf '%s\n' "$stderr_log" >&2
-            exit 1
-          fi
-
-          {
-            echo
-            echo "## Proven"
-            echo "- Exact-head Cloud Build produced an immutable image."
-            echo "- Worker ran on private Cloud Run."
-            echo "- Unauthenticated access did not receive 2xx."
-            echo "- Authenticated Pub/Sub OIDC reached /events/gmail-push."
-            echo "- Firestore-backed worker failed closed for an unknown mailbox with HTTP 204."
-            echo "- No IAM policy was modified by this proof."
-            echo
-            echo "## Not proven"
-            echo "- Real Gmail users.watch/users.history.list: no patient OAuth refresh secret is provisioned."
-            echo "- Scheduler live renewal: current audit principal cannot list Scheduler jobs."
-            echo "- Real provider Gmail/Calendar/Tasks side effects were intentionally not executed against a patient account."
+            echo "- Worker request status: $push_status"
           } >> "$proof"
           cat "$proof"
       - name: Upload live proof evidence
@@ -196,5 +124,114 @@ jobs:
         with:
           name: HealthIA-Google-Constellation-live-proof
           path: dist/google-live-proof
+          if-no-files-found: warn
+          retention-days: 30
+
+  scheduler-live:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE: healthia-gmail-worker
+      JOB_NAME: healthia-gmail-watch-renewal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Install verifier dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+      - name: Promote worker and prove Scheduler renewal
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-scheduler-live
+          proof="dist/wave2-scheduler-live/proof.json"
+          source_sha="$(git rev-parse HEAD)"
+          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-gmail-wave2"
+          image="${image_package}:${source_sha}"
+          original_image="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          original_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          promoted=0
+          rollback() {
+            rc=$?
+            if [[ $rc -ne 0 && $promoted -eq 1 && -n "$original_image" ]]; then
+              gcloud run services update "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$original_image" --quiet >/dev/null 2>&1 || true
+            fi
+            if [[ $rc -ne 0 ]]; then
+              gcloud artifacts docker images delete "$image" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
+            fi
+            exit $rc
+          }
+          trap rollback EXIT
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=""
+          for _ in $(seq 1 60); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          gcloud run services update "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "$image" --quiet
+          promoted=1
+          new_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$new_revision" && test "$new_revision" != "$original_revision"
+          scheduler_sa="$(gcloud scheduler jobs describe "$JOB_NAME" --project "$PROJECT_ID" --location "$REGION" --format='value(httpTarget.oidcToken.serviceAccountEmail)')"
+          test -n "$scheduler_sa"
+          patient_id="$(python - <<'PY'
+from google.cloud import firestore
+c=firestore.Client(project='healthia-6088a')
+connections={d.id:(d.to_dict() or {}) for d in c.collection('healthia_google_oauth_connections').stream()}
+ids=[]
+for d in c.collection('healthia_gmail_watch_state').stream():
+    w=d.to_dict() or {}; conn=connections.get(d.id) or {}
+    if bool(w.get('enabled', True)) and bool(conn.get('enabled', False)): ids.append(d.id)
+if len(ids) != 1: raise SystemExit(f'expected exactly one controlled enabled OAuth+watch pair, got {len(ids)}')
+print(ids[0])
+PY
+)"
+          test -n "$patient_id"
+          echo "::add-mask::$patient_id"
+          python scripts/verify_gmail_scheduler_live.py --project "$PROJECT_ID" --location "$REGION" --job-name "$JOB_NAME" --scheduler-service-account "$scheduler_sa" --patient-id "$patient_id" --confirmed-live-run > "$proof"
+          python - <<'PY'
+import json
+p='dist/wave2-scheduler-live/proof.json'; d=json.load(open(p,encoding='utf-8'))
+assert d.get('status')=='LIVE_PASS', d
+assert d.get('watch_expiration_future') is True, d
+assert d.get('second_run_noop') is True, d
+assert d.get('secret_material_exposed') is False, d
+PY
+          python - <<PY
+import json
+p='$proof'; d=json.load(open(p,encoding='utf-8'))
+d.update(source_sha='$source_sha',cloud_build_id='$build_id',image_digest='$digest',worker_revision='$new_revision',previous_worker_revision='$original_revision')
+open(p,'w',encoding='utf-8').write(json.dumps(d,sort_keys=True,indent=2)+'\n')
+PY
+          if grep -Eiq '(refresh_token|client_secret|access_token|id_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' "$proof"; then rm -f "$proof"; exit 1; fi
+          cat "$proof"
+          trap - EXIT
+      - name: Upload sanitized Scheduler LIVE evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave2-Scheduler-LIVE
+          path: dist/wave2-scheduler-live
           if-no-files-found: warn
           retention-days: 30
