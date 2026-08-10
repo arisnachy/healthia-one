@@ -93,6 +93,9 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "requestNotificationPermissionIfNeeded" in activity
     assert "Desactivar notificaciones privadas" in activity
     assert "Reactivar notificaciones privadas" in activity
+    assert "desactivadas por defecto" in activity
+    assert "Android debe conceder el permiso de notificaciones antes del opt-in" in activity
+    assert "token FCM fue retirado del servidor" in activity
     assert "HealthiaApi.disableFcm" in activity
     assert "HealthiaApi.explicitlyEnableFcm" in activity
     assert "/api/devices/fcm/register" in api
@@ -101,6 +104,7 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "/api/devices/fcm/ack" in api
     assert 'put("notification_shown", notificationShown)' in api
     assert "fcm_notifications_enabled" in runtime
+    assert ".getBoolean(NOTIFICATIONS_ENABLED, false)" in runtime
     assert "FcmRegistrationWorker.cancel" in runtime
     assert "FcmRegistrationWorker.enqueue" in runtime
     assert "FcmDeliveryAckWorker.enqueue" in runtime
