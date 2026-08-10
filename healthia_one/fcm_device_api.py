@@ -31,8 +31,8 @@ def build_fcm_device_router(
     """Register FCM clients and record PHI-neutral delivery acknowledgements.
 
     Raw FCM registration tokens are accepted and stored server-side only. Delivery
-    evidence contains a short synthetic proof id and timestamp, never notification
-    content, patient identifiers or the raw registration token.
+    evidence contains a short synthetic proof id, visible-notification boolean and
+    timestamp, never notification content, patient identifiers or the raw token.
 
     Notification opt-out is sticky: automatic token refreshes cannot re-enable a
     disabled registration. Re-enabling requires the explicit opt-in endpoint.
@@ -119,12 +119,14 @@ def build_fcm_device_router(
             principal.patient_id,
             principal.connection_id,
             payload.proof_id,
+            payload.notification_shown,
         )
         if registration is None:
             raise HTTPException(status_code=409, detail="El registro FCM no está activo.")
         return {
             "acknowledged": True,
             "proof_id": payload.proof_id,
+            "notification_shown": bool(registration.last_delivery_notification_shown),
             "connection_id": principal.connection_id,
             "device_id": principal.device_id,
             "token_returned": False,
@@ -164,6 +166,9 @@ def build_fcm_device_router(
             "device_id": principal.device_id,
             "token_returned": False,
             "has_delivery_ack": bool(registration and registration.last_delivery_ack_at),
+            "last_delivery_notification_shown": registration.last_delivery_notification_shown
+            if registration
+            else None,
         }
 
     return router
