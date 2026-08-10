@@ -42,8 +42,42 @@ jobs:
           out="dist/google-cloud-audit/inventory.md"
           active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
           runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)"
+          service_url="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || true)"
           pubsub_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+
+          gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > service.json
+          python - <<'PY' > service-surface.txt
+          import json
+          data=json.load(open('service.json', encoding='utf-8'))
+          annotations=(data.get('metadata') or {}).get('annotations') or {}
+          template=((data.get('spec') or {}).get('template') or {})
+          containers=((template.get('spec') or {}).get('containers') or [])
+          env=(containers[0].get('env') or []) if containers else []
+          names=sorted(str(item.get('name') or '') for item in env if item.get('name'))
+          secret_backed=[]
+          for item in env:
+              vf=item.get('valueFrom') or {}
+              ref=vf.get('secretKeyRef') or {}
+              if item.get('name') and ref:
+                  secret_backed.append(str(item['name']))
+          print('Invoker IAM disabled annotation:', annotations.get('run.googleapis.com/invoker-iam-disabled','<absent>'))
+          print('Environment variable names only:')
+          for name in names: print('-', name)
+          print('Secret-backed environment variable names only:')
+          for name in sorted(secret_backed): print('-', name)
+          print('GOOGLE_MAPS_API_KEY configured:', 'YES' if 'GOOGLE_MAPS_API_KEY' in names else 'NO')
+          print('HEALTHIA_GOOGLE_OAUTH_STATE_SECRET configured:', 'YES' if 'HEALTHIA_GOOGLE_OAUTH_STATE_SECRET' in names else 'NO')
+          print('HEALTHIA_GOOGLE_OAUTH_CLIENT_SECRET_RESOURCE configured:', 'YES' if 'HEALTHIA_GOOGLE_OAUTH_CLIENT_SECRET_RESOURCE' in names else 'NO')
+          print('HEALTHIA_GOOGLE_OAUTH_REDIRECT_URI configured:', 'YES' if 'HEALTHIA_GOOGLE_OAUTH_REDIRECT_URI' in names else 'NO')
+          PY
+          rm -f service.json
+
+          root_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/" || true)"
+          login_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/login" || true)"
+          session_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/api/auth/session" || true)"
+          oauth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$service_url/api/google-constellation/oauth/readiness" || true)"
+
           {
             echo "# HealthIA Google Cloud capability audit"
             echo
@@ -55,9 +89,18 @@ jobs:
             echo "Existing demo runtime identity: $runtime_sa"
             echo "Pub/Sub service agent: $pubsub_agent"
             echo
+            echo "## Browser/OAuth surface"
+            echo "Cloud Run URL: $service_url"
+            echo "Candidate OAuth callback: ${service_url}/api/google-constellation/oauth/callback"
+            echo "Unauthenticated GET /: ${root_status:-none}"
+            echo "Unauthenticated GET /login: ${login_status:-none}"
+            echo "Unauthenticated GET /api/auth/session: ${session_status:-none}"
+            echo "Unauthenticated GET /api/google-constellation/oauth/readiness: ${oauth_status:-none}"
+            cat service-surface.txt
+            echo
             echo "## Enabled relevant APIs"
             gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' \
-              | grep -E '^(run|firestore|secretmanager|pubsub|cloudscheduler|artifactregistry|cloudbuild|eventarc|aiplatform|places-backend|routes|gmail|calendar|people|tasks|drive|documentai|healthcare|speech|texttospeech|translate|fcm|firebase)\.googleapis\.com$' \
+              | grep -E '^(run|firestore|secretmanager|pubsub|cloudscheduler|artifactregistry|cloudbuild|eventarc|aiplatform|places|places-backend|routes|gmail|calendar|calendar-json|people|tasks|drive|documentai|healthcare|speech|texttospeech|translate|fcm|firebase)\.googleapis\.com$' \
               | sort || true
             echo
             echo "## Cloud Run services"
@@ -109,9 +152,10 @@ jobs:
             gcloud firestore databases list --project "$PROJECT_ID" \
               --format='table(name,locationId,type)' || true
           } > "$out"
+          rm -f service-surface.txt
 
           # Reject accidental credential/token-shaped content before upload.
-          if grep -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|ya29\.|sk-[A-Za-z0-9])' "$out"; then
+          if grep -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret["=: ]|access_token["=: ]|ya29\.|sk-[A-Za-z0-9])' "$out"; then
             echo "Sensitive-looking material appeared in the audit output; refusing artifact upload."
             rm -f "$out"
             exit 1
