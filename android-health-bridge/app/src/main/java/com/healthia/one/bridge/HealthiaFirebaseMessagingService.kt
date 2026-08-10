@@ -16,8 +16,7 @@ class HealthiaFirebaseMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         if (token.isBlank()) return
-        FirebaseRuntime.initialize(applicationContext)
-        FirebaseRuntime.uploadRegistration(applicationContext, token)
+        FirebaseRuntime.syncRegistration(applicationContext)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
