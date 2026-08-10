@@ -175,16 +175,19 @@ jobs:
           PROJECT_ID: healthia-6088a
           REGION: us-central1
           SERVICE: healthia-gmail-worker
-          JOB_NAME: healthia-gmail-watch-renewal
         run: |
           set -euo pipefail
           mkdir -p dist/wave2-scheduler-live
-          proof="dist/wave2-scheduler-live/proof.json"
+          summary="dist/wave2-scheduler-live/summary.json"
           source_sha="$(git rev-parse HEAD)"
           image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-gmail-wave2"
           image="${image_package}:${source_sha}"
           original_image="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
           original_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          if [[ "$original_image" == *"/healthia-gmail-wave2:"* ]]; then
+            echo "Previous failed proof image is still active; refusing to stack another promotion." >&2
+            exit 1
+          fi
           promoted=0
           rollback() {
             rc=$?
@@ -199,8 +202,8 @@ jobs:
           }
           trap rollback EXIT
 
-          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
-          test -n "$build_id"
+          image_build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$image_build_id"
           digest=""
           for _ in $(seq 1 60); do
             digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
@@ -213,49 +216,93 @@ jobs:
           new_revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           test -n "$new_revision" && test "$new_revision" != "$original_revision"
 
-          scheduler_sa="$(gcloud scheduler jobs describe "$JOB_NAME" --project "$PROJECT_ID" --location "$REGION" --format='value(httpTarget.oidcToken.serviceAccountEmail)')"
-          test -n "$scheduler_sa"
+          cat > /tmp/wave2-scheduler-cloudbuild.yaml <<'YAML'
+          steps:
+            - name: python:3.12
+              entrypoint: bash
+              args:
+                - -ceu
+                - |
+                  python -m pip install --quiet .
+                  python scripts/run_scheduler_live_in_cloudbuild.py \
+                    --project "$PROJECT_ID" \
+                    --location us-central1 \
+                    --job-name healthia-gmail-watch-renewal \
+                    | tee /workspace/proof.json
+                  python - <<'PY'
+                  import json
+                  p='/workspace/proof.json'
+                  d=json.load(open(p, encoding='utf-8'))
+                  assert d.get('proof_schema') == 'scheduler-live-v1', d
+                  assert d.get('status') == 'LIVE_PASS', d
+                  assert d.get('watch_expiration_future') is True, d
+                  assert d.get('second_run_noop') is True, d
+                  assert d.get('secret_material_exposed') is False, d
+                  PY
+            - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+              entrypoint: bash
+              args:
+                - -ceu
+                - |
+                  gcloud storage cp /workspace/proof.json \
+                    "gs://${PROJECT_ID}_cloudbuild/wave2-scheduler/${BUILD_ID}/proof.json"
+          options:
+            logging: CLOUD_LOGGING_ONLY
+          YAML
 
-          patient_id="$(python - <<'PY'
-          from google.cloud import firestore
-          c=firestore.Client(project='healthia-6088a')
-          connections={d.id:(d.to_dict() or {}) for d in c.collection('healthia_google_oauth_connections').stream()}
-          ids=[]
-          for d in c.collection('healthia_gmail_watch_state').stream():
-              w=d.to_dict() or {}; conn=connections.get(d.id) or {}
-              if bool(w.get('enabled', True)) and bool(conn.get('enabled', False)):
-                  ids.append(d.id)
-          if len(ids) != 1:
-              raise SystemExit(f'expected exactly one controlled enabled OAuth+watch pair, got {len(ids)}')
-          print(ids[0])
-          PY
-          )"
-          test -n "$patient_id"
-          echo "::add-mask::$patient_id"
+          operator_build_id="$(gcloud builds submit . \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --config /tmp/wave2-scheduler-cloudbuild.yaml \
+            --async --format='value(id)' --quiet)"
+          test -n "$operator_build_id"
+          operator_status=""
+          operator_sa=""
+          for _ in $(seq 1 90); do
+            operator_status="$(gcloud builds describe "$operator_build_id" --project "$PROJECT_ID" --region "$REGION" --format='value(status)' 2>/dev/null || true)"
+            operator_sa="$(gcloud builds describe "$operator_build_id" --project "$PROJECT_ID" --region "$REGION" --format='value(serviceAccount)' 2>/dev/null || true)"
+            case "$operator_status" in
+              SUCCESS) break ;;
+              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED) break ;;
+            esac
+            sleep 5
+          done
+          [[ "$operator_status" == "SUCCESS" ]]
 
-          python scripts/verify_gmail_scheduler_live.py --project "$PROJECT_ID" --location "$REGION" --job-name "$JOB_NAME" --scheduler-service-account "$scheduler_sa" --patient-id "$patient_id" --confirmed-live-run > "$proof"
-          python - <<'PY'
-          import json
-          p='dist/wave2-scheduler-live/proof.json'
-          d=json.load(open(p,encoding='utf-8'))
-          assert d.get('proof_schema') == 'scheduler-live-v1', d
-          assert d.get('status') == 'LIVE_PASS', d
-          assert d.get('watch_expiration_future') is True, d
-          assert d.get('second_run_noop') is True, d
-          assert d.get('secret_material_exposed') is False, d
-          PY
+          proof_uri="gs://${PROJECT_ID}_cloudbuild/wave2-scheduler/${operator_build_id}/proof.json"
+          if gcloud storage cp "$proof_uri" dist/wave2-scheduler-live/proof.json >/dev/null 2>&1; then
+            python - <<'PY'
+            import json
+            p='dist/wave2-scheduler-live/proof.json'
+            d=json.load(open(p,encoding='utf-8'))
+            assert d.get('proof_schema') == 'scheduler-live-v1', d
+            assert d.get('status') == 'LIVE_PASS', d
+            assert d.get('watch_expiration_future') is True, d
+            assert d.get('second_run_noop') is True, d
+            assert d.get('secret_material_exposed') is False, d
+            PY
+            if grep -Eiq '(refresh_token|client_secret|access_token|id_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/wave2-scheduler-live/proof.json; then
+              rm -f dist/wave2-scheduler-live/proof.json
+              exit 1
+            fi
+          fi
+
           python - <<PY
           import json
-          p='$proof'; d=json.load(open(p,encoding='utf-8'))
-          d.update(source_sha='$source_sha',cloud_build_id='$build_id',image_digest='$digest',worker_revision='$new_revision',previous_worker_revision='$original_revision')
-          open(p,'w',encoding='utf-8').write(json.dumps(d,sort_keys=True,indent=2)+'\n')
+          summary = {
+              'status': 'LIVE_PASS',
+              'source_sha': '$source_sha',
+              'image_build_id': '$image_build_id',
+              'image_digest': '$digest',
+              'worker_revision': '$new_revision',
+              'previous_worker_revision': '$original_revision',
+              'operator_build_id': '$operator_build_id',
+              'operator_service_account_resource': '$operator_sa',
+              'proof_uri': '$proof_uri',
+              'iam_mutation': False,
+          }
+          open('$summary','w',encoding='utf-8').write(json.dumps(summary,sort_keys=True,indent=2)+'\n')
           PY
-          if grep -Eiq '(refresh_token|client_secret|access_token|id_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' "$proof"; then
-            echo "Sensitive-looking material appeared in Scheduler evidence; refusing upload." >&2
-            rm -f "$proof"
-            exit 1
-          fi
-          cat "$proof"
+          cat "$summary"
           trap - EXIT
       - name: Upload Wave 2 Scheduler LIVE evidence
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
