@@ -148,7 +148,7 @@ jobs:
           token_digest="$(cat /tmp/fcm-token-digest.txt)"
           test -n "$registration_token" && test -n "$document_path"
           echo "::add-mask::$registration_token"
-          proof_id="fcmproof_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          proof_id="fcmproof_$(python -c 'import secrets; print(secrets.token_hex(16))')"
           access_token="$(gcloud auth print-access-token)"
           test -n "$access_token"
           echo "::add-mask::$access_token"
@@ -180,7 +180,10 @@ jobs:
           client=firestore.Client(project=project)
           reference=client.document(document_path)
           acknowledged=False; acknowledged_at=None
-          for _ in range(30):
+          # WorkManager can apply exponential backoff after a transient Android-side
+          # network/process failure, so the LIVE verifier allows four minutes for the
+          # durable ACK rather than assuming the first in-process request succeeds.
+          for _ in range(60):
               try:
                   snapshot=reference.get()
               except Exception:
@@ -200,13 +203,14 @@ jobs:
             'provider':'fcm.googleapis.com',
             'provider_message_name_sha256':hashlib.sha256(message_name.encode()).hexdigest(),
             'registration_token_sha256':token_digest,
-            'proof_id':proof_id,
+            'proof_id_sha256':hashlib.sha256(proof_id.encode()).hexdigest(),
             'controlled_device_ack':True,
             'acknowledged_at_present':acknowledged_at is not None,
             'data_message_kind':'healthia_update',
             'clinical_content':False,
             'notification_copy_server_supplied':False,
             'raw_token_exposed':False,
+            'raw_proof_id_exposed':False,
             'iam_mutation':False,
             'secret_material_exposed':False,
           }
@@ -232,7 +236,7 @@ jobs:
           (root/'summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
           print(json.dumps(out,sort_keys=True))
           PY
-          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|registration_token["=: ]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/wave2-fcm-live; then
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|registration_token["=: ]|proof_id["=: ]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/wave2-fcm-live; then
             echo "Sensitive-looking material appeared in FCM evidence; refusing artifact upload." >&2
             rm -rf dist/wave2-fcm-live
             exit 1
