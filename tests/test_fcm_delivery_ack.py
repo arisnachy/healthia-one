@@ -29,19 +29,38 @@ def test_memory_store_records_phi_neutral_delivery_ack_without_exposing_token():
         "patient_test",
         "hc_test_connection",
         "fcmproof_12345678",
+        True,
     )
 
     assert acknowledged is not None
     assert acknowledged.last_delivery_proof_id == "fcmproof_12345678"
     assert acknowledged.last_delivery_ack_at is not None
+    assert acknowledged.last_delivery_notification_shown is True
     assert acknowledged.registration_token == original.registration_token
     assert acknowledged.token_sha256 == original.token_sha256
+
+
+def test_ack_can_record_delivery_without_visible_notification_without_mislabeling_it():
+    store = MemoryFCMRegistrationStore()
+    store.save(registration())
+
+    acknowledged = store.acknowledge(
+        "patient_test",
+        "hc_test_connection",
+        "fcmproof_hidden123",
+        False,
+    )
+
+    assert acknowledged is not None
+    assert acknowledged.last_delivery_proof_id == "fcmproof_hidden123"
+    assert acknowledged.last_delivery_ack_at is not None
+    assert acknowledged.last_delivery_notification_shown is False
 
 
 def test_token_refresh_preserves_existing_delivery_ack_until_next_proof():
     store = MemoryFCMRegistrationStore()
     store.save(registration())
-    first = store.acknowledge("patient_test", "hc_test_connection", "fcmproof_abcdefgh")
+    first = store.acknowledge("patient_test", "hc_test_connection", "fcmproof_abcdefgh", True)
     assert first is not None and first.last_delivery_ack_at is not None
 
     refreshed = registration("new-fcm-registration-token-0987654321")
@@ -52,6 +71,7 @@ def test_token_refresh_preserves_existing_delivery_ack_until_next_proof():
     assert reread.registration_token == "new-fcm-registration-token-0987654321"
     assert reread.last_delivery_proof_id == "fcmproof_abcdefgh"
     assert reread.last_delivery_ack_at == first.last_delivery_ack_at
+    assert reread.last_delivery_notification_shown is True
 
 
 def test_disabled_registration_cannot_acknowledge_delivery():
@@ -59,7 +79,7 @@ def test_disabled_registration_cannot_acknowledge_delivery():
     store.save(registration())
     assert store.disable_connection("patient_test", "hc_test_connection") is True
 
-    assert store.acknowledge("patient_test", "hc_test_connection", "fcmproof_abcdefgh") is None
+    assert store.acknowledge("patient_test", "hc_test_connection", "fcmproof_abcdefgh", True) is None
 
 
 def test_automatic_token_refresh_cannot_override_sticky_notification_opt_out():
@@ -110,12 +130,28 @@ def test_reenable_request_requires_literal_true_opt_in():
         )
 
 
-def test_delivery_ack_request_rejects_content_shaped_or_unsafe_proof_ids():
-    valid = FCMDeliveryAckRequest(device_id="android-test-device", proof_id="fcmproof_1234-ABCD")
+def test_delivery_ack_request_requires_notification_visibility_and_safe_proof_id():
+    valid = FCMDeliveryAckRequest(
+        device_id="android-test-device",
+        proof_id="fcmproof_1234-ABCD",
+        notification_shown=True,
+    )
     assert valid.proof_id == "fcmproof_1234-ABCD"
+    assert valid.notification_shown is True
 
     with pytest.raises(ValidationError):
-        FCMDeliveryAckRequest(device_id="android-test-device", proof_id="patient has chest pain")
+        FCMDeliveryAckRequest(device_id="android-test-device", proof_id="fcmproof_1234-ABCD")
 
     with pytest.raises(ValidationError):
-        FCMDeliveryAckRequest(device_id="android-test-device", proof_id="short")
+        FCMDeliveryAckRequest(
+            device_id="android-test-device",
+            proof_id="patient has chest pain",
+            notification_shown=True,
+        )
+
+    with pytest.raises(ValidationError):
+        FCMDeliveryAckRequest(
+            device_id="android-test-device",
+            proof_id="short",
+            notification_shown=True,
+        )
