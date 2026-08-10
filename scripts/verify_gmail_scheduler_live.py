@@ -16,6 +16,7 @@ from google.cloud import firestore
 
 CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 WATCH_COLLECTION = "healthia_gmail_watch_state"
+PROOF_SCHEMA_VERSION = "scheduler-live-v1"
 
 
 def _token() -> str:
@@ -134,6 +135,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("Scheduler OIDC audience does not match the private worker URL")
 
     result: dict[str, Any] = {
+        "proof_schema": PROOF_SCHEMA_VERSION,
         "status": "CONFIG_PASS",
         "job_name": args.job_name,
         "schedule": str(job.get("schedule") or ""),
@@ -153,9 +155,6 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     if not original["enabled"]:
         raise RuntimeError("Controlled patient Gmail watch is disabled")
 
-    # Controlled proof mutation: mark only the demo watch metadata as due. Gmail
-    # itself is not stopped or altered here; a successful Scheduler run replaces
-    # this metadata immediately with the real users.watch response.
     document.update({"expiration_ms": 0, "updated_at": datetime.now(timezone.utc).isoformat()})
     due = _watch_snapshot(db, args.patient_id)
     first_before_attempt, _ = _job_attempt(job)
@@ -183,8 +182,6 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             token=token,
             previous=first_attempt,
         )
-        # Second run should see a non-due watch and leave provider cursor/resource
-        # metadata untouched. Allow Firestore timestamp formatting differences only.
         time.sleep(3)
         after_second = _watch_snapshot(db, args.patient_id)
         if after_second["history_id"] != stable_before_second["history_id"]:
@@ -206,9 +203,6 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         )
         return result
     except Exception:
-        # If the proof fails before a real renewal replaced the forced-due marker,
-        # restore the original operational metadata instead of leaving a false due
-        # state behind.
         current = _watch_snapshot(db, args.patient_id)
         if current["expiration_ms"] == 0:
             document.update(
