@@ -1,8 +1,11 @@
 package com.healthia.one.bridge
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -43,6 +46,9 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        // If this device was already paired, refresh its FCM token mapping on each
+        // foreground launch. Empty pairing preferences fail closed inside runtime.
+        FirebaseRuntime.syncRegistration(applicationContext)
     }
 
     private fun connectBridge(baseUrl: String, code: String, updateStatus: (String) -> Unit) {
@@ -61,8 +67,19 @@ class MainActivity : ComponentActivity() {
                     .putString("base_url", normalizedUrl)
                     .putString("access_token", token)
                     .apply()
-                updateStatus("Teléfono vinculado. Autoriza Health Connect y pulsa Sincronizar ahora.")
+                requestNotificationPermissionIfNeeded()
+                FirebaseRuntime.syncRegistration(applicationContext)
+                updateStatus("Teléfono vinculado. Registrando notificaciones privadas; autoriza Health Connect cuando quieras sincronizar datos.")
             }.onFailure { updateStatus("No se pudo vincular: ${it.message}") }
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 42001)
         }
     }
 
@@ -156,7 +173,7 @@ private fun BridgeScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("HealthIA Android Bridge", style = MaterialTheme.typography.headlineSmall)
-            Text("Conecta Health Connect con tu servidor HealthIA mediante una dirección local y un código temporal.")
+            Text("Conecta Health Connect con tu servidor HealthIA mediante una dirección segura y un código temporal.")
 
             AssistChip(
                 onClick = {},
@@ -180,7 +197,7 @@ private fun BridgeScreen(
                 onValueChange = { baseUrl = it },
                 label = { Text("Dirección del servidor HealthIA") },
                 supportingText = {
-                    Text("Ejemplo: http://192.168.1.25:8000 · no uses 127.0.0.1 en el teléfono")
+                    Text("Usa HTTPS para Cloud. En demo local: http://192.168.1.25:8000; no uses 127.0.0.1 en el teléfono.")
                 },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
