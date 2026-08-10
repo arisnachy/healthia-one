@@ -105,6 +105,10 @@ def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
     workflow = (ROOT / ".github/workflows/android-bridge.yml").read_text(encoding="utf-8")
     guide = (ROOT / "docs/CONNECT_ANDROID.md").read_text(encoding="utf-8")
     assert "gradle :app:assembleDebug" in workflow
+    assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON" in workflow
+    assert "com.healthia.one.bridge" in workflow
+    assert "GOOGLE_SERVICES_JSON_SECRET" in workflow
+    assert "FOUR_ACTIONS_SECRETS" in workflow
     assert "BLOCKED_FIREBASE_CONFIG" in workflow
     assert "CODE PASS != FCM-READY APK" in workflow
     assert "steps.firebase.outputs.fcm_ready == 'true'" in workflow
@@ -112,6 +116,7 @@ def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
     assert "HealthIA-Bridge-debug.apk" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "HealthIA-Android-APK-Readiness" in workflow
+    assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON" in guide
     assert "HealthIA-Bridge-debug" in guide
     assert "127.0.0.1" in guide
     assert "ipconfig" in guide
