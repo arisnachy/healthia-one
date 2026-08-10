@@ -75,10 +75,17 @@ object HealthiaApi {
         )
     }
 
-    fun acknowledgeFcm(baseUrl: String, token: String, deviceId: String, proofId: String): String {
+    fun acknowledgeFcm(
+        baseUrl: String,
+        token: String,
+        deviceId: String,
+        proofId: String,
+        notificationShown: Boolean,
+    ): String {
         val payload = JSONObject().apply {
             put("device_id", deviceId)
             put("proof_id", proofId)
+            put("notification_shown", notificationShown)
         }
         return request(baseUrl, "/api/devices/fcm/ack", payload, token)
     }
