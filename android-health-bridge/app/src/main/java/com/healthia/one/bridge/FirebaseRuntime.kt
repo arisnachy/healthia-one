@@ -47,9 +47,9 @@ object FirebaseRuntime {
         FcmRegistrationWorker.enqueue(context.applicationContext)
     }
 
-    fun acknowledgeDelivery(context: Context, proofId: String) {
+    fun acknowledgeDelivery(context: Context, proofId: String, notificationShown: Boolean) {
         if (!notificationsEnabled(context)) return
         if (proofId.length !in 8..128 || proofId.any { !(it.isLetterOrDigit() || it in "._:-") }) return
-        FcmDeliveryAckWorker.enqueue(context.applicationContext, proofId)
+        FcmDeliveryAckWorker.enqueue(context.applicationContext, proofId, notificationShown)
     }
 }
