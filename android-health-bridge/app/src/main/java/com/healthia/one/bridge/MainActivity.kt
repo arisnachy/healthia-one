@@ -49,8 +49,8 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        // If this device was already paired, refresh its FCM token mapping on each
-        // foreground launch only while the user has private notifications enabled.
+        // Foreground token refresh occurs only after an explicit private-notification
+        // opt-in has been persisted locally.
         FirebaseRuntime.syncRegistration(applicationContext)
     }
 
@@ -71,11 +71,10 @@ class MainActivity : ComponentActivity() {
                     .putString("access_token", token)
                     .apply()
                 if (FirebaseRuntime.notificationsEnabled(applicationContext)) {
-                    requestNotificationPermissionIfNeeded()
                     FirebaseRuntime.syncRegistration(applicationContext)
-                    updateStatus("Teléfono vinculado. Registrando notificaciones privadas; autoriza Health Connect cuando quieras sincronizar datos.")
+                    updateStatus("Teléfono vinculado. Tus notificaciones privadas ya estaban activadas explícitamente.")
                 } else {
-                    updateStatus("Teléfono vinculado. Tus notificaciones privadas siguen desactivadas hasta que las reactives explícitamente.")
+                    updateStatus("Teléfono vinculado. Por privacidad, las notificaciones privadas están desactivadas hasta que pulses Reactivar notificaciones privadas.")
                 }
             }.onFailure { updateStatus("No se pudo vincular: ${it.message}") }
         }
@@ -99,7 +98,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }.onSuccess {
                     FirebaseRuntime.setNotificationsEnabled(applicationContext, false)
-                    complete(false, "Notificaciones privadas desactivadas. HealthIA no volverá a registrar este teléfono automáticamente.")
+                    complete(false, "Notificaciones privadas desactivadas. El token FCM fue retirado del servidor y el teléfono no se volverá a registrar automáticamente.")
                 }.onFailure {
                     complete(true, "No se pudieron desactivar las notificaciones: ${it.message}")
                 }
@@ -107,11 +106,22 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotificationPermissionIfNeeded()
+            complete(
+                false,
+                "Android debe conceder el permiso de notificaciones antes del opt-in. Después de concederlo, pulsa Reactivar notificaciones privadas otra vez.",
+            )
+            return
+        }
+
         if (!FirebaseRuntime.initialize(applicationContext)) {
             complete(false, "Firebase no está configurado en esta compilación; no se pueden reactivar las notificaciones.")
             return
         }
-        requestNotificationPermissionIfNeeded()
         FirebaseMessaging.getInstance().token
             .addOnSuccessListener { registrationToken ->
                 if (registrationToken.isBlank()) {
@@ -131,7 +141,7 @@ class MainActivity : ComponentActivity() {
                     }.onSuccess {
                         FirebaseRuntime.setNotificationsEnabled(applicationContext, true)
                         FirebaseRuntime.syncRegistration(applicationContext)
-                        complete(true, "Notificaciones privadas reactivadas explícitamente.")
+                        complete(true, "Notificaciones privadas activadas mediante opt-in explícito.")
                     }.onFailure {
                         complete(false, "No se pudieron reactivar las notificaciones: ${it.message}")
                     }
@@ -290,9 +300,9 @@ private fun BridgeScreen(
 
             Text(
                 if (notificationsEnabled) {
-                    "Notificaciones privadas: activadas. Los avisos no incluyen contenido clínico."
+                    "Notificaciones privadas: activadas por opt-in explícito. Los avisos no incluyen contenido clínico."
                 } else {
-                    "Notificaciones privadas: desactivadas. El teléfono no se volverá a registrar automáticamente."
+                    "Notificaciones privadas: desactivadas por defecto. El teléfono no se registrará hasta que las actives explícitamente."
                 }
             )
             OutlinedButton(
