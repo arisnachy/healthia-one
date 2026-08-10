@@ -33,6 +33,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       firebase_ready: ${{ steps.postcheck.outputs.firebase_ready }}
+      can_set_iam_policy: ${{ steps.preflight.outputs.can_set_iam_policy }}
     env:
       PROJECT_ID: healthia-6088a
       AUTHORIZE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'authorize' }}
@@ -76,14 +77,38 @@ jobs:
           access_token="$(gcloud auth print-access-token)"
           test -n "$access_token"
           echo "::add-mask::$access_token"
+
           pre_code="$(curl -sS -o /tmp/firebase-apps-pre.json -w '%{http_code}' \
             -H "Authorization: Bearer ${access_token}" \
             -H 'Accept: application/json' \
             "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
           rm -f /tmp/firebase-apps-pre.json
 
+          iam_test_code="$(curl -sS -o /tmp/iam-test.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${access_token}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            -d '{"permissions":["resourcemanager.projects.setIamPolicy"]}' \
+            "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT_ID}:testIamPermissions" || true)"
+          export IAM_TEST_CODE="$iam_test_code"
+          can_set_iam_policy=false
+          if [[ "$iam_test_code" == '200' ]]; then
+            can_set_iam_policy="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              payload=json.loads(Path('/tmp/iam-test.json').read_text(encoding='utf-8'))
+          except Exception:
+              payload={}
+          permissions=set(payload.get('permissions') or []) if isinstance(payload,dict) else set()
+          print('true' if 'resourcemanager.projects.setIamPolicy' in permissions else 'false')
+          PY
+            )"
+          fi
+          rm -f /tmp/iam-test.json
+
           echo "firebase_list_http_status=$pre_code" >> "$GITHUB_OUTPUT"
-          export PRE_CODE="$pre_code"
+          echo "can_set_iam_policy=$can_set_iam_policy" >> "$GITHUB_OUTPUT"
+          export PRE_CODE="$pre_code" CAN_SET_IAM_POLICY="$can_set_iam_policy"
           python - <<'PY'
           import hashlib, json, os
           from pathlib import Path
@@ -93,9 +118,11 @@ jobs:
               'source_sha':os.environ.get('SOURCE_SHA',''),
               'project_id':os.environ['PROJECT_ID'],
               'firebase_management_list_http_status_before':int(os.environ.get('PRE_CODE') or 0),
+              'iam_test_http_status':int(os.environ.get('IAM_TEST_CODE') or 0),
               'active_service_account_sha256':hashlib.sha256(account.encode()).hexdigest(),
               'required_role':'roles/firebasecloudmessaging.viewer',
               'required_permissions':['firebase.clients.get','firebase.clients.list','firebase.projects.get'],
+              'ci_can_set_project_iam_policy':os.environ.get('CAN_SET_IAM_POLICY') == 'true',
               'iam_mutation':False,
               'api_enable_mutation':False,
               'provider_write':False,
@@ -115,8 +142,18 @@ jobs:
             exit 1
           fi
 
-      - name: Grant FCM API Viewer only to active CI service account
+      - name: Enforce CI IAM grant capability before mutation
         if: env.AUTHORIZE_MODE == 'true' && steps.preflight.outputs.firebase_list_http_status != '200'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.preflight.outputs.can_set_iam_policy }}" != 'true' ]]; then
+            echo 'CI principal cannot set project IAM policy; grant must be performed by a separate authorized identity.' >&2
+            exit 1
+          fi
+
+      - name: Grant FCM API Viewer only to active CI service account
+        if: env.AUTHORIZE_MODE == 'true' && steps.preflight.outputs.firebase_list_http_status != '200' && steps.preflight.outputs.can_set_iam_policy == 'true'
         id: grant
         shell: bash
         run: |
