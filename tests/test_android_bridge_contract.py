@@ -165,3 +165,16 @@ def test_firebase_readonly_iam_gate_is_narrow_and_chains_only_after_success() ->
     assert "actions/workflows/android-bridge.yml/dispatches" in workflow
     assert "api_enable_mutation':False" in workflow
     assert "provider_write':False" in workflow
+
+
+def test_fcm_live_proof_uses_unpredictable_nonce_and_waits_for_durable_ack() -> None:
+    workflow = (ROOT / ".github/workflows/google-fcm-live-delivery.yml").read_text(encoding="utf-8")
+    assert "FcmRegistrationWorker.kt" in workflow
+    assert "FcmDeliveryAckWorker.kt" in workflow
+    assert "secrets.token_hex(16)" in workflow
+    assert "proof_id_sha256" in workflow
+    assert "raw_proof_id_exposed':False" in workflow
+    assert "for _ in range(60)" in workflow
+    assert "time.sleep(4)" in workflow
+    assert "I_AUTHORIZE_CONTROLLED_FCM_PROOF" in workflow
+    assert "provider accepted" not in workflow.lower()
