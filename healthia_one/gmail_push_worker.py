@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from healthia_one.config import Settings
@@ -81,7 +82,7 @@ def build_live_runtime(settings: Settings | None = None) -> GmailWorkerRuntime:
 def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_runtime) -> FastAPI:
     app = FastAPI(
         title="HealthIA Gmail Mission Worker",
-        version="1.0",
+        version="1.1",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -142,16 +143,24 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
         }
 
     @app.post("/scheduled/renew-gmail-watches")
-    async def renew_gmail_watches() -> dict[str, Any]:
+    async def renew_gmail_watches(request: Request) -> dict[str, Any]:
         worker = runtime()
+        schedule_time = str(request.headers.get("x-cloudscheduler-scheduletime") or "").strip()
+        job_name = str(request.headers.get("x-cloudscheduler-jobname") or "").strip()
         try:
-            renewed = worker.watch_manager.renew_due()
+            renewed = worker.watch_manager.renew_due(renewal_window=schedule_time or None)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"gmail_watch_renewal_retry:{type(exc).__name__}") from exc
+
+        counts = Counter(status for _, status in renewed)
         return {
             "status": "completed",
-            "renewed_count": len(renewed),
-            "patient_ids": [patient_id for patient_id, _ in renewed],
+            "processed_count": len(renewed),
+            "renewed_count": int(counts.get("renewed", 0)),
+            "disabled_disconnected_count": int(counts.get("disabled_disconnected", 0)),
+            "scheduler_request_bound": bool(schedule_time),
+            "scheduler_job_bound": bool(job_name),
+            "secret_material_exposed": False,
         }
 
     @app.post("/internal/ensure-watch")
