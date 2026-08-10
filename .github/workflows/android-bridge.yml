@@ -1,4 +1,4 @@
-name: Android bridge APK
+name: Android bridge compile + FCM-ready APK
 
 on:
   workflow_dispatch:
@@ -27,11 +27,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Require real Firebase build configuration
+      - name: Classify Firebase build readiness without exposing values
+        id: firebase
         shell: bash
         run: |
           set -euo pipefail
-          missing=0
+          mkdir -p dist/android-apk-readiness
+          ready=true
           for name in \
             HEALTHIA_FIREBASE_APP_ID \
             HEALTHIA_FIREBASE_API_KEY \
@@ -40,20 +42,18 @@ jobs:
           do
             value="${!name:-}"
             if [[ -z "$value" ]]; then
-              echo "${name} is missing; refusing to build an APK that cannot initialize Firebase." >&2
-              missing=1
+              ready=false
             else
               echo "::add-mask::$value"
             fi
           done
-          if [[ "$missing" -ne 0 ]]; then
-            exit 1
-          fi
-          if [[ "$HEALTHIA_FIREBASE_PROJECT_ID" != "healthia-6088a" ]]; then
-            echo "Firebase project id does not match the controlled HealthIA project; refusing build." >&2
-            exit 1
-          fi
-          python - <<'PY'
+
+          if [[ "$ready" == true ]]; then
+            if [[ "$HEALTHIA_FIREBASE_PROJECT_ID" != "healthia-6088a" ]]; then
+              echo "Firebase config is present but belongs to an unexpected project." >&2
+              exit 1
+            fi
+            python - <<'PY'
           import os
           checks = {
               "app_id_shape": len(os.environ["HEALTHIA_FIREBASE_APP_ID"].strip()) >= 12,
@@ -63,7 +63,25 @@ jobs:
           }
           if not all(checks.values()):
               raise SystemExit("Firebase build configuration failed non-secret shape validation")
-          print("Firebase build configuration present and shape-valid; values remain masked.")
+          PY
+          fi
+
+          echo "fcm_ready=$ready" >> "$GITHUB_OUTPUT"
+          export FCM_READY="$ready"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          ready=os.environ.get('FCM_READY')=='true'
+          out={
+              'status':'FCM_READY_BUILD_CONFIG' if ready else 'BLOCKED_FIREBASE_CONFIG',
+              'fcm_ready':ready,
+              'apk_publish_allowed':ready,
+              'compile_allowed':True,
+              'truth_rule':'CODE PASS != FCM-READY APK',
+              'secret_material_exposed':False,
+          }
+          Path('dist/android-apk-readiness/status.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
           PY
 
       - name: Setup Java
@@ -84,11 +102,12 @@ jobs:
           gradle-version: '8.11.1'
           cache-provider: basic
 
-      - name: Build debug APK with Firebase enabled
+      - name: Compile Android debug application
         working-directory: android-health-bridge
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Verify generated BuildConfig is Firebase-capable without exposing values
+        if: steps.firebase.outputs.fcm_ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -111,13 +130,38 @@ jobs:
           print("Generated BuildConfig contains all Firebase identifiers; values not printed.")
           PY
 
-      - name: Rename APK
+      - name: Rename FCM-ready APK
+        if: steps.firebase.outputs.fcm_ready == 'true'
         run: cp android-health-bridge/app/build/outputs/apk/debug/app-debug.apk android-health-bridge/app/build/outputs/apk/debug/HealthIA-Bridge-debug.apk
 
-      - name: Upload APK
+      - name: Upload FCM-ready APK
+        if: steps.firebase.outputs.fcm_ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: HealthIA-Bridge-debug
           path: android-health-bridge/app/build/outputs/apk/debug/HealthIA-Bridge-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Remove non-FCM-ready APK from workspace
+        if: steps.firebase.outputs.fcm_ready != 'true'
+        shell: bash
+        run: rm -f android-health-bridge/app/build/outputs/apk/debug/*.apk
+
+      - name: Upload Android readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Android-APK-Readiness
+          path: dist/android-apk-readiness/status.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce release/manual FCM-ready gate
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.firebase.outputs.fcm_ready }}" != "true" ]]; then
+            echo "FCM-ready APK cannot be published because Firebase build configuration is absent." >&2
+            exit 1
+          fi
