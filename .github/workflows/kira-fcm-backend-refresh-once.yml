@@ -62,6 +62,7 @@ jobs:
           REVISION="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           READINESS_STATUS="$(curl -sS -o /tmp/readiness.json -w '%{http_code}' "$URL/api/readiness")"
           FCM_STATUS="$(curl -sS -o /tmp/fcm.json -w '%{http_code}' -X POST "$URL/api/devices/fcm/register/enable" -H 'Content-Type: application/json' --data '{"device_id":"probe-device","registration_token":"probe-registration-token-1234567890","notifications_opt_in":true}')"
+          export URL REVISION READINESS_STATUS FCM_STATUS
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -84,11 +85,6 @@ jobs:
           if out['status']!='PASS' or not out['fcm_private_notifications']:
             raise SystemExit('Refreshed FCM service failed protected-route readiness proof')
           PY
-        env:
-          URL: ${{ env.URL }}
-          REVISION: ${{ env.REVISION }}
-          READINESS_STATUS: ${{ env.READINESS_STATUS }}
-          FCM_STATUS: ${{ env.FCM_STATUS }}
 
       - name: Upload sanitized refresh evidence
         uses: actions/upload-artifact@v4
