@@ -10,6 +10,7 @@ param(
     [string]$BuildServiceAccount = "healthia-one-build",
     [string]$DeviceSecretName = "healthia-device-token-secret",
     [string]$SessionSecretName = "healthia-session-secret",
+    [string]$MapsSecretName = "healthia-google-maps-api-key",
     [ValidateRange(8, 40)][int]$RequestLimit = 20,
     [ValidateRange(256, 4096)][int]$MaxOutputTokens = 1400,
     [switch]$PublicDemo,
@@ -124,6 +125,17 @@ foreach ($api in $apis) {
 Ensure-Secret $DeviceSecretName "identidad durable de dispositivos"
 Ensure-Secret $SessionSecretName "sesiones firmadas de pacientes"
 
+# Maps is an existing provider credential. Never manufacture or print it here:
+# require an enabled Secret Manager version and mount it directly into Cloud Run.
+$mapsSecretState = (& gcloud secrets versions describe latest `
+    --secret $MapsSecretName `
+    --project $ProjectId `
+    --format "value(state)" 2>$null).Trim()
+if ($LASTEXITCODE -ne 0 -or $mapsSecretState -ne "ENABLED") {
+    throw "Google Maps Secret Manager binding is unavailable or not enabled."
+}
+Write-Host "Google Maps: using existing Secret Manager binding (value not exposed)." -ForegroundColor Green
+
 Ensure-ServiceAccount $BuildServiceAccount $BuildServiceAccountEmail "HealthIA ONE Cloud Build"
 Ensure-ServiceAccount $RuntimeServiceAccount $RuntimeServiceAccountEmail "HealthIA ONE demo runtime"
 
@@ -195,7 +207,7 @@ $args = @(
     "--memory", "512Mi",
     "--timeout", "600",
     "--set-env-vars", $envVars,
-    "--set-secrets", "HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest,HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest",
+    "--set-secrets", "HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest,HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest,GOOGLE_MAPS_API_KEY=${MapsSecretName}:latest",
     "--quiet"
 )
 
