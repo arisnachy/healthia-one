@@ -70,8 +70,33 @@ class GoogleConstellationService:
             raise PermissionError("Google mission does not belong to this patient")
         return mission
 
-    def grant(self, patient_id: str, bundle: GrantBundle, *, enabled: bool = True) -> GoogleGrant:
-        grant = GoogleGrant(patient_id=patient_id, bundle=bundle, enabled=enabled)
+    def grant(
+        self,
+        patient_id: str,
+        bundle: GrantBundle,
+        *,
+        enabled: bool = True,
+        mission_id: str = "",
+        ttl_minutes: int | None = None,
+    ) -> GoogleGrant:
+        mission_id = str(mission_id or "").strip()
+        if mission_id:
+            self.load_mission(patient_id, mission_id)
+        if mission_id and ttl_minutes is not None:
+            grant = GoogleGrant.mission_scoped(
+                patient_id=patient_id,
+                bundle=bundle,
+                mission_id=mission_id,
+                ttl_minutes=min(max(int(ttl_minutes), 1), 1440),
+            )
+            grant.enabled = enabled
+        else:
+            grant = GoogleGrant(
+                patient_id=patient_id,
+                bundle=bundle,
+                enabled=enabled,
+                mission_id=mission_id,
+            )
         self.runtime.grant_store.save(grant)
         return grant
 
@@ -133,9 +158,6 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     server_token_provider = ServerAdcTokenProvider()
     connectors: dict[GoogleService, object] = {}
 
-    # Cloud Run secret env values can inherit a UTF-8 BOM from legacy Windows
-    # provisioning. It is never part of an API key and is invalid in an HTTP
-    # header, so remove it defensively at the trust boundary.
     maps_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip().lstrip("\ufeff")
     if maps_key:
         connectors[GoogleService.MAPS] = HealthIAMapsConnector(maps_key)
@@ -157,8 +179,6 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     connectors[GoogleService.DRIVE] = PatientBoundOAuthProxy(GoogleService.DRIVE, DriveConnector)
     connectors[GoogleService.TASKS] = PatientBoundOAuthProxy(GoogleService.TASKS, TasksConnector)
 
-    # Server-side clinical cloud capabilities use the Cloud Run workload identity
-    # through ADC. They never read patient OAuth refresh secrets.
     connectors[GoogleService.DOCUMENT_AI] = DocumentAIConnector(token_provider=server_token_provider)
     connectors[GoogleService.HEALTHCARE] = HealthcareConnector(token_provider=server_token_provider)
     connectors[GoogleService.FCM] = FCMConnector(token_provider=server_token_provider)
