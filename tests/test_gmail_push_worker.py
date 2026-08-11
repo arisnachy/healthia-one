@@ -56,10 +56,12 @@ class Bridge:
 class Manager:
     def __init__(self):
         self.renew_calls = 0
+        self.renewal_windows = []
         self.ensure_calls = []
 
-    def renew_due(self):
+    def renew_due(self, *, renewal_window=None):
         self.renew_calls += 1
+        self.renewal_windows.append(renewal_window)
         return [("patient_demo", "renewed")]
 
     def ensure_watch(self, patient_id, force=False):
@@ -193,13 +195,43 @@ def test_private_scheduler_and_bootstrap_hooks_use_watch_manager_only():
     worker = runtime(manager=manager)
     client = TestClient(create_app(lambda: worker))
 
-    renewed = client.post("/scheduled/renew-gmail-watches")
+    renewed = client.post(
+        "/scheduled/renew-gmail-watches",
+        headers={
+            "X-CloudScheduler-ScheduleTime": "2026-08-10T05:00:00Z",
+            "X-CloudScheduler-JobName": "projects/demo/locations/us-central1/jobs/healthia-gmail-watch-renewal",
+        },
+    )
     assert renewed.status_code == 200
-    assert renewed.json()["renewed_count"] == 1
+    payload = renewed.json()
+    assert payload["processed_count"] == 1
+    assert payload["renewed_count"] == 1
+    assert payload["disabled_disconnected_count"] == 0
+    assert payload["scheduler_request_bound"] is True
+    assert payload["scheduler_job_bound"] is True
+    assert payload["secret_material_exposed"] is False
+    assert "patient_ids" not in payload
     assert manager.renew_calls == 1
+    assert manager.renewal_windows == ["2026-08-10T05:00:00Z"]
 
     ensured = client.post("/internal/ensure-watch", json={"patient_id": "patient_demo", "force": True})
     assert ensured.status_code == 200
     assert ensured.json()["email_address"] == "patient@example.com"
     assert ensured.json()["secret_material_exposed"] is False
     assert manager.ensure_calls == [("patient_demo", True)]
+
+
+def test_scheduler_retry_preserves_same_idempotency_window():
+    manager = Manager()
+    worker = runtime(manager=manager)
+    client = TestClient(create_app(lambda: worker))
+    headers = {
+        "X-CloudScheduler-ScheduleTime": "2026-08-10T05:00:00Z",
+        "X-CloudScheduler-JobName": "projects/demo/locations/us-central1/jobs/healthia-gmail-watch-renewal",
+    }
+
+    first = client.post("/scheduled/renew-gmail-watches", headers=headers)
+    second = client.post("/scheduled/renew-gmail-watches", headers=headers)
+
+    assert first.status_code == second.status_code == 200
+    assert manager.renewal_windows == ["2026-08-10T05:00:00Z", "2026-08-10T05:00:00Z"]

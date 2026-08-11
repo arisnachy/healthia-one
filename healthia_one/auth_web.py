@@ -67,7 +67,10 @@ def install_patient_auth(
         locale_token = bind_requested_locale(_header_locale(request))
         try:
             path = request.url.path
-            public = path.startswith("/assets/") or path in public_exact
+            # FCM device routes are session-public only because the Android bridge
+            # authenticates with its separately signed pairing bearer. The router
+            # itself rejects missing/revoked/mismatched device credentials.
+            public = path.startswith("/assets/") or path.startswith("/api/devices/fcm/") or path in public_exact
             if settings.auth_required and principal is None and not public:
                 if path == "/":
                     return RedirectResponse("/login", status_code=303)
@@ -144,6 +147,10 @@ def install_patient_auth(
         response = JSONResponse({"authenticated": False, "logged_out": True})
         response.delete_cookie(settings.session_cookie_name, path="/")
         return response
+
+    # FCM routes are mounted once by app.main so they share the production
+    # pairing verifier and registration store with device revocation cleanup.
+    # This module only keeps the browser-session middleware exception above.
 
     # Opportunity and Google Constellation data are mounted after the same
     # patient-session middleware. Neither prefix is public, so Cloud mode always

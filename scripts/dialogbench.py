@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from healthia_one.conversation_brain import ACTION_HINTS, build_frame
+from healthia_one.google_mission_chat import should_consider_google_mission
 from healthia_one.models import ChatMessage, HealthMission, MissionStatus, PatientState, VitalRecord
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,10 +54,26 @@ EN_FOLLOWUPS = (
     ("ordinal", "The second one."),
     ("ellipsis", "And tomorrow?"),
     ("correction", "No, I meant that."),
-    # This deliberately contains an explicit current topic plus a pronoun. It
-    # proves that "result" wins over stale context instead of being overwritten
-    # by the previous action target.
     ("spanglish", "Y that result, is it bad?"),
+)
+
+UNANCHORED_REFERENCES = (
+    "¿Y eso?",
+    "La segunda.",
+    "¿Y lo de ayer?",
+    "What about that?",
+    "The second one.",
+    "And the previous one?",
+)
+
+MISSION_CONTINUATIONS = (
+    ("No, la segunda", True),
+    ("Ese me sirve", True),
+    ("continúa con eso", True),
+    ("the second one", True),
+    ("go ahead with that", True),
+    ("No, hablaba de mi presión", False),
+    ("abre el resultado de laboratorio", False),
 )
 
 
@@ -106,13 +123,12 @@ def evaluate(scenario: Scenario) -> dict:
     routing_lower = frame.routing_text.lower()
     canonical_hint = ACTION_HINTS[scenario.prior_target].lower()
     if scenario.category == "spanglish":
-        # The current turn explicitly names a result. Even though "that"/"it"
-        # makes the sentence referential, the old topic must not be injected.
         resolved = (
             frame.ambiguous_reference
             and "result" in scenario.patient_text.lower()
             and "contextual_routing_hint:" not in routing_lower
             and frame.last_action_target == scenario.prior_target
+            and frame.reference_status == "explicit_current_topic"
         )
     else:
         resolved = (
@@ -120,6 +136,8 @@ def evaluate(scenario: Scenario) -> dict:
             and "contextual_routing_hint:" in routing_lower
             and canonical_hint in routing_lower
             and frame.last_action_target == scenario.prior_target
+            and frame.reference_status == "resolved_recent_context"
+            and not frame.needs_clarification
         )
     preserves_user_words = frame.routing_text.startswith(scenario.patient_text)
     bounded_memory = len(frame.recent_turns) <= 12 and sum(len(item["content"]) for item in frame.recent_turns) <= 6000
@@ -133,23 +151,86 @@ def evaluate(scenario: Scenario) -> dict:
     }
 
 
+def _fail_closed_gate() -> dict:
+    results = []
+    for text in UNANCHORED_REFERENCES:
+        frame = build_frame(PatientState(), text)
+        passed = (
+            frame.ambiguous_reference
+            and frame.needs_clarification
+            and frame.reference_status == "needs_clarification"
+            and frame.resolved_reference is None
+            and frame.routing_text == text
+        )
+        results.append({"text": text, "passed": passed})
+    return {
+        "status": "PASS" if all(item["passed"] for item in results) else "FAIL",
+        "count": len(results),
+        "results": results,
+    }
+
+
+def _google_mission_gate() -> dict:
+    state = PatientState()
+    state.messages.extend([
+        ChatMessage(role="patient", author="Patient", content="Busca una clínica cerca de Santiago."),
+        ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content="Encontré opciones verificables.",
+            metadata={
+                "google_mission_id": "gmission_dialogbench",
+                "google_mission_state": "awaiting_selection",
+            },
+        ),
+    ])
+    results = []
+    for text, expected in MISSION_CONTINUATIONS:
+        actual = should_consider_google_mission(state, text)
+        results.append({"text": text, "expected": expected, "actual": actual, "passed": actual is expected})
+    return {
+        "status": "PASS" if all(item["passed"] for item in results) else "FAIL",
+        "count": len(results),
+        "results": results,
+    }
+
+
 def run() -> dict:
     cases = scenarios()
     results = [evaluate(case) for case in cases]
     passed = [item for item in results if item["resolved"] and item["preserves_user_words"] and item["bounded_memory"]]
     score = len(passed) / len(results) if results else 0.0
+    fail_closed = _fail_closed_gate()
+    google_mission = _google_mission_gate()
+    status = (
+        "PASS"
+        if len(cases) >= 120
+        and score >= 0.98
+        and fail_closed["status"] == "PASS"
+        and google_mission["status"] == "PASS"
+        else "FAIL"
+    )
     report = {
-        "status": "PASS" if len(cases) >= 120 and score >= 0.98 else "FAIL",
+        "status": status,
         "dialogue_count": len(cases),
         "pass_count": len(passed),
         "score": round(score, 4),
-        "gate": {"minimum_dialogues": 120, "minimum_score": 0.98},
+        "gate": {
+            "minimum_dialogues": 120,
+            "minimum_score": 0.98,
+            "unanchored_reference_must_fail_closed": True,
+            "active_google_mission_natural_continuation": True,
+            "explicit_topic_switch_must_outrank_google_mission": True,
+        },
+        "fail_closed_reference_gate": fail_closed,
+        "google_mission_continuation_gate": google_mission,
         "categories": sorted({item["category"] for item in results}),
         "locales": sorted({item["locale"] for item in results}),
         "failures": [item for item in results if item not in passed][:30],
         "claim_boundary": (
-            "This deterministic gate proves bounded context/reference continuity plus explicit-current-topic precedence, "
-            "not perfect human conversation. Live-model naturalness remains a separate submission gate."
+            "This deterministic gate proves bounded context/reference continuity, explicit-current-topic precedence, "
+            "fail-closed behavior for unanchored references, and conversation-native routing into an already durable Google mission. "
+            "It does not claim perfect human conversation or fabricate external mission outcomes."
         ),
     }
     OUTPUT.mkdir(parents=True, exist_ok=True)

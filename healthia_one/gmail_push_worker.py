@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from healthia_one.config import Settings
@@ -24,6 +27,11 @@ from healthia_one.google_constellation_runtime import (
     build_google_constellation_service,
 )
 from healthia_one.google_oauth_credentials import SecretManagerOAuthTokenProvider
+
+
+# Uvicorn owns the configured stdout/stderr handlers in Cloud Run. Reuse its
+# error logger so PHI-neutral Scheduler aggregate evidence is actually emitted.
+logger = logging.getLogger("uvicorn.error")
 
 
 class EnsureWatchRequest(BaseModel):
@@ -81,7 +89,7 @@ def build_live_runtime(settings: Settings | None = None) -> GmailWorkerRuntime:
 def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_runtime) -> FastAPI:
     app = FastAPI(
         title="HealthIA Gmail Mission Worker",
-        version="1.0",
+        version="1.1",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -95,7 +103,6 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
-        # Does not initialize Firestore/Secret Manager and exposes no patient data.
         return {"status": "ok", "service": "healthia-gmail-worker"}
 
     @app.post("/events/gmail-push")
@@ -103,22 +110,13 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
         try:
             notification = decode_gmail_pubsub_push(envelope)
         except ValueError:
-            # The payload cannot become valid on retry. Cloud Run IAM is the
-            # authentication boundary; ack malformed Pub/Sub data without
-            # touching Gmail or exposing the body in logs/responses.
             return Response(status_code=204)
 
         worker = runtime()
         watch = worker.watch_store.load_by_email(notification.email_address)
         if watch is None:
-            # An authorized Pub/Sub topic can carry mailbox events that no longer
-            # belong to an active HealthIA watch. Ack without querying Gmail.
             return Response(status_code=204)
 
-        # A delayed push can arrive after the patient disconnects Google or
-        # switches accounts. Disable the stale cursor and ACK without reading
-        # Gmail/Secret Manager. This makes disconnect immediate from HealthIA's
-        # perspective even if Gmail/PubSub delivery was already in flight.
         connection = worker.constellation.runtime.oauth_connection_store.load(watch.patient_id)
         mailbox = str(connection.google_account or "").strip().lower() if connection else ""
         if connection is None or not connection.enabled or mailbox != watch.email_address.strip().lower():
@@ -129,11 +127,8 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
         try:
             missions = worker.bridge.process(watch.patient_id, envelope)
         except PermissionError:
-            # Mailbox/watch mismatch is non-retryable and must not read history.
             return Response(status_code=204)
         except Exception as exc:
-            # Transient Gmail/Firestore/Gemini failures should be retried by
-            # Pub/Sub. Do not leak mailbox, patient, message or secret details.
             raise HTTPException(status_code=503, detail=f"gmail_event_retry:{type(exc).__name__}") from exc
         return {
             "status": "processed",
@@ -142,22 +137,43 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
         }
 
     @app.post("/scheduled/renew-gmail-watches")
-    async def renew_gmail_watches() -> dict[str, Any]:
+    async def renew_gmail_watches(request: Request) -> dict[str, Any]:
         worker = runtime()
+        schedule_time = str(request.headers.get("x-cloudscheduler-scheduletime") or "").strip()
+        job_name = str(request.headers.get("x-cloudscheduler-jobname") or "").strip()
         try:
-            renewed = worker.watch_manager.renew_due()
+            renewed = worker.watch_manager.renew_due(renewal_window=schedule_time or None)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"gmail_watch_renewal_retry:{type(exc).__name__}") from exc
-        return {
+
+        counts = Counter(status for _, status in renewed)
+        payload = {
             "status": "completed",
-            "renewed_count": len(renewed),
-            "patient_ids": [patient_id for patient_id, _ in renewed],
+            "processed_count": len(renewed),
+            "renewed_count": int(counts.get("renewed", 0)),
+            "disabled_disconnected_count": int(counts.get("disabled_disconnected", 0)),
+            "scheduler_request_bound": bool(schedule_time),
+            "scheduler_job_bound": bool(job_name),
+            "secret_material_exposed": False,
         }
+        logger.info(
+            json.dumps(
+                {
+                    "event": "healthia_gmail_watch_scheduler",
+                    "processed_count": payload["processed_count"],
+                    "renewed_count": payload["renewed_count"],
+                    "disabled_disconnected_count": payload["disabled_disconnected_count"],
+                    "scheduler_request_bound": payload["scheduler_request_bound"],
+                    "scheduler_job_bound": payload["scheduler_job_bound"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return payload
 
     @app.post("/internal/ensure-watch")
     async def ensure_watch(payload: EnsureWatchRequest) -> dict[str, Any]:
-        # Private IAM-only bootstrap/repair hook. Mailbox identity is still read
-        # from the patient's stored OAuth connection; callers cannot supply it.
         worker = runtime()
         try:
             watch, status = worker.watch_manager.ensure_watch(

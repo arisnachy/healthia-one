@@ -64,19 +64,24 @@ def screenshot(page: Page, name: str) -> None:
 
 
 def answer_visible_block(page: Page) -> None:
-    """Answer all five contract questions through the patient-visible 2+3 flow."""
+    """Answer all five Gemini questions through the shipped one-at-a-time conversation UI."""
     block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
     require(block.locator(".clinical-question").count() == 5, "dynamic clinical block is not exactly five questions")
-    require(block.locator(".clinical-question:visible").count() == 2, "progressive clinical block must start with two visible questions")
-    reveal = block.locator(".clinical-show-all")
-    require(reveal.is_visible(), "progressive clinical block has no 2+3 continuation control")
-    reveal.click()
-    require(block.locator(".clinical-question:visible").count() == 5, "remaining three clinical questions did not reveal")
-    for field in block.locator(".clinical-question").all():
-        field.locator(".clinical-option").first.click()
-    submit = block.locator(".clinical-submit")
-    require(submit.is_visible(), "clinical submit did not appear after revealing all five questions")
-    submit.click()
+    control = block.locator(".clinical-next-question")
+    require(control.is_visible(), "clinical conversational continuation control is missing")
+    for index in range(5):
+        visible = block.locator(".clinical-question:visible")
+        require(visible.count() == 1, f"clinical conversation must expose exactly one question at turn {index + 1}")
+        field = visible.first
+        detail = field.locator(".clinical-detail")
+        require(detail.is_visible(), f"clinical free-text answer is missing at turn {index + 1}")
+        detail.fill(f"Synthetic demo answer {index + 1}")
+        expected = "Send and continue" if index == 4 else "Continue"
+        require(control.inner_text().strip() == expected, f"clinical control text mismatch at turn {index + 1}")
+        control.click()
+        if index < 4:
+            page.wait_for_timeout(150)
+            require(block.locator(".clinical-question:visible").count() == 1, f"next clinical question did not advance at turn {index + 1}")
 
 
 def latest_assistant(page: Page) -> tuple[str, str]:

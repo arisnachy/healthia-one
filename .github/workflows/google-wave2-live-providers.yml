@@ -1,0 +1,245 @@
+name: Google Wave 2 authorized LIVE providers
+
+on:
+  workflow_dispatch:
+    inputs:
+      cost_authorization:
+        description: "Type I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: healthia-wave2-authorized-live-providers
+  cancel-in-progress: false
+
+jobs:
+  live-providers:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      PROJECT_ID: healthia-6088a
+      LOCATION: us-central1
+      TARGET_BRANCH: kira/google-constellation-wave2-live
+      AUTHORIZATION: ${{ inputs.cost_authorization }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Enforce exact authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$AUTHORIZATION" == "I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE" ]] || { echo 'Exact STT/DocumentAI/Healthcare authorization is required.' >&2; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Bind exact source
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Grant only temporary roles missing from the CI identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"; test -n "$ACCOUNT"; echo "::add-mask::$ACCOUNT"
+          MEMBER="serviceAccount:$ACCOUNT"; echo "::add-mask::$MEMBER"; printf '%s' "$MEMBER" >/tmp/wave2-member
+          : >/tmp/wave2-granted-roles
+          roles=(
+            roles/serviceusage.serviceUsageAdmin
+            roles/speech.client
+            roles/documentai.editor
+            roles/storage.admin
+            roles/healthcare.datasetAdmin
+            roles/healthcare.fhirStoreAdmin
+            roles/healthcare.fhirResourceEditor
+            roles/healthcare.dicomStoreAdmin
+            roles/healthcare.dicomEditor
+          )
+          for role in "${roles[@]}"; do
+            if gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role:$role AND bindings.members:$MEMBER" --format='value(bindings.role)' | grep -Fxq "$role"; then
+              echo "Preserving pre-existing role: $role"
+            else
+              gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$role" --condition=None --quiet >/dev/null
+              printf '%s\n' "$role" >>/tmp/wave2-granted-roles
+            fi
+          done
+          sleep 90
+
+      - name: Enable only the explicitly authorized APIs and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud services enable speech.googleapis.com documentai.googleapis.com healthcare.googleapis.com --project "$PROJECT_ID" --quiet
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          for api in speech.googleapis.com documentai.googleapis.com healthcare.googleapis.com; do
+            grep -Fxq "$api" <<<"$enabled" || { echo "Authorized API not enabled: $api" >&2; exit 1; }
+          done
+
+      - name: Speech-to-Text LIVE synthetic proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-live-providers
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq espeak-ng ffmpeg >/dev/null
+          espeak-ng -v en-us -s 95 -g 22 -w /tmp/healthia-wave2-raw.wav "one. two. three. one. two. three. healthia synthetic control."
+          ffmpeg -v error -y -i /tmp/healthia-wave2-raw.wav -ar 16000 -ac 1 -c:a pcm_s16le /tmp/healthia-wave2.wav
+          rm -f /tmp/healthia-wave2-raw.wav
+          ACCESS="$(gcloud auth print-access-token)"; echo "::add-mask::$ACCESS"; export ACCESS
+          python - <<'PY'
+          import base64,hashlib,json,os,re,urllib.request,wave
+          from pathlib import Path
+          p=Path('/tmp/healthia-wave2.wav')
+          with wave.open(str(p),'rb') as w: rate=w.getframerate(); channels=w.getnchannels(); width=w.getsampwidth()
+          if (rate,channels,width)!=(16000,1,2): raise SystemExit('Synthetic control WAV normalization failed')
+          payload={'config':{'encoding':'LINEAR16','sampleRateHertz':16000,'languageCode':'en-US','speechContexts':[{'phrases':['one','two','three','healthia synthetic control'],'boost':18.0}]},'audio':{'content':base64.b64encode(p.read_bytes()).decode('ascii')}}
+          req=urllib.request.Request('https://speech.googleapis.com/v1/speech:recognize',data=json.dumps(payload,separators=(',',':')).encode(),headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Content-Type':'application/json'},method='POST')
+          with urllib.request.urlopen(req,timeout=90) as r: body=json.loads(r.read().decode() or '{}'); status=r.status
+          transcript=' '.join(str((x.get('alternatives') or [{}])[0].get('transcript') or '') for x in body.get('results') or []).strip()
+          tokens=set(re.findall(r'[a-z0-9]+',transcript.lower())); controls=[{'one','1'},{'two','2'},{'three','3'}]; hits=sum(1 for group in controls if group & tokens)
+          if not transcript or hits<2: raise SystemExit('STT did not match at least two numeric control concepts')
+          out={'status':'LIVE_PASS','provider':'speech.googleapis.com','http_status':status,'expected_control_concept_hits':hits,'recognized_text_sha256':hashlib.sha256(transcript.encode()).hexdigest(),'normalized_pcm_16khz_mono':True,'synthetic_audio':True,'raw_transcript_exposed':False,'clinical_content':False,'secret_material_exposed':False}
+          Path('dist/wave2-live-providers/stt.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True)); p.unlink(missing_ok=True)
+          PY
+
+      - name: Dispatch canonical private-GCS Document AI LIVE proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run google-wave2-documentai-gcs-proof.yml --repo "$GITHUB_REPOSITORY" --ref "$TARGET_BRANCH" -f mode=live -f cost_authorization="$AUTHORIZATION"
+          run_id=''
+          for _ in $(seq 1 40); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow google-wave2-documentai-gcs-proof.yml --branch "$TARGET_BRANCH" --event workflow_dispatch --limit 30 --json databaseId,headSha,createdAt | jq -r --arg sha "$SOURCE_SHA" '[.[] | select(.headSha==$sha)] | sort_by(.createdAt) | reverse | .[0].databaseId // empty')"
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          [[ -n "$run_id" ]] || { echo 'Document AI/GCS run not observed.' >&2; exit 1; }
+          echo "DOCUMENTAI_RUN_ID=$run_id" >> "$GITHUB_ENV"
+          for _ in $(seq 1 240); do
+            state="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq '[.status,(.conclusion // "")]|join("|")' 2>/dev/null || true)"
+            [[ "$state" == completed\|success ]] && break
+            if [[ "$state" == completed\|* ]]; then echo "Document AI/GCS run failed: $state" >&2; exit 1; fi
+            sleep 5
+          done
+          state="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq '[.status,(.conclusion // "")]|join("|")' 2>/dev/null || true)"
+          [[ "$state" == completed\|success ]] || { echo "Document AI/GCS run did not finish successfully: $state" >&2; exit 1; }
+          jq -n --arg run_id "$run_id" '{status:"LIVE_PASS",provider:"documentai.googleapis.com",private_gcs:true,provider_run_id:$run_id,clinical_content:false,secret_material_exposed:false}' > dist/wave2-live-providers/documentai.json
+
+      - name: Create Healthcare dataset and stores using LRO-aware gcloud lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix="$(printf '%s' "$GITHUB_RUN_ID" | tr -cd '[:alnum:]' | tail -c 20)"
+          DATASET_ID="wave2${suffix}"; FHIR_ID="fhir${suffix}"; DICOM_ID="dicom${suffix}"
+          printf '%s' "$DATASET_ID" >/tmp/healthcare-dataset; printf '%s' "$FHIR_ID" >/tmp/healthcare-fhir; printf '%s' "$DICOM_ID" >/tmp/healthcare-dicom
+          gcloud healthcare datasets create "$DATASET_ID" --location="$LOCATION" --project="$PROJECT_ID" --quiet
+          gcloud healthcare fhir-stores create "$FHIR_ID" --dataset="$DATASET_ID" --location="$LOCATION" --project="$PROJECT_ID" --version=R4 --quiet
+          gcloud healthcare dicom-stores create "$DICOM_ID" --dataset="$DATASET_ID" --location="$LOCATION" --project="$PROJECT_ID" --quiet
+
+      - name: Healthcare FHIR R4 create+reread and DICOM STOW+metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet 'pydicom>=3,<4'
+          DATASET_ID="$(cat /tmp/healthcare-dataset)"; FHIR_ID="$(cat /tmp/healthcare-fhir)"; DICOM_ID="$(cat /tmp/healthcare-dicom)"
+          ACCESS="$(gcloud auth print-access-token)"; echo "::add-mask::$ACCESS"; export ACCESS DATASET_ID FHIR_ID DICOM_ID
+          python - <<'PY'
+          import hashlib,json,os,urllib.parse,urllib.request
+          from pathlib import Path
+          from pydicom.dataset import FileDataset,FileMetaDataset
+          from pydicom.uid import ExplicitVRLittleEndian,SecondaryCaptureImageStorage,generate_uid
+          root=f"https://healthcare.googleapis.com/v1/projects/{os.environ['PROJECT_ID']}/locations/{os.environ['LOCATION']}/datasets/{os.environ['DATASET_ID']}"
+          fhir=root+f"/fhirStores/{os.environ['FHIR_ID']}/fhir"
+          body={'resourceType':'Patient','active':True,'meta':{'tag':[{'system':'https://healthia.invalid/proof','code':'synthetic-wave2'}]}}
+          req=urllib.request.Request(fhir+'/Patient',data=json.dumps(body,separators=(',',':')).encode(),headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Content-Type':'application/fhir+json','Accept':'application/fhir+json'},method='POST')
+          with urllib.request.urlopen(req,timeout=120) as r: created=json.loads(r.read().decode() or '{}')
+          rid=str(created.get('id') or '');
+          if not rid: raise SystemExit('FHIR provider did not return a resource id')
+          req=urllib.request.Request(fhir+'/Patient/'+rid,headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Accept':'application/fhir+json'},method='GET')
+          with urllib.request.urlopen(req,timeout=120) as r: reread=json.loads(r.read().decode() or '{}')
+          if reread.get('resourceType')!='Patient' or reread.get('id')!=rid: raise SystemExit('FHIR R4 create+reread failed')
+          meta=FileMetaDataset(); study=generate_uid(); series=generate_uid(); sop=generate_uid(); meta.MediaStorageSOPClassUID=SecondaryCaptureImageStorage; meta.MediaStorageSOPInstanceUID=sop; meta.TransferSyntaxUID=ExplicitVRLittleEndian; meta.ImplementationClassUID=generate_uid()
+          ds=FileDataset(None,{},file_meta=meta,preamble=b'\0'*128); ds.SOPClassUID=SecondaryCaptureImageStorage; ds.SOPInstanceUID=sop; ds.StudyInstanceUID=study; ds.SeriesInstanceUID=series; ds.PatientName='SYNTHETIC^HEALTHIA'; ds.PatientID='SYNTHETIC'; ds.Modality='OT'; ds.StudyDate='20260810'; ds.SeriesNumber='1'; ds.InstanceNumber='1'; ds.SamplesPerPixel=1; ds.PhotometricInterpretation='MONOCHROME2'; ds.Rows=1; ds.Columns=1; ds.BitsAllocated=8; ds.BitsStored=8; ds.HighBit=7; ds.PixelRepresentation=0; ds.PixelData=b'\0\0'
+          path=Path('/tmp/healthia-wave2.dcm'); import pydicom; pydicom.dcmwrite(path,ds,enforce_file_format=True); payload=path.read_bytes(); boundary='healthia-wave2-boundary'; multipart=(('--'+boundary+'\r\nContent-Type: application/dicom\r\n\r\n').encode()+payload+('\r\n--'+boundary+'--\r\n').encode())
+          dicom=root+f"/dicomStores/{os.environ['DICOM_ID']}/dicomWeb"; req=urllib.request.Request(dicom+'/studies',data=multipart,headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Content-Type':f'multipart/related; type="application/dicom"; boundary={boundary}','Accept':'application/dicom+json'},method='POST')
+          with urllib.request.urlopen(req,timeout=120) as r:
+              if r.status not in (200,202): raise SystemExit('DICOM STOW failed')
+              r.read()
+          url=dicom+'/studies/'+urllib.parse.quote(study,safe='.')+'/series/'+urllib.parse.quote(series,safe='.')+'/instances/'+urllib.parse.quote(sop,safe='.')+'/metadata'; req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Accept':'application/dicom+json'},method='GET')
+          with urllib.request.urlopen(req,timeout=120) as r: metadata=json.loads(r.read().decode() or '[]')
+          if not isinstance(metadata,list) or not metadata: raise SystemExit('DICOM metadata reread was empty')
+          out={'status':'LIVE_PASS','provider':'healthcare.googleapis.com','fhir_version':'R4','fhir_create_reread':True,'dicom_stow_metadata_reread':True,'fhir_resource_id_sha256':hashlib.sha256(rid.encode()).hexdigest(),'dicom_instance_sha256':hashlib.sha256(payload).hexdigest(),'synthetic_resources_only':True,'clinical_content':False,'secret_material_exposed':False}
+          Path('dist/wave2-live-providers/healthcare.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True)); path.unlink(missing_ok=True)
+          PY
+
+      - name: Cleanup synthetic Healthcare resources
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          DATASET_ID="$(cat /tmp/healthcare-dataset 2>/dev/null)"; FHIR_ID="$(cat /tmp/healthcare-fhir 2>/dev/null)"; DICOM_ID="$(cat /tmp/healthcare-dicom 2>/dev/null)"
+          [[ -n "$DICOM_ID" && -n "$DATASET_ID" ]] && gcloud healthcare dicom-stores delete "$DICOM_ID" --dataset="$DATASET_ID" --location="$LOCATION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1
+          [[ -n "$FHIR_ID" && -n "$DATASET_ID" ]] && gcloud healthcare fhir-stores delete "$FHIR_ID" --dataset="$DATASET_ID" --location="$LOCATION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1
+          [[ -n "$DATASET_ID" ]] && gcloud healthcare datasets delete "$DATASET_ID" --location="$LOCATION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1
+          set -e
+          cleaned=false
+          if [[ -n "$DATASET_ID" ]]; then for _ in $(seq 1 20); do if ! gcloud healthcare datasets describe "$DATASET_ID" --location="$LOCATION" --project="$PROJECT_ID" >/dev/null 2>&1; then cleaned=true; break; fi; sleep 3; done; fi
+          mkdir -p dist/wave2-live-providers
+          CLEANED="$cleaned" python - <<'PY'
+          import json,os
+          from pathlib import Path
+          Path('dist/wave2-live-providers/healthcare-cleanup.json').write_text(json.dumps({'dataset_absent_after_cleanup':os.environ.get('CLEANED')=='true','secret_material_exposed':False},sort_keys=True,indent=2)+'\n')
+          PY
+
+      - name: Remove only roles granted by this run
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f /tmp/wave2-member && -f /tmp/wave2-granted-roles ]]; then MEMBER="$(cat /tmp/wave2-member)"; echo "::add-mask::$MEMBER"; while IFS= read -r role; do [[ -z "$role" ]] && continue; gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$role" --condition=None --quiet >/dev/null || gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$role" --quiet >/dev/null; done </tmp/wave2-granted-roles; fi
+
+      - name: Build sanitized LIVE summary and enforce cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-live-providers
+          left=0; granted=0
+          if [[ -f /tmp/wave2-member && -f /tmp/wave2-granted-roles ]]; then MEMBER="$(cat /tmp/wave2-member)"; echo "::add-mask::$MEMBER"; granted="$(grep -cve '^$' /tmp/wave2-granted-roles || true)"; while IFS= read -r role; do [[ -z "$role" ]] && continue; if gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role:$role AND bindings.members:$MEMBER" --format='value(bindings.role)' | grep -Fxq "$role"; then left=$((left+1)); fi; done </tmp/wave2-granted-roles; fi
+          export LEFT="$left" GRANTED="$granted"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path('dist/wave2-live-providers')
+          def read(n): p=root/n; return json.loads(p.read_text()) if p.exists() else {}
+          s=read('stt.json'); d=read('documentai.json'); h=read('healthcare.json'); c=read('healthcare-cleanup.json')
+          passed=s.get('status')=='LIVE_PASS' and d.get('status')=='LIVE_PASS' and h.get('status')=='LIVE_PASS' and c.get('dataset_absent_after_cleanup') is True
+          out={'status':'LIVE_PASS' if passed else 'INCOMPLETE','stt_live_pass':s.get('status')=='LIVE_PASS','documentai_private_gcs_live_pass':d.get('status')=='LIVE_PASS','healthcare_fhir_dicom_live_pass':h.get('status')=='LIVE_PASS','healthcare_cleanup_pass':c.get('dataset_absent_after_cleanup') is True,'temporary_roles_granted_count':int(os.environ.get('GRANTED','0') or 0),'temporary_roles_remaining_count':int(os.environ.get('LEFT','0') or 0),'veo_authorized':False,'clinical_content':False,'secret_material_exposed':False,'source_sha':os.environ.get('SOURCE_SHA','')}
+          (root/'summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
+          if out['temporary_roles_remaining_count']!=0: raise SystemExit('Temporary provider role cleanup failed')
+          if out['status']!='LIVE_PASS': raise SystemExit('Authorized provider LIVE proof incomplete')
+          PY
+          rm -f /tmp/wave2-member /tmp/wave2-granted-roles /tmp/healthcare-dataset /tmp/healthcare-fhir /tmp/healthcare-dicom
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/wave2-live-providers; then rm -rf dist/wave2-live-providers; exit 1; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: HealthIA-Wave2-Authorized-LIVE-Providers
+          path: dist/wave2-live-providers
+          if-no-files-found: warn
+          retention-days: 30

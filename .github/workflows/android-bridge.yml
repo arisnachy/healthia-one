@@ -1,15 +1,19 @@
-name: Android bridge APK
+name: Android bridge compile + FCM-ready APK
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - 'android-health-bridge/**'
+      - 'scripts/extract_firebase_android_config.py'
+      - 'tests/test_firebase_android_config_extractor.py'
       - '.github/workflows/android-bridge.yml'
   push:
     branches: [main]
     paths:
       - 'android-health-bridge/**'
+      - 'scripts/extract_firebase_android_config.py'
+      - 'tests/test_firebase_android_config_extractor.py'
       - '.github/workflows/android-bridge.yml'
 
 permissions:
@@ -18,32 +22,299 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    env:
+      HEALTHIA_FIREBASE_ANDROID_CONFIG_B64: ${{ secrets.HEALTHIA_FIREBASE_ANDROID_CONFIG_B64 }}
+      HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON: ${{ secrets.HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON }}
+      HEALTHIA_FIREBASE_APP_ID: ${{ secrets.HEALTHIA_FIREBASE_APP_ID }}
+      HEALTHIA_FIREBASE_API_KEY: ${{ secrets.HEALTHIA_FIREBASE_API_KEY }}
+      HEALTHIA_FIREBASE_PROJECT_ID: ${{ secrets.HEALTHIA_FIREBASE_PROJECT_ID }}
+      HEALTHIA_FIREBASE_SENDER_ID: ${{ secrets.HEALTHIA_FIREBASE_SENDER_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Detect Google Cloud credential availability without exposing it
+        id: gcp
+        shell: bash
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${GCP_CREDENTIALS:-}" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate to Google Cloud for ephemeral Firebase config retrieval
+        if: steps.gcp.outputs.available == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud for ephemeral Firebase config retrieval
+        if: steps.gcp.outputs.available == 'true'
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Classify Firebase build readiness without exposing values
+        id: firebase
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android-apk-readiness
+          config_source=NONE
+          env_file=/tmp/healthia-firebase.env
+          rm -f "$env_file"
+
+          cleanup_firebase_tmp() {
+            rm -f \
+              /tmp/healthia-firebase.env \
+              /tmp/firebase-android-apps.json \
+              /tmp/firebase-config-response.json \
+              /tmp/firebase-config.b64 \
+              /tmp/firebase-app-name.txt
+          }
+          trap cleanup_firebase_tmp EXIT
+
+          # Preferred one-secret path: a single-line Base64 encoding of the official
+          # google-services.json. The parser is unit-tested with synthetic config and
+          # receives secret material only on stdin; it never prints extracted values.
+          if [[ -n "${HEALTHIA_FIREBASE_ANDROID_CONFIG_B64:-}" ]]; then
+            echo "::add-mask::$HEALTHIA_FIREBASE_ANDROID_CONFIG_B64"
+            printf '%s' "$HEALTHIA_FIREBASE_ANDROID_CONFIG_B64" | \
+              python scripts/extract_firebase_android_config.py \
+                --format base64 \
+                --package com.healthia.one.bridge \
+                --project healthia-6088a \
+                --output "$env_file"
+            config_source=GOOGLE_SERVICES_JSON_BASE64_SECRET
+          elif [[ -n "${HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON:-}" ]]; then
+            # Compatibility path for a pre-existing raw JSON secret.
+            echo "::add-mask::$HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON"
+            printf '%s' "$HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON" | \
+              python scripts/extract_firebase_android_config.py \
+                --format json \
+                --package com.healthia.one.bridge \
+                --project healthia-6088a \
+                --output "$env_file"
+            config_source=GOOGLE_SERVICES_JSON_SECRET
+          fi
+
+          # Zero-manual-secret path: when the controlled Google Cloud identity is
+          # available, read the official Android app configuration directly from the
+          # Firebase Management API. The provider response exists only under /tmp,
+          # is parsed into the four allow-listed BuildConfig variables, and is then
+          # deleted. No Firebase config body or identifier value is printed/uploaded.
+          if [[ ! -s "$env_file" && "${{ steps.gcp.outputs.available }}" == "true" ]]; then
+            access_token="$(gcloud auth print-access-token 2>/dev/null || true)"
+            if [[ -n "$access_token" ]]; then
+              echo "::add-mask::$access_token"
+              firebase_list_code="$(curl -sS -o /tmp/firebase-android-apps.json -w '%{http_code}' \
+                -H "Authorization: Bearer ${access_token}" \
+                -H 'Accept: application/json' \
+                'https://firebase.googleapis.com/v1beta1/projects/healthia-6088a/androidApps' || true)"
+
+              if [[ "$firebase_list_code" == "200" ]]; then
+                python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/firebase-android-apps.json').read_text(encoding='utf-8'))
+          apps = payload.get('apps') or []
+          matches = [
+              app for app in apps
+              if isinstance(app, dict)
+              and str(app.get('packageName') or '') == 'com.healthia.one.bridge'
+              and str(app.get('projectId') or '') == 'healthia-6088a'
+              and str(app.get('state') or 'ACTIVE') == 'ACTIVE'
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f'Expected exactly one active controlled Firebase Android app; found {len(matches)}')
+          name = str(matches[0].get('name') or '').strip()
+          if not name.startswith('projects/healthia-6088a/androidApps/'):
+              raise SystemExit('Firebase Android app resource belongs to an unexpected project')
+          Path('/tmp/firebase-app-name.txt').write_text(name, encoding='utf-8')
+          PY
+
+                firebase_app_name="$(cat /tmp/firebase-app-name.txt)"
+                echo "::add-mask::$firebase_app_name"
+                firebase_config_code="$(curl -sS -o /tmp/firebase-config-response.json -w '%{http_code}' \
+                  -H "Authorization: Bearer ${access_token}" \
+                  -H 'Accept: application/json' \
+                  "https://firebase.googleapis.com/v1beta1/${firebase_app_name}/config" || true)"
+
+                if [[ "$firebase_config_code" == "200" ]]; then
+                  python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/firebase-config-response.json').read_text(encoding='utf-8'))
+          filename = str(payload.get('configFilename') or '').strip()
+          contents = str(payload.get('configFileContents') or '').strip()
+          if filename != 'google-services.json' or not contents:
+              raise SystemExit('Firebase Management API did not return the expected Android configuration artifact')
+          Path('/tmp/firebase-config.b64').write_text(contents, encoding='ascii')
+          PY
+                  python scripts/extract_firebase_android_config.py \
+                    --format base64 \
+                    --package com.healthia.one.bridge \
+                    --project healthia-6088a \
+                    --output "$env_file" < /tmp/firebase-config.b64
+                  config_source=FIREBASE_MANAGEMENT_API_EPHEMERAL
+                fi
+              fi
+            fi
+          fi
+
+          if [[ -s "$env_file" ]]; then
+            while IFS='=' read -r name value; do
+              [[ -z "$name" || -z "$value" ]] && continue
+              case "$name" in
+                HEALTHIA_FIREBASE_APP_ID|HEALTHIA_FIREBASE_API_KEY|HEALTHIA_FIREBASE_PROJECT_ID|HEALTHIA_FIREBASE_SENDER_ID) ;;
+                *) echo "Unexpected Firebase env name; refusing build." >&2; exit 1 ;;
+              esac
+              echo "::add-mask::$value"
+              printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
+              export "$name=$value"
+            done < "$env_file"
+            rm -f "$env_file"
+          fi
+
+          ready=true
+          for name in \
+            HEALTHIA_FIREBASE_APP_ID \
+            HEALTHIA_FIREBASE_API_KEY \
+            HEALTHIA_FIREBASE_PROJECT_ID \
+            HEALTHIA_FIREBASE_SENDER_ID
+          do
+            value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              ready=false
+            else
+              echo "::add-mask::$value"
+            fi
+          done
+
+          if [[ "$ready" == true && "$config_source" == NONE ]]; then
+            config_source=FOUR_ACTIONS_SECRETS
+            if [[ "$HEALTHIA_FIREBASE_PROJECT_ID" != "healthia-6088a" ]]; then
+              echo "Firebase config is present but belongs to an unexpected project." >&2
+              exit 1
+            fi
+            python - <<'PY'
+          import os, re
+          checks = {
+              'app_id_shape': bool(re.fullmatch(r'1:[0-9]+:android:[0-9A-Za-z]+', os.environ['HEALTHIA_FIREBASE_APP_ID'].strip())),
+              'api_key_shape': len(os.environ['HEALTHIA_FIREBASE_API_KEY'].strip()) >= 20,
+              'project_id_shape': os.environ['HEALTHIA_FIREBASE_PROJECT_ID'].strip() == 'healthia-6088a',
+              'sender_id_shape': os.environ['HEALTHIA_FIREBASE_SENDER_ID'].strip().isdigit(),
+          }
+          if not all(checks.values()):
+              raise SystemExit('Firebase fallback build configuration failed non-secret shape validation')
+          PY
+          fi
+
+          echo "fcm_ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "config_source=$config_source" >> "$GITHUB_OUTPUT"
+          export FCM_READY="$ready" CONFIG_SOURCE="$config_source"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          ready=os.environ.get('FCM_READY')=='true'
+          out={
+              'status':'FCM_READY_BUILD_CONFIG' if ready else 'BLOCKED_FIREBASE_CONFIG',
+              'fcm_ready':ready,
+              'config_source':os.environ.get('CONFIG_SOURCE','NONE'),
+              'apk_publish_allowed':ready,
+              'compile_allowed':True,
+              'truth_rule':'CODE PASS != FCM-READY APK',
+              'secret_material_exposed':False,
+          }
+          Path('dist/android-apk-readiness/status.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
       - name: Install Android API 36
         run: sdkmanager "platforms;android-36"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.11.1'
           cache-provider: basic
-      - name: Build debug APK
+
+      - name: Compile Android debug application
         working-directory: android-health-bridge
         run: gradle :app:assembleDebug --stacktrace
-      - name: Rename APK
+
+      - name: Verify generated BuildConfig is Firebase-capable without exposing values
+        if: steps.firebase.outputs.fcm_ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_config="$(find android-health-bridge/app/build/generated -type f -name 'BuildConfig.java' -path '*debug*' | head -n 1)"
+          test -n "$build_config" && test -f "$build_config"
+          python - "$build_config" <<'PY'
+          import re, sys
+          from pathlib import Path
+          text = Path(sys.argv[1]).read_text(encoding="utf-8")
+          names = (
+              "FIREBASE_APP_ID",
+              "FIREBASE_API_KEY",
+              "FIREBASE_PROJECT_ID",
+              "FIREBASE_SENDER_ID",
+          )
+          for name in names:
+              match = re.search(rf'{name}\s*=\s*"([^"]*)"', text)
+              if not match or not match.group(1).strip():
+                  raise SystemExit(f"Generated BuildConfig has empty {name}; refusing artifact upload")
+          print("Generated BuildConfig contains all Firebase identifiers; values not printed.")
+          PY
+
+      - name: Rename FCM-ready APK
+        if: steps.firebase.outputs.fcm_ready == 'true'
         run: cp android-health-bridge/app/build/outputs/apk/debug/app-debug.apk android-health-bridge/app/build/outputs/apk/debug/HealthIA-Bridge-debug.apk
-      - name: Upload APK
+
+      - name: Upload FCM-ready APK
+        if: steps.firebase.outputs.fcm_ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: HealthIA-Bridge-debug
           path: android-health-bridge/app/build/outputs/apk/debug/HealthIA-Bridge-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Remove non-FCM-ready APK from workspace
+        if: steps.firebase.outputs.fcm_ready != 'true'
+        shell: bash
+        run: rm -f android-health-bridge/app/build/outputs/apk/debug/*.apk
+
+      - name: Upload Android readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Android-APK-Readiness
+          path: dist/android-apk-readiness/status.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce release/manual FCM-ready gate
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.firebase.outputs.fcm_ready }}" != "true" ]]; then
+            echo "FCM-ready APK cannot be published because Firebase build configuration is absent." >&2
+            exit 1
+          fi

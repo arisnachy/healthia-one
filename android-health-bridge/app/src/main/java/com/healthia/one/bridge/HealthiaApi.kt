@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.time.Instant
 
 object HealthiaApi {
@@ -46,19 +47,72 @@ object HealthiaApi {
         return request(baseUrl, "/api/devices/health-connect/sync", payload, token)
     }
 
-    private fun request(baseUrl: String, path: String, payload: JSONObject, token: String?): String {
+    fun registerFcm(baseUrl: String, token: String, deviceId: String, registrationToken: String): String {
+        val payload = JSONObject().apply {
+            put("device_id", deviceId)
+            put("registration_token", registrationToken)
+        }
+        return request(baseUrl, "/api/devices/fcm/register", payload, token)
+    }
+
+    fun explicitlyEnableFcm(baseUrl: String, token: String, deviceId: String, registrationToken: String): String {
+        val payload = JSONObject().apply {
+            put("device_id", deviceId)
+            put("registration_token", registrationToken)
+            put("notifications_opt_in", true)
+        }
+        return request(baseUrl, "/api/devices/fcm/register/enable", payload, token)
+    }
+
+    fun disableFcm(baseUrl: String, token: String, deviceId: String): String {
+        val encodedDeviceId = URLEncoder.encode(deviceId, "UTF-8")
+        return request(
+            baseUrl,
+            "/api/devices/fcm/register/$encodedDeviceId",
+            payload = null,
+            token = token,
+            method = "DELETE",
+        )
+    }
+
+    fun acknowledgeFcm(
+        baseUrl: String,
+        token: String,
+        deviceId: String,
+        proofId: String,
+        notificationShown: Boolean,
+    ): String {
+        val payload = JSONObject().apply {
+            put("device_id", deviceId)
+            put("proof_id", proofId)
+            put("notification_shown", notificationShown)
+        }
+        return request(baseUrl, "/api/devices/fcm/ack", payload, token)
+    }
+
+    private fun request(
+        baseUrl: String,
+        path: String,
+        payload: JSONObject?,
+        token: String?,
+        method: String = "POST",
+    ): String {
         val connection = (URL("${baseUrl.trimEnd('/')}$path").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
+            requestMethod = method
             connectTimeout = 15_000
             readTimeout = 30_000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
+            doOutput = payload != null
+            setRequestProperty("Accept", "application/json")
+            if (payload != null) setRequestProperty("Content-Type", "application/json")
             if (!token.isNullOrBlank()) setRequestProperty("Authorization", "Bearer $token")
         }
-        connection.outputStream.use { it.write(payload.toString().toByteArray()) }
-        val body = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream)
-            .bufferedReader().use { it.readText() }
-        if (connection.responseCode !in 200..299) error("HealthIA request failed: ${connection.responseCode} $body")
+        if (payload != null) {
+            connection.outputStream.use { it.write(payload.toString().toByteArray()) }
+        }
+        val responseCode = connection.responseCode
+        val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+        val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        if (responseCode !in 200..299) error("HealthIA request failed: $responseCode $body")
         return body
     }
 }

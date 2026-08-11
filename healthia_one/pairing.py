@@ -11,6 +11,9 @@ from datetime import datetime, timedelta, timezone
 from threading import Event, Lock
 
 
+_PROCESS_TOKEN_SECRET = secrets.token_bytes(32)
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -58,7 +61,10 @@ class DevicePairingManager:
         else:
             configured_bytes = configured or b""
         self._secret_is_persistent = len(configured_bytes) >= 32
-        self._token_secret = configured_bytes if self._secret_is_persistent else secrets.token_bytes(32)
+        # Multiple verifier components inside one process must be able to validate
+        # the same pairing bearer even in local/test mode. The fallback remains
+        # process-local and is never persisted or emitted.
+        self._token_secret = configured_bytes if self._secret_is_persistent else _PROCESS_TOKEN_SECRET
         self._sessions: dict[str, PairingSession] = {}
         self._claim_events: dict[str, Event] = {}
         self._lock = Lock()

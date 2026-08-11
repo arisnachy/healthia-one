@@ -25,6 +25,10 @@ class GrantRequest(BaseModel):
     enabled: bool = True
 
 
+class MissionLocationConsentRequest(BaseModel):
+    ttl_minutes: int = Field(default=30, ge=1, le=120)
+
+
 class DiscoverRequest(BaseModel):
     radius_m: int = Field(default=10000, ge=100, le=50000)
 
@@ -131,6 +135,35 @@ def build_google_constellation_router(constellation: GoogleConstellationService)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Google health mission not found") from exc
         return _mission_payload(mission)
+
+    @router.post("/missions/{mission_id}/authorize-location")
+    async def authorize_location(mission_id: str, payload: MissionLocationConsentRequest) -> dict:
+        pid = patient_id()
+        try:
+            mission = constellation.load_mission(pid, mission_id)
+            if not mission.location:
+                raise ValueError("Mission has no patient-provided location evidence to authorize")
+            grant = constellation.grant(
+                pid,
+                GrantBundle.MAPS_LOCATION,
+                mission_id=mission_id,
+                ttl_minutes=payload.ttl_minutes,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Google health mission not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "grant": grant.model_dump(mode="json"),
+            "mission_id": mission_id,
+            "authorization_kind": "maps_location_for_mission",
+            "external_action_performed": False,
+            "search_performed": False,
+            "truth_boundary": (
+                "The patient authorized Google Places location lookup only for this mission until the grant expires. "
+                "No Places search, provider contact, referral, Calendar event, Gmail message or Task was executed by this authorization step."
+            ),
+        }
 
     @router.post("/missions/{mission_id}/discover")
     async def discover(mission_id: str, payload: DiscoverRequest) -> dict:

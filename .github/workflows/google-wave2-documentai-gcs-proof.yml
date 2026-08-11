@@ -1,0 +1,227 @@
+name: Google Wave 2 Document AI private GCS proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/google-wave2-documentai-gcs-proof.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preflight is read-only; live uses a temporary private GCS bucket and Document AI"
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - live
+      cost_authorization:
+        description: "For live only, type I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave2-documentai-gcs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  documentai-gcs:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: healthia-6088a
+      DOCUMENTAI_LOCATION: us
+      LIVE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'live' }}
+      COST_AUTHORIZATION: ${{ github.event_name == 'workflow_dispatch' && inputs.cost_authorization || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Bind exact source head
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Read-only GCS and Document AI preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-documentai-gcs
+          gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' | sort > /tmp/enabled-services.txt
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          enabled=set(Path('/tmp/enabled-services.txt').read_text(encoding='utf-8').splitlines())
+          out={
+            'status':'READ_ONLY_PREFLIGHT',
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+            'documentai_api_enabled':'documentai.googleapis.com' in enabled,
+            'storage_api_enabled':'storage.googleapis.com' in enabled,
+            'api_enable_mutation':False,
+            'gcs_mutation':False,
+            'documentai_mutation':False,
+            'iam_mutation':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/wave2-documentai-gcs/preflight.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+      - name: Enforce explicit live cost authorization and existing Storage API
+        if: env.LIVE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$COST_AUTHORIZATION" != "I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE" ]]; then
+            echo "LIVE Document AI/GCS execution blocked: exact cost authorization phrase is missing." >&2
+            exit 1
+          fi
+          if ! grep -Fxq 'storage.googleapis.com' /tmp/enabled-services.txt; then
+            echo "Cloud Storage API is not already enabled. This workflow will not enable it silently." >&2
+            exit 1
+          fi
+          if ! grep -Fxq 'documentai.googleapis.com' /tmp/enabled-services.txt; then
+            echo "Document AI API must be enabled by the authorized Wave 2 provider gate first." >&2
+            exit 1
+          fi
+
+      - name: Document AI LIVE proof from temporary private GCS object
+        if: env.LIVE_MODE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bucket="healthia-wave2-docai-${PROJECT_ID}-${GITHUB_RUN_ID}"
+          object="synthetic/control-${GITHUB_RUN_ID}.pdf"
+          uri="gs://${bucket}/${object}"
+          processor_name=""
+          bucket_created=false
+          cleanup_object=false
+          cleanup_bucket=false
+          cleanup_processor=false
+          cleanup() {
+            set +e
+            if [[ -n "$processor_name" ]]; then
+              access_token="$(gcloud auth print-access-token 2>/dev/null || true)"
+              if [[ -n "$access_token" ]]; then
+                code="$(curl -sS -o /tmp/docai-delete.json -w '%{http_code}' -X DELETE -H "Authorization: Bearer ${access_token}" "https://${DOCUMENTAI_LOCATION}-documentai.googleapis.com/v1/${processor_name}" || true)"
+                if [[ "$code" == 2* ]]; then cleanup_processor=true; fi
+                rm -f /tmp/docai-delete.json
+              fi
+            fi
+            if [[ "$bucket_created" == true ]]; then
+              if gcloud storage rm "$uri" --quiet >/dev/null 2>&1; then cleanup_object=true; fi
+              if gcloud storage buckets delete "gs://${bucket}" --quiet >/dev/null 2>&1; then cleanup_bucket=true; fi
+            fi
+            python - "$cleanup_object" "$cleanup_bucket" "$cleanup_processor" <<'PY'
+          import json, sys
+          from pathlib import Path
+          out={'gcs_object_cleanup':sys.argv[1]=='true','gcs_bucket_cleanup':sys.argv[2]=='true','documentai_processor_cleanup_requested':sys.argv[3]=='true','iam_mutation':False,'secret_material_exposed':False}
+          Path('dist/wave2-documentai-gcs/cleanup.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          PY
+          }
+          trap cleanup EXIT
+
+          python - <<'PY'
+          from pathlib import Path
+          text='HEALTHIA SYNTHETIC GCS DOCUMENT 24680'
+          safe=text.replace('\\','\\\\').replace('(','\\(').replace(')','\\)')
+          stream=f'BT /F1 22 Tf 72 700 Td ({safe}) Tj ET'.encode('ascii')
+          objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'\nendstream']
+          out=bytearray(b'%PDF-1.4\n'); offsets=[0]
+          for idx,obj in enumerate(objects,1):
+              offsets.append(len(out)); out.extend(f'{idx} 0 obj\n'.encode()); out.extend(obj+b'\nendobj\n')
+          xref=len(out); out.extend(f'xref\n0 {len(objects)+1}\n'.encode()); out.extend(b'0000000000 65535 f \n')
+          for offset in offsets[1:]: out.extend(f'{offset:010d} 00000 n \n'.encode())
+          out.extend(f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+          Path('/tmp/healthia-wave2-gcs.pdf').write_bytes(bytes(out))
+          PY
+
+          gcloud storage buckets create "gs://${bucket}" \
+            --project "$PROJECT_ID" --location US --default-storage-class STANDARD \
+            --uniform-bucket-level-access --public-access-prevention --soft-delete-duration=0s --quiet
+          bucket_created=true
+          gcloud storage cp /tmp/healthia-wave2-gcs.pdf "$uri" --quiet
+          rm -f /tmp/healthia-wave2-gcs.pdf
+
+          access_token="$(gcloud auth print-access-token)"
+          test -n "$access_token"
+          echo "::add-mask::$access_token"
+          export ACCESS_TOKEN="$access_token" GCS_URI="$uri"
+
+          python - <<'PY'
+          import hashlib, json, os, re, urllib.error, urllib.request
+          from pathlib import Path
+          project=os.environ['PROJECT_ID']; location=os.environ['DOCUMENTAI_LOCATION']; token=os.environ['ACCESS_TOKEN']; gcs_uri=os.environ['GCS_URI']
+          base=f'https://{location}-documentai.googleapis.com/v1/projects/{project}/locations/{location}'
+          def call(method,url,body=None):
+              data=None if body is None else json.dumps(body,separators=(',',':')).encode()
+              headers={'Authorization':'Bearer '+token,'Accept':'application/json'}
+              if data is not None: headers['Content-Type']='application/json'
+              req=urllib.request.Request(url,data=data,headers=headers,method=method)
+              try:
+                  with urllib.request.urlopen(req,timeout=120) as response:
+                      return response.status,json.loads(response.read().decode() or '{}')
+              except urllib.error.HTTPError as exc:
+                  raise RuntimeError(f'Document AI REST call failed with HTTP {exc.code}') from exc
+          _,processor=call('POST',base+'/processors',{'type':'OCR_PROCESSOR','displayName':'healthia-wave2-gcs-'+os.environ.get('GITHUB_RUN_ID','run')})
+          name=str(processor.get('name') or '')
+          if '/processors/' not in name: raise RuntimeError('Document AI did not return a processor resource')
+          Path('/tmp/processor-name.txt').write_text(name,encoding='utf-8')
+          _,processed=call('POST',f'https://{location}-documentai.googleapis.com/v1/{name}:process',{'gcsDocument':{'gcsUri':gcs_uri,'mimeType':'application/pdf'}})
+          text=str((processed.get('document') or {}).get('text') or '')
+          tokens=set(re.findall(r'[A-Z0-9]+',text.upper())); hits=len({'HEALTHIA','SYNTHETIC','GCS','DOCUMENT','24680'} & tokens)
+          if hits < 4: raise RuntimeError('Document AI GCS OCR did not match the synthetic control document')
+          out={'status':'LIVE_PASS','provider':'documentai.googleapis.com','input_source':'private_gcs_document','processor_resource':name,'recognized_text_sha256':hashlib.sha256(text.encode()).hexdigest(),'expected_control_token_hits':hits,'synthetic_document':True,'public_access_prevention':True,'clinical_content':False,'iam_mutation':False,'secret_material_exposed':False}
+          Path('dist/wave2-documentai-gcs/proof.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+          processor_name="$(cat /tmp/processor-name.txt)"
+          rm -f /tmp/processor-name.txt
+
+      - name: Build sanitized Document AI/GCS summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/wave2-documentai-gcs
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path('dist/wave2-documentai-gcs')
+          proof=json.loads((root/'proof.json').read_text()) if (root/'proof.json').exists() else None
+          preflight=json.loads((root/'preflight.json').read_text()) if (root/'preflight.json').exists() else {}
+          live=os.environ.get('LIVE_MODE','').lower()=='true'
+          out={'status':'LIVE_PASS' if proof and proof.get('status')=='LIVE_PASS' else ('READ_ONLY_PREFLIGHT' if not live else 'INCOMPLETE'),'source_sha':os.environ.get('SOURCE_SHA',''),'live_mode':live,'documentai_gcs_proven':bool(proof and proof.get('status')=='LIVE_PASS'),'preflight':preflight,'truth_rule':'CODE PASS != LIVE PASS','iam_mutation':False,'secret_material_exposed':False}
+          (root/'summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          PY
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/wave2-documentai-gcs; then
+            echo "Sensitive-looking material appeared in Document AI/GCS evidence; refusing artifact upload." >&2
+            rm -rf dist/wave2-documentai-gcs
+            exit 1
+          fi
+
+      - name: Upload sanitized Document AI/GCS evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave2-DocumentAI-GCS
+          path: dist/wave2-documentai-gcs
+          if-no-files-found: warn
+          retention-days: 30

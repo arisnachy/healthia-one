@@ -55,10 +55,13 @@ class GoogleMissionToolFacade:
 
     def _result(self, mission, *, summary: str = "", data: dict[str, Any] | None = None) -> dict:
         state = str(mission.state)
+        boundary = mission.tool_outputs.get("authorization_boundary")
+        boundary = dict(boundary) if isinstance(boundary, dict) else {}
+        boundary_kind = str(boundary.get("kind") or "")
         requires_authorization = mission.state in {
             MissionState.AWAITING_AUTHORIZATION,
             MissionState.FOLLOWUP_AUTHORIZATION_PENDING,
-        }
+        } or bool(boundary_kind)
         authorization_kind = ""
         if mission.state == MissionState.FOLLOWUP_AUTHORIZATION_PENDING:
             authorization_kind = "create_followup_task"
@@ -67,6 +70,8 @@ class GoogleMissionToolFacade:
                 authorization_kind = "finalize_selected_appointment"
             elif mission.provider_email:
                 authorization_kind = "contact_selected_provider"
+        elif boundary_kind:
+            authorization_kind = boundary_kind
         next_action = {
             MissionState.RECEIVED: "discover_care_options",
             MissionState.DISCOVERING: "wait_for_discovery",
@@ -81,6 +86,8 @@ class GoogleMissionToolFacade:
             MissionState.BLOCKED: "explain_blocker_or_choose_alternative",
             MissionState.FAILED: "inspect_failure_before_retry",
         }.get(mission.state, "inspect_mission")
+        if boundary_kind == "maps_location_for_mission":
+            next_action = "authorize_location_for_mission"
         return GoogleMissionToolResult(
             ok=mission.state not in {MissionState.FAILED},
             mission_id=mission.id,
@@ -179,11 +186,21 @@ class GoogleMissionToolFacade:
         )
         candidates = mission.tool_outputs.get("place_candidates") or []
         location_mode = str((mission.tool_outputs.get("location_evidence") or {}).get("mode") or "location")
+        boundary = mission.tool_outputs.get("authorization_boundary")
+        boundary = dict(boundary) if isinstance(boundary, dict) else {}
+        if str(boundary.get("kind") or "") == "maps_location_for_mission":
+            public_summary = (
+                "Google Places lookup is paused until the patient explicitly authorizes location lookup for this mission; "
+                "no Places search was performed."
+            )
+        else:
+            public_summary = (
+                f"Found {len(candidates)} place candidate(s) using {location_mode}. "
+                "Search/proximity evidence is not a clinical referral."
+            )
         return self._result(
             mission,
-            summary=(
-                f"Found {len(candidates)} place candidate(s) using {location_mode}. Search/proximity evidence is not a clinical referral."
-            ),
+            summary=public_summary,
             data={
                 "candidates": [
                     {
@@ -334,6 +351,60 @@ MISSION_PLAN_SCHEMA: dict[str, Any] = {
 }
 
 
+def _coerce_function_tool_result(value: Any) -> dict[str, Any]:
+    """Normalize ADK FunctionResponse payloads without trusting model prose."""
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    if not isinstance(value, dict):
+        return {}
+    nested = value.get("result")
+    if hasattr(nested, "model_dump"):
+        nested = nested.model_dump(mode="json")
+    if isinstance(nested, dict):
+        return dict(nested)
+    return dict(value)
+
+
+def _boundary_plan_from_tool_response(function_name: str, response: Any) -> dict[str, Any] | None:
+    """Return immediately from a real tool-produced human boundary.
+
+    ADK emits function-response events before the model's post-tool prose turn.
+    Once deterministic policy has reached an exact human authorization boundary,
+    another model round cannot make further external progress and may only add
+    latency. Build the patient-visible structured plan from durable tool truth.
+    """
+    result = _coerce_function_tool_result(response)
+    mission_id = str(result.get("mission_id") or "").strip()
+    authorization_kind = str(result.get("authorization_kind") or "").strip()
+    if not mission_id or not bool(result.get("requires_authorization")) or not authorization_kind:
+        return None
+    state = str(result.get("state") or "blocked")
+    next_action = str(result.get("next_action") or "request_human_authorization")
+    summary = str(result.get("public_summary") or "").strip()
+    if not summary:
+        summary = "HealthIA reached a verified human authorization boundary and stopped before external execution."
+    ui_action = None
+    if authorization_kind == "maps_location_for_mission":
+        ui_action = {
+            "type": "authorize_google_location",
+            "mission_id": mission_id,
+            "ttl_minutes": 30,
+            "label_es": "Autorizar ubicación para esta misión",
+            "label_en": "Authorize location for this mission",
+        }
+    return {
+        "intent": "continue_mission",
+        "mission_id": mission_id,
+        "state": state,
+        "next_action": next_action,
+        "requires_human_authorization": True,
+        "authorization_kind": authorization_kind,
+        "patient_message": summary,
+        "ui_action": ui_action,
+        "_boundary_source": f"tool_response:{function_name}",
+    }
+
+
 class AdkGoogleMissionRuntime:
     """Gemini/ADK semantic planner over high-level mission tools only."""
 
@@ -396,6 +467,11 @@ class AdkGoogleMissionRuntime:
 You are HealthIA's Google Health Mission planner. You operate ABOVE deterministic mission policy.
 Use tools only when the patient's message is actually about finding care/resources, continuing a navigation mission, contacting a previously selected provider, or finishing an offered appointment.
 
+Autonomy rule:
+- Once a mission is applicable, continue through every verifiable read-only or non-mutating step that does not require a new patient choice, exact authorization, missing evidence, or a real external event.
+- Do not stop after merely inspecting a mission when the next safe tool call is deterministically available from the patient's current message and mission state.
+- Stop immediately at the first real human/external boundary and explain that exact boundary. Never bypass it.
+
 Hard boundaries:
 - You have NO tool that grants Google permissions, connects OAuth, or creates patient authorization. Never claim you authorized yourself.
 - Never invent latitude/longitude, a location, a provider email, a place, an appointment offer, a document, or a Google receipt.
@@ -451,11 +527,15 @@ Return only the requested JSON planning object after using tools as needed.
                 "If the current patient message explicitly names a search location, pass only that explicit text to "
                 "start_navigation_mission.location_text. Do not expand or infer a city/country not written by the patient."
             ),
-            "policy": "Use mission tools, not raw Google APIs. Never authorize an action yourself.",
+            "policy": (
+                "Use mission tools, not raw Google APIs. Never authorize an action yourself. "
+                "Advance safe steps until the next human choice, authorization, missing-evidence, or external-event boundary."
+            ),
         }
 
         final_text = ""
         last_text = ""
+        executed_tools: list[str] = []
         message = types.Content(
             role="user",
             parts=[types.Part(text=json.dumps(prompt, ensure_ascii=False, default=str))],
@@ -466,9 +546,31 @@ Return only the requested JSON planning object after using tools as needed.
             new_message=message,
         ):
             content = getattr(event, "content", None)
+            parts = list(getattr(content, "parts", None) or [])
+            for part in parts:
+                function_call = getattr(part, "function_call", None)
+                name = str(getattr(function_call, "name", "") or "").strip()
+                if name and name in self.tool_names() and name not in executed_tools:
+                    executed_tools.append(name)
+
+                function_response = getattr(part, "function_response", None)
+                response_name = str(getattr(function_response, "name", "") or "").strip()
+                response_payload = getattr(function_response, "response", None)
+                if response_name and response_name in self.tool_names():
+                    if response_name not in executed_tools:
+                        executed_tools.append(response_name)
+                    boundary_payload = _boundary_plan_from_tool_response(response_name, response_payload)
+                    if boundary_payload is not None:
+                        boundary_payload["_execution"] = {
+                            "session_id": session_id,
+                            "executed_tools": list(executed_tools),
+                            "tool_count": len(executed_tools),
+                            "stopped_at_real_boundary": True,
+                        }
+                        return boundary_payload
             text_parts = [
                 str(getattr(part, "text", "") or "")
-                for part in (getattr(content, "parts", None) or [])
+                for part in parts
                 if getattr(part, "text", None) and not getattr(part, "thought", False)
             ]
             if text_parts:
@@ -488,4 +590,12 @@ Return only the requested JSON planning object after using tools as needed.
             if start < 0 or end <= start:
                 return None
             payload = json.loads(final_text[start : end + 1])
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        # Execution evidence comes from ADK events, not from model prose.
+        payload["_execution"] = {
+            "session_id": session_id,
+            "executed_tools": executed_tools,
+            "tool_count": len(executed_tools),
+        }
+        return payload

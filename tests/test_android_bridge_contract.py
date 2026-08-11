@@ -67,12 +67,143 @@ def test_android_bridge_guides_pairing_permissions_and_background_sync() -> None
     assert "Cómo usa HealthIA tus datos" in rationale
 
 
-def test_repository_builds_a_downloadable_debug_apk_and_connection_guide() -> None:
+def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end() -> None:
+    gradle = (BRIDGE / "app/build.gradle.kts").read_text(encoding="utf-8")
+    manifest = (BRIDGE / "app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+    activity = (SOURCE / "MainActivity.kt").read_text(encoding="utf-8")
+    api = (SOURCE / "HealthiaApi.kt").read_text(encoding="utf-8")
+    runtime = (SOURCE / "FirebaseRuntime.kt").read_text(encoding="utf-8")
+    service = (SOURCE / "HealthiaFirebaseMessagingService.kt").read_text(encoding="utf-8")
+    registration_worker = (SOURCE / "FcmRegistrationWorker.kt").read_text(encoding="utf-8")
+    ack_worker = (SOURCE / "FcmDeliveryAckWorker.kt").read_text(encoding="utf-8")
+
+    assert "firebase-messaging" in gradle
+    assert "work-runtime-ktx" in gradle
+    for build_value in (
+        "HEALTHIA_FIREBASE_APP_ID",
+        "HEALTHIA_FIREBASE_API_KEY",
+        "HEALTHIA_FIREBASE_PROJECT_ID",
+        "HEALTHIA_FIREBASE_SENDER_ID",
+    ):
+        assert build_value in gradle
+    assert "android.permission.POST_NOTIFICATIONS" in manifest
+    assert "HealthiaFirebaseMessagingService" in manifest
+    assert "com.google.firebase.MESSAGING_EVENT" in manifest
+    assert activity.count("FirebaseRuntime.syncRegistration") >= 2
+    assert "requestNotificationPermissionIfNeeded" in activity
+    assert "onRequestPermissionsResult" in activity
+    assert "pendingNotificationOptInCompletion = complete" in activity
+    assert "setPrivateNotifications(true, complete)" in activity
+    assert "NOTIFICATION_PERMISSION_REQUEST" in activity
+    assert "Desactivar notificaciones privadas" in activity
+    assert "Reactivar notificaciones privadas" in activity
+    assert "desactivadas por defecto" in activity
+    assert "El permiso de notificaciones no fue concedido" in activity
+    assert "pulsa Reactivar notificaciones privadas otra vez" not in activity
+    assert "token FCM fue retirado del servidor" in activity
+    assert "HealthiaApi.disableFcm" in activity
+    assert "HealthiaApi.explicitlyEnableFcm" in activity
+    assert "/api/devices/fcm/register" in api
+    assert "/api/devices/fcm/register/enable" in api
+    assert 'method = "DELETE"' in api
+    assert "/api/devices/fcm/ack" in api
+    assert 'put("notification_shown", notificationShown)' in api
+    assert "fcm_notifications_enabled" in runtime
+    assert ".getBoolean(NOTIFICATIONS_ENABLED, false)" in runtime
+    assert "FcmRegistrationWorker.cancel" in runtime
+    assert "FcmRegistrationWorker.enqueue" in runtime
+    assert "FcmDeliveryAckWorker.enqueue" in runtime
+    assert "onNewToken" in service
+    assert "FirebaseRuntime.syncRegistration" in service
+    assert "FirebaseRuntime.notificationsEnabled" in service
+    assert "onMessageReceived" in service
+    assert 'message.data["proof_id"]' in service
+    assert 'kind != "healthia_update"' in service
+    assert "showNeutralNotification(): Boolean" in service
+    assert "notificationShown = showNeutralNotification()" in service
+    assert 'setContentTitle("HealthIA")' in service
+    assert 'setContentText("Tienes una actualización disponible en HealthIA.")' in service
+
+    for worker in (registration_worker, ack_worker):
+        assert "CoroutineWorker" in worker
+        assert "NetworkType.CONNECTED" in worker
+        assert "BackoffPolicy.EXPONENTIAL" in worker
+        assert "setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)" in worker
+        assert "Result.retry()" in worker
+    assert "FirebaseRuntime.notificationsEnabled" in registration_worker
+    assert "FirebaseMessaging.getInstance().token" in registration_worker
+    assert "Tasks.await" in registration_worker
+    assert "ExistingWorkPolicy.REPLACE" in registration_worker
+    assert "cancelUniqueWork" in registration_worker
+    assert "HealthiaApi.registerFcm" in registration_worker
+    assert "ExistingWorkPolicy.KEEP" in ack_worker
+    assert "HealthiaApi.acknowledgeFcm" in ack_worker
+    assert "KEY_NOTIFICATION_SHOWN" in ack_worker
+    assert "notificationShown" in ack_worker
+    assert "MessageDigest.getInstance(\"SHA-256\")" in ack_worker
+
+
+def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
     workflow = (ROOT / ".github/workflows/android-bridge.yml").read_text(encoding="utf-8")
     guide = (ROOT / "docs/CONNECT_ANDROID.md").read_text(encoding="utf-8")
+    extractor = (ROOT / "scripts/extract_firebase_android_config.py").read_text(encoding="utf-8")
     assert "gradle :app:assembleDebug" in workflow
+    assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_B64" in workflow
+    assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON" in workflow
+    assert "scripts/extract_firebase_android_config.py" in workflow
+    assert "--format base64" in workflow
+    assert "base64.b64decode" in extractor
+    assert "com.healthia.one.bridge" in workflow
+    assert "GOOGLE_SERVICES_JSON_BASE64_SECRET" in workflow
+    assert "GOOGLE_SERVICES_JSON_SECRET" in workflow
+    assert "FIREBASE_MANAGEMENT_API_EPHEMERAL" in workflow
+    assert "FOUR_ACTIONS_SECRETS" in workflow
+    assert "BLOCKED_FIREBASE_CONFIG" in workflow
+    assert "CODE PASS != FCM-READY APK" in workflow
+    assert "steps.firebase.outputs.fcm_ready == 'true'" in workflow
+    assert "Remove non-FCM-ready APK from workspace" in workflow
     assert "HealthIA-Bridge-debug.apk" in workflow
     assert "actions/upload-artifact@v4" in workflow
+    assert "HealthIA-Android-APK-Readiness" in workflow
+    assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_B64" in guide
+    assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON" in guide
     assert "HealthIA-Bridge-debug" in guide
     assert "127.0.0.1" in guide
     assert "ipconfig" in guide
+
+
+def test_firebase_readonly_iam_gate_is_narrow_and_chains_only_after_success() -> None:
+    workflow = (ROOT / ".github/workflows/google-firebase-ci-readonly-iam.yml").read_text(encoding="utf-8")
+    assert "I_AUTHORIZE_FCM_VIEWER_FOR_CI" in workflow
+    assert "roles/firebasecloudmessaging.viewer" in workflow
+    assert "roles/firebase.viewer" not in workflow
+    assert "firebase.clients.get" in workflow
+    assert "firebase.clients.list" in workflow
+    assert "firebase.projects.get" in workflow
+    assert "resourcemanager.projects.setIamPolicy" in workflow
+    assert "testIamPermissions" in workflow
+    assert "can_set_iam_policy" in workflow
+    assert "firebase_ready: ${{ steps.postcheck.outputs.firebase_ready }}" in workflow
+    assert "needs.firebase-ci-readonly-iam.outputs.firebase_ready == 'true'" in workflow
+    assert "actions: write" in workflow
+    assert '"ref":"kira/google-constellation-wave2-live"' in workflow
+    assert "actions/workflows/android-bridge.yml/dispatches" in workflow
+    assert "api_enable_mutation':False" in workflow
+    assert "provider_write':False" in workflow
+
+
+def test_fcm_live_proof_uses_unpredictable_nonce_and_requires_visible_durable_ack() -> None:
+    workflow = (ROOT / ".github/workflows/google-fcm-live-delivery.yml").read_text(encoding="utf-8")
+    assert "FcmRegistrationWorker.kt" in workflow
+    assert "FcmDeliveryAckWorker.kt" in workflow
+    assert "secrets.token_hex(16)" in workflow
+    assert "proof_id_sha256" in workflow
+    assert "raw_proof_id_exposed':False" in workflow
+    assert "for _ in range(60)" in workflow
+    assert "time.sleep(4)" in workflow
+    assert "last_delivery_notification_shown" in workflow
+    assert "controlled_device_notification_shown" in workflow
+    assert "Android did not confirm a visible notification" in workflow
+    assert "both controlled-device ACK and visible notification" in workflow
+    assert "I_AUTHORIZE_CONTROLLED_FCM_PROOF" in workflow
+    assert "provider accepted" not in workflow.lower()
