@@ -24,10 +24,6 @@ CONTINUATION_SIGNALS = (
     "what about", "and if", "so", "but", "why", "how so",
 )
 
-# Canonical current-turn topics. An explicit current noun always outranks a stale
-# contextual referent. This is intentionally deterministic: Gemini may explain a
-# resolved reference, but it is never allowed to invent which patient object the
-# user was referring to.
 TOPIC_SIGNALS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("results", ("resultado", "resultados", "result", "results", "laboratorio", "laboratory", "lab", "scan", "imaging", "xray", "x-ray", "ultrasound", "ecg", "ekg")),
     ("treatment", ("medicamento", "medicación", "medicacion", "medication", "medicine", "treatment", "tratamiento", "dosis", "dose")),
@@ -182,12 +178,15 @@ def _is_ambiguous_followup(text: str) -> bool:
     normalized = _normalize(text)
     if not normalized:
         return False
-    if any(_normalize(signal) in normalized for signal in REFERENCE_SIGNALS):
+    semantic = normalized.lstrip("¿?¡!.,;:- ")
+    if any(_contains_phrase(text, signal) for signal in REFERENCE_SIGNALS):
         return True
-    if any(normalized.startswith(_normalize(signal)) for signal in CONTINUATION_SIGNALS):
+    if any(semantic.startswith(_normalize(signal)) for signal in CONTINUATION_SIGNALS):
         return True
-    words = re.findall(r"[a-z0-9]+", normalized)
-    return len(words) <= 5 and normalized not in {"hola", "hello", "gracias", "thanks", "thank you"}
+    # Elliptical conjunctions are context-dependent only when they are compact;
+    # ordinary short commands ("abre mi perfil", "prepara mi consulta") are not.
+    words = re.findall(r"[a-z0-9]+", semantic)
+    return len(words) <= 5 and (semantic.startswith("y ") or semantic.startswith("and "))
 
 
 def _is_correction(text: str) -> bool:
