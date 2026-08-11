@@ -91,10 +91,15 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert "com.google.firebase.MESSAGING_EVENT" in manifest
     assert activity.count("FirebaseRuntime.syncRegistration") >= 2
     assert "requestNotificationPermissionIfNeeded" in activity
+    assert "onRequestPermissionsResult" in activity
+    assert "pendingNotificationOptInCompletion = complete" in activity
+    assert "setPrivateNotifications(true, complete)" in activity
+    assert "NOTIFICATION_PERMISSION_REQUEST" in activity
     assert "Desactivar notificaciones privadas" in activity
     assert "Reactivar notificaciones privadas" in activity
     assert "desactivadas por defecto" in activity
-    assert "Android debe conceder el permiso de notificaciones antes del opt-in" in activity
+    assert "El permiso de notificaciones no fue concedido" in activity
+    assert "pulsa Reactivar notificaciones privadas otra vez" not in activity
     assert "token FCM fue retirado del servidor" in activity
     assert "HealthiaApi.disableFcm" in activity
     assert "HealthiaApi.explicitlyEnableFcm" in activity
