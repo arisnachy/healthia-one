@@ -65,3 +65,6 @@ def test_adk_autonomy_and_execution_receipt_are_locked_to_real_events() -> None:
     assert '"public_action_receipt": receipt' in chat
     assert '"requires_human_authorization": requires_auth' in chat
     assert 'action="advance_google_health_mission"' in chat
+    assert '### Comprobante de misión' in chat
+    assert 'content = f"{content}\\n\\n{_receipt_markdown(receipt)}"' in chat
+    assert "HealthIA no ejecutó ese paso por su cuenta" in chat
