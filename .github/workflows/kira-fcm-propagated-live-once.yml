@@ -1,0 +1,356 @@
+name: KIRA propagated one-shot FCM LIVE proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/kira-fcm-propagated-live-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kira-propagated-fcm-live-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  live-once:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 16
+    env:
+      PROJECT_ID: healthia-6088a
+      TEMP_ROLE: roles/firebasecloudmessaging.admin
+      DEVICE_AUTHORIZATION: I_AUTHORIZE_CONTROLLED_FCM_PROOF
+    steps:
+      - name: Enforce exact one-shot authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_RUN_ATTEMPT}" == "1" ]] || { echo 'Retry refused: controlled proof is one-shot.' >&2; exit 1; }
+          [[ "$DEVICE_AUTHORIZATION" == "I_AUTHORIZE_CONTROLLED_FCM_PROOF" ]] || { echo 'Exact controlled-device authorization missing.' >&2; exit 1; }
+
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bind source SHA
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Install Firestore client
+        shell: bash
+        run: python -m pip install --quiet "google-cloud-firestore>=2.21,<3"
+
+      - name: Require exactly one active controlled Android registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/fcm-propagated-live
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from google.cloud import firestore
+
+          candidates=[]; total=0; token_bearing=0; valid_hashes=0
+          for snapshot in firestore.Client(project=os.environ['PROJECT_ID']).collection_group('devices').stream():
+              if not snapshot.reference.path.startswith('healthia_fcm_registrations/'):
+                  continue
+              f=snapshot.to_dict() or {}
+              if not {'patient_id','connection_id','device_id','enabled'} <= set(f):
+                  continue
+              total += 1
+              raw=str(f.get('registration_token') or '')
+              digest=str(f.get('token_sha256') or '')
+              if raw or digest:
+                  token_bearing += 1
+              valid=len(digest)==64 and all(c in '0123456789abcdefABCDEF' for c in digest)
+              if valid:
+                  valid_hashes += 1
+              if bool(f.get('enabled',True)) and len(raw)>=16 and valid:
+                  candidates.append((snapshot.reference.path,raw,digest))
+
+          out={
+            'status':'READY_DEVICE_PRESENT' if len(candidates)==1 else 'BLOCKED_DEVICE_COUNT',
+            'active_fcm_registration_count':len(candidates),
+            'fcm_registration_documents':total,
+            'fcm_token_bearing_documents':token_bearing,
+            'registrations_with_valid_sha256':valid_hashes,
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+            'raw_token_exposed':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/fcm-propagated-live/preflight.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          if len(candidates)!=1:
+              raise SystemExit('Exactly one active controlled-device registration is required')
+          Path('/tmp/fcm-path').write_text(candidates[0][0])
+          Path('/tmp/fcm-token').write_text(candidates[0][1])
+          Path('/tmp/fcm-digest').write_text(candidates[0][2])
+          PY
+
+      - name: Grant temporary FCM API send role without disturbing pre-existing access
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
+          test -n "$ACCOUNT"
+          echo "::add-mask::$ACCOUNT"
+          MEMBER="serviceAccount:$ACCOUNT"
+          echo "::add-mask::$MEMBER"
+          printf '%s' "$MEMBER" > /tmp/fcm-member
+          if gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role:$TEMP_ROLE AND bindings.members:$MEMBER" --format='value(bindings.role)' | grep -Fxq "$TEMP_ROLE"; then
+            touch /tmp/fcm-role-preexisting
+            echo 'FCM API send role already present; KIRA will not remove pre-existing access.'
+          else
+            gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --condition=None --quiet >/dev/null
+            touch /tmp/fcm-role-granted-by-kira
+            echo 'Temporary FCM API send role granted; waiting for provider-side IAM propagation.'
+          fi
+
+      - name: Wait for FCM IAM propagation using validate-only only
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="$(cat /tmp/fcm-token)"
+          echo "::add-mask::$TOKEN"
+          export TOKEN
+          python - <<'PY'
+          import json, os, subprocess, time, urllib.error, urllib.request
+          from pathlib import Path
+
+          project=os.environ['PROJECT_ID']
+          token=os.environ['TOKEN']
+          attempts=[]
+          passed=False
+          for index in range(1,33):
+              access=subprocess.check_output(['gcloud','auth','print-access-token'],text=True).strip()
+              payload={'validate_only':True,'message':{'token':token,'data':{'kind':'healthia_update','proof_id':'validation_only_not_delivered'},'android':{'priority':'HIGH'}}}
+              req=urllib.request.Request(
+                  f'https://fcm.googleapis.com/v1/projects/{project}/messages:send',
+                  data=json.dumps(payload,separators=(',',':')).encode(),
+                  headers={'Authorization':'Bearer '+access,'Content-Type':'application/json'},
+                  method='POST')
+              status=0; rpc=''; reason=''; permission=''; fcm_code=''
+              try:
+                  with urllib.request.urlopen(req,timeout=60) as response:
+                      status=response.status
+                      response.read()
+                      if status==200:
+                          attempts.append({'attempt':index,'http_status':200,'result':'PASS'})
+                          passed=True
+                          break
+              except urllib.error.HTTPError as exc:
+                  status=exc.code
+                  try: body=json.loads(exc.read().decode() or '{}')
+                  except Exception: body={}
+                  err=body.get('error') or {}
+                  rpc=str(err.get('status') or '')
+                  for detail in err.get('details') or []:
+                      if not isinstance(detail,dict):
+                          continue
+                      if detail.get('@type','').endswith('ErrorInfo'):
+                          reason=str(detail.get('reason') or '')
+                          permission=str((detail.get('metadata') or {}).get('permission') or '')
+                      if detail.get('errorCode'):
+                          fcm_code=str(detail.get('errorCode') or '')
+                  attempts.append({'attempt':index,'http_status':status,'rpc_status':rpc,'reason':reason,'denied_permission':permission if permission.startswith(('cloudmessaging.','firebase.','serviceusage.','resourcemanager.')) else ('OTHER' if permission else ''),'fcm_error_code':fcm_code,'result':'WAIT' if status==403 and permission=='cloudmessaging.messages.create' else 'BLOCK'})
+                  if not (status==403 and permission=='cloudmessaging.messages.create'):
+                      break
+              if index < 32:
+                  time.sleep(15)
+
+          out={
+            'status':'VALIDATION_PASS' if passed else 'VALIDATION_NOT_READY',
+            'validate_only':True,
+            'message_delivered':False,
+            'attempt_count':len(attempts),
+            'last_http_status':attempts[-1].get('http_status') if attempts else None,
+            'last_denied_permission':attempts[-1].get('denied_permission','') if attempts else '',
+            'last_fcm_error_code':attempts[-1].get('fcm_error_code','') if attempts else '',
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+            'raw_token_exposed':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/fcm-propagated-live/validation.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          if not passed:
+              raise SystemExit('FCM validate_only never became authorized; refusing actual delivery')
+          Path('/tmp/fcm-validation-pass').write_text('true')
+          PY
+
+      - name: Send exactly one actual PHI-neutral FCM message and require visible durable ACK
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -f /tmp/fcm-validation-pass ]] || { echo 'Validation gate missing; refusing delivery.' >&2; exit 1; }
+          TOKEN="$(cat /tmp/fcm-token)"
+          DOC_PATH="$(cat /tmp/fcm-path)"
+          DIGEST="$(cat /tmp/fcm-digest)"
+          echo "::add-mask::$TOKEN"
+          ACCESS="$(gcloud auth print-access-token)"
+          echo "::add-mask::$ACCESS"
+          PROOF="fcmproof_$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          echo "::add-mask::$PROOF"
+          export TOKEN DOC_PATH DIGEST ACCESS PROOF
+          python - <<'PY'
+          import hashlib, json, os, time, urllib.error, urllib.request
+          from pathlib import Path
+          from google.cloud import firestore
+
+          payload={'message':{'token':os.environ['TOKEN'],'data':{'kind':'healthia_update','proof_id':os.environ['PROOF']},'android':{'priority':'HIGH'}}}
+          req=urllib.request.Request(
+              f"https://fcm.googleapis.com/v1/projects/{os.environ['PROJECT_ID']}/messages:send",
+              data=json.dumps(payload,separators=(',',':')).encode(),
+              headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Content-Type':'application/json'},
+              method='POST')
+          try:
+              with urllib.request.urlopen(req,timeout=60) as response:
+                  result=json.loads(response.read().decode() or '{}')
+          except urllib.error.HTTPError as exc:
+              raise RuntimeError(f'Actual FCM send rejected before acceptance HTTP {exc.code}') from None
+
+          message_name=str(result.get('name') or '')
+          if not message_name:
+              raise RuntimeError('FCM response did not contain a provider message resource')
+
+          accepted={
+            'provider_message_accepted':True,
+            'exactly_one_actual_message':True,
+            'provider_message_name_sha256':hashlib.sha256(message_name.encode()).hexdigest(),
+            'registration_token_sha256':os.environ['DIGEST'],
+            'proof_id_sha256':hashlib.sha256(os.environ['PROOF'].encode()).hexdigest(),
+            'clinical_content':False,
+            'data_message_kind':'healthia_update',
+            'raw_token_exposed':False,
+            'raw_proof_id_exposed':False,
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+            'secret_material_exposed':False,
+          }
+          Path('dist/fcm-propagated-live/accepted.json').write_text(json.dumps(accepted,sort_keys=True,indent=2)+'\n')
+
+          ref=firestore.Client(project=os.environ['PROJECT_ID']).document(os.environ['DOC_PATH'])
+          ack=False; shown=False; ack_at=None
+          for _ in range(60):
+              fields=ref.get().to_dict() or {}
+              if str(fields.get('last_delivery_proof_id') or '') == os.environ['PROOF']:
+                  ack=True
+                  shown=fields.get('last_delivery_notification_shown') is True
+                  ack_at=fields.get('last_delivery_ack_at')
+                  break
+              time.sleep(4)
+
+          status='LIVE_PASS' if ack and shown else ('ACK_WITHOUT_VISIBLE_NOTIFICATION' if ack else 'PROVIDER_ACCEPTED_NO_ACK')
+          live={**accepted,
+            'status':status,
+            'controlled_device_ack':ack,
+            'controlled_device_notification_shown':shown,
+            'acknowledged_at_present':ack_at is not None,
+          }
+          Path('dist/fcm-propagated-live/live.json').write_text(json.dumps(live,sort_keys=True,indent=2)+'\n')
+          print(json.dumps({'status':status,'provider_message_accepted':True,'exactly_one_actual_message':True,'controlled_device_ack':ack,'controlled_device_notification_shown':shown},sort_keys=True))
+          if status!='LIVE_PASS':
+              raise SystemExit(status)
+          PY
+
+      - name: Remove only KIRA-granted temporary FCM send role
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f /tmp/fcm-role-granted-by-kira && -f /tmp/fcm-member ]]; then
+            MEMBER="$(cat /tmp/fcm-member)"
+            echo "::add-mask::$MEMBER"
+            gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --condition=None --quiet >/dev/null || gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --quiet >/dev/null
+          fi
+
+      - name: Verify cleanup and build final sanitized truth
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/fcm-propagated-live
+          ROLE_LEFT=false
+          if [[ -f /tmp/fcm-role-granted-by-kira && -f /tmp/fcm-member ]]; then
+            MEMBER="$(cat /tmp/fcm-member)"
+            echo "::add-mask::$MEMBER"
+            if gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role:$TEMP_ROLE AND bindings.members:$MEMBER" --format='value(bindings.role)' | grep -Fxq "$TEMP_ROLE"; then
+              ROLE_LEFT=true
+            fi
+          fi
+          export ROLE_LEFT
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path('dist/fcm-propagated-live')
+          validation=json.loads((root/'validation.json').read_text()) if (root/'validation.json').exists() else {}
+          accepted=json.loads((root/'accepted.json').read_text()) if (root/'accepted.json').exists() else {}
+          live=json.loads((root/'live.json').read_text()) if (root/'live.json').exists() else {}
+          out={
+            'status':live.get('status') or ('PROVIDER_ACCEPTED_NO_LIVE_PROOF' if accepted.get('provider_message_accepted') else 'NO_PROVIDER_ACCEPTED_MESSAGE'),
+            'validation_pass':validation.get('status')=='VALIDATION_PASS',
+            'validation_attempt_count':validation.get('attempt_count'),
+            'provider_message_accepted':bool(accepted.get('provider_message_accepted')),
+            'exactly_one_actual_message':bool(accepted.get('exactly_one_actual_message')),
+            'controlled_device_ack':bool(live.get('controlled_device_ack')),
+            'controlled_device_notification_shown':bool(live.get('controlled_device_notification_shown')),
+            'temporary_send_role_granted_by_kira':Path('/tmp/fcm-role-granted-by-kira').exists(),
+            'temporary_send_role_preexisting':Path('/tmp/fcm-role-preexisting').exists(),
+            'temporary_send_role_removed':os.environ.get('ROLE_LEFT','true').lower()!='true',
+            'api_enable_mutation':False,
+            'raw_token_exposed':False,
+            'raw_proof_id_exposed':False,
+            'secret_material_exposed':False,
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+          }
+          (root/'summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          if out['temporary_send_role_granted_by_kira'] and not out['temporary_send_role_removed']:
+              raise SystemExit('Temporary FCM send role cleanup failed')
+          PY
+          rm -f /tmp/fcm-token /tmp/fcm-path /tmp/fcm-digest /tmp/fcm-member /tmp/fcm-role-granted-by-kira /tmp/fcm-role-preexisting /tmp/fcm-validation-pass
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|registration_token["=: ]|proof_id["=: ]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/fcm-propagated-live; then
+            rm -rf dist/fcm-propagated-live
+            echo 'Sensitive-looking material detected; refusing evidence upload.' >&2
+            exit 1
+          fi
+
+      - name: Upload sanitized LIVE evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-FCM-Propagated-LIVE-One-Shot
+          path: dist/fcm-propagated-live
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce FCM LIVE PASS
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('dist/fcm-propagated-live/summary.json')
+          s=json.loads(p.read_text()) if p.exists() else {}
+          if s.get('status')!='LIVE_PASS':
+              raise SystemExit('FCM LIVE proof is not complete')
+          if not (s.get('provider_message_accepted') and s.get('exactly_one_actual_message') and s.get('controlled_device_ack') and s.get('controlled_device_notification_shown')):
+              raise SystemExit('FCM LIVE truth conditions are incomplete')
+          print(json.dumps({'status':'LIVE_PASS','exactly_one_actual_message':True,'controlled_device_ack':True,'controlled_device_notification_shown':True,'temporary_send_role_removed':s.get('temporary_send_role_removed')},sort_keys=True))
+          PY
