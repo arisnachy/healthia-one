@@ -1,4 +1,4 @@
-name: KIRA FCM exact missing-permission diagnostic
+name: KIRA FCM exact denied-permission diagnostic
 
 on:
   pull_request:
@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/fcm-missing-permission
+          mkdir -p dist/fcm-denied-permission
           python - <<'PY'
           import os
           from pathlib import Path
@@ -62,21 +62,7 @@ jobs:
           MEMBER="serviceAccount:$ACCOUNT"; echo "::add-mask::$MEMBER"; printf '%s' "$MEMBER" >/tmp/fcm-member
           gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --condition=None --quiet >/dev/null
           touch /tmp/fcm-temp-role
-          sleep 15
-      - name: Compare effective IAM permissions after grant
-        shell: bash
-        run: |
-          set -euo pipefail
-          ACCESS="$(gcloud auth print-access-token)"; echo "::add-mask::$ACCESS"; export ACCESS
-          python - <<'PY'
-          import json, os, urllib.request
-          from pathlib import Path
-          wanted=['cloudmessaging.messages.create','resourcemanager.projects.get','resourcemanager.projects.list','firebase.projects.get','serviceusage.services.use']
-          req=urllib.request.Request(f"https://cloudresourcemanager.googleapis.com/v1/projects/{os.environ['PROJECT_ID']}:testIamPermissions",data=json.dumps({'permissions':wanted}).encode(),headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Content-Type':'application/json'},method='POST')
-          with urllib.request.urlopen(req,timeout=30) as r: effective=set(json.loads(r.read().decode() or '{}').get('permissions',[]))
-          out={'cloudmessaging_messages_create':wanted[0] in effective,'resourcemanager_projects_get':wanted[1] in effective,'resourcemanager_projects_list':wanted[2] in effective,'firebase_projects_get':wanted[3] in effective,'serviceusage_services_use':wanted[4] in effective,'source_sha':os.environ.get('SOURCE_SHA',''),'secret_material_exposed':False}
-          Path('dist/fcm-missing-permission/effective.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
-          PY
+          sleep 20
       - name: Extract exact validate-only denied permission
         shell: bash
         run: |
@@ -99,11 +85,11 @@ jobs:
               for d in err.get('details') or []:
                   if isinstance(d,dict) and d.get('@type','').endswith('ErrorInfo'):
                       reason=str(d.get('reason') or ''); domain=str(d.get('domain') or ''); m=d.get('metadata') or {}; permission=str(m.get('permission') or ''); method=str(m.get('method') or '')
-          allowed_prefixes=('cloudmessaging.','firebase.','resourcemanager.','serviceusage.')
-          safe_permission=permission if (not permission or permission.startswith(allowed_prefixes)) else 'OTHER_PERMISSION'
-          safe_method=method if (not method or method.startswith(('google.firebase.','google.cloud.','google.iam.'))) else 'OTHER_METHOD'
-          out={'validate_only':True,'message_delivered':False,'http_status':status,'rpc_status':rpc,'error_info_reason':reason,'error_info_domain':domain,'denied_permission':safe_permission,'denied_method':safe_method,'validation_ok':validation_ok,'source_sha':os.environ.get('SOURCE_SHA',''),'raw_token_exposed':False,'secret_material_exposed':False}
-          Path('dist/fcm-missing-permission/validation.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
+          allowed=('cloudmessaging.','firebase.','resourcemanager.','serviceusage.','iam.')
+          safe_permission=permission if (not permission or permission.startswith(allowed)) else 'OTHER_PERMISSION'
+          safe_method=method if (not method or len(method)<200) else 'OTHER_METHOD'
+          out={'status':'VALIDATION_PASS' if validation_ok else 'VALIDATION_DENIED','validate_only':True,'message_delivered':False,'http_status':status,'rpc_status':rpc,'error_info_reason':reason,'error_info_domain':domain,'denied_permission':safe_permission,'denied_method':safe_method,'validation_ok':validation_ok,'source_sha':os.environ.get('SOURCE_SHA',''),'raw_token_exposed':False,'secret_material_exposed':False}
+          Path('dist/fcm-denied-permission/validation.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
           PY
       - name: Remove temporary FCM API admin
         if: always()
@@ -111,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f /tmp/fcm-temp-role && -f /tmp/fcm-member ]]; then MEMBER="$(cat /tmp/fcm-member)"; echo "::add-mask::$MEMBER"; gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --condition=None --quiet >/dev/null || gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --quiet >/dev/null; fi
-      - name: Summarize and verify cleanup
+      - name: Verify cleanup and summarize
         if: always()
         shell: bash
         run: |
@@ -122,17 +108,17 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          r=Path('dist/fcm-missing-permission'); e=json.loads((r/'effective.json').read_text()) if (r/'effective.json').exists() else {}; v=json.loads((r/'validation.json').read_text()) if (r/'validation.json').exists() else {}
-          out={'status':'DIAGNOSTIC_COMPLETE','effective_after_temp':{k:e.get(k) for k in ['cloudmessaging_messages_create','resourcemanager_projects_get','resourcemanager_projects_list','firebase_projects_get','serviceusage_services_use']},'validation_http_status':v.get('http_status'),'validation_rpc_status':v.get('rpc_status'),'validation_error_info_reason':v.get('error_info_reason'),'validation_error_info_domain':v.get('error_info_domain'),'denied_permission':v.get('denied_permission'),'denied_method':v.get('denied_method'),'validation_ok':v.get('validation_ok'),'message_delivered':False,'temporary_fcm_role_removed':os.environ.get('LEFT','true').lower()!='true','api_enable_mutation':False,'secret_material_exposed':False,'source_sha':os.environ.get('SOURCE_SHA','')}
+          r=Path('dist/fcm-denied-permission'); v=json.loads((r/'validation.json').read_text()) if (r/'validation.json').exists() else {}
+          out={'status':'DIAGNOSTIC_COMPLETE','validation_status':v.get('status'),'validation_http_status':v.get('http_status'),'validation_rpc_status':v.get('rpc_status'),'validation_error_info_reason':v.get('error_info_reason'),'validation_error_info_domain':v.get('error_info_domain'),'denied_permission':v.get('denied_permission'),'denied_method':v.get('denied_method'),'validation_ok':v.get('validation_ok'),'message_delivered':False,'temporary_fcm_role_removed':os.environ.get('LEFT','true').lower()!='true','api_enable_mutation':False,'secret_material_exposed':False,'source_sha':os.environ.get('SOURCE_SHA','')}
           (r/'summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
-          if not out['temporary_fcm_role_removed']: raise SystemExit('Temporary role cleanup failed')
+          if not out['temporary_fcm_role_removed']: raise SystemExit('Temporary FCM role cleanup failed')
           PY
           rm -f /tmp/fcm-token /tmp/fcm-member /tmp/fcm-temp-role
-          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|registration_token["=: ]|proof_id["=: ]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/fcm-missing-permission; then rm -rf dist/fcm-missing-permission; exit 1; fi
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|registration_token["=: ]|proof_id["=: ]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/fcm-denied-permission; then rm -rf dist/fcm-denied-permission; exit 1; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: HealthIA-FCM-Exact-Missing-Permission
-          path: dist/fcm-missing-permission
+          name: HealthIA-FCM-Exact-Denied-Permission
+          path: dist/fcm-denied-permission
           if-no-files-found: error
           retention-days: 7
