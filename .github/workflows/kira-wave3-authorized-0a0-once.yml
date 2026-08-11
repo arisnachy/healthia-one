@@ -1,0 +1,235 @@
+name: KIRA Wave 3 authorized exact-head 0a0 one-take
+
+on:
+  pull_request:
+    branches:
+      - kira/golden-google-constellation-live-891745e1
+    paths:
+      - .github/workflows/kira-wave3-authorized-0a0-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kira-wave3-authorized-0a0eb9e2-one-take
+  cancel-in-progress: false
+
+jobs:
+  claim-once:
+    runs-on: ubuntu-22.04
+    outputs:
+      claimed: ${{ steps.claim.outputs.claimed }}
+    env:
+      CANDIDATE_SHA: 0a0eb9e2f79f920514192a9e8373c33bf4aefbe5
+      AUTHORIZATION: I_AUTHORIZE_WAVE3_EXACT_CLOUD_ONE_TAKE
+      TARGET_BRANCH: kira/google-constellation-wave2-live
+      MARKER_PATH: .kira/wave3-one-take-0a0eb9e2-consumed.json
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Require exact user authorization and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$AUTHORIZATION" = "I_AUTHORIZE_WAVE3_EXACT_CLOUD_ONE_TAKE"
+          test "$CANDIDATE_SHA" = "0a0eb9e2f79f920514192a9e8373c33bf4aefbe5"
+      - name: Atomically claim this bounded attempt before Cloud
+        id: claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh api "/repos/${REPO}/contents/${MARKER_PATH}?ref=${TARGET_BRANCH}" >/tmp/existing.json 2>/dev/null; then
+            echo "claimed=false" >> "$GITHUB_OUTPUT"
+            echo "HEALTHIA_WAVE3_ALREADY_CLAIMED"
+            exit 0
+          fi
+          printf '%s\n' '{"candidate_sha":"0a0eb9e2f79f920514192a9e8373c33bf4aefbe5","authorization":"I_AUTHORIZE_WAVE3_EXACT_CLOUD_ONE_TAKE","scope":"one bounded private deploy and recording attempt","public_release_performed":false}' > /tmp/marker.json
+          encoded="$(base64 -w0 /tmp/marker.json)"
+          gh api --method PUT "/repos/${REPO}/contents/${MARKER_PATH}" \
+            -f message='KIRA Wave 3: claim authorized 0a0 one-take exactly once' \
+            -f content="$encoded" \
+            -f branch="$TARGET_BRANCH" >/dev/null
+          echo "claimed=true" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_WAVE3_ONE_TAKE_CLAIMED"
+
+  deploy-record:
+    needs: claim-once
+    if: needs.claim-once.outputs.claimed == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-demo
+      GCS_BUCKET: healthia-6088a-healthia-evidence
+      CANDIDATE_SHA: 0a0eb9e2f79f920514192a9e8373c33bf4aefbe5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+      - name: Prove exact authorized checkout before any Cloud work
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$CANDIDATE_SHA"
+          echo "HEALTHIA_WAVE3_EXACT_SHA_OK ${actual:0:12}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install verification dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+      - name: Fail before Cloud spend unless all exact-head product gates pass
+        run: |
+          python -m pytest -q
+          python scripts/full_system_check.py
+          python scripts/dialogbench.py
+          python scripts/judge_omega.py
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Deploy the exact candidate with bounded model usage and strict proof
+        shell: pwsh
+        run: |
+          ./deployment/deploy-cloud-demo.ps1 -ProjectId $env:PROJECT_ID -RequestLimit 20 -Confirmed
+      - name: Bind recorder only to the newly ready revision
+        id: cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          test -n "$url" && test -n "$revision" && test -n "$image" && test -n "$token"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_WAVE3_REVISION_BOUND $revision"
+      - name: Read-only post-deploy bucket and readiness gate
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud storage buckets describe "gs://${GCS_BUCKET}" --project "$PROJECT_ID" --format='value(name)' | grep -Fx "$GCS_BUCKET" >/dev/null
+          python - <<'PY'
+          import json, os, urllib.request
+          url=os.environ['HEALTHIA_CLOUD_URL'].rstrip('/') + '/api/readiness'
+          req=urllib.request.Request(url, headers={'Authorization':'Bearer '+os.environ['HEALTHIA_CLOUD_ID_TOKEN'],'Accept':'application/json'})
+          with urllib.request.urlopen(req, timeout=30) as response:
+              data=json.load(response)
+          required={'ready':True,'ai_ready':True,'adk_ready':True,'store_backend':'firestore','evidence_backend':'gcs','auth_required':True}
+          bad={k:(v,data.get(k)) for k,v in required.items() if data.get(k)!=v}
+          if bad:
+              raise SystemExit(f'readiness mismatch: {bad}')
+          print('HEALTHIA_WAVE3_READONLY_READINESS_PASS')
+          PY
+      - name: Install isolated Chromium recorder
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Record one continuous Wave 3 judge journey
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+          HEALTHIA_CLOUD_REVISION: ${{ steps.cloud.outputs.revision }}
+          HEALTHIA_CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
+          HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
+          HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
+          HEALTHIA_CANDIDATE_SHA: ${{ env.CANDIDATE_SHA }}
+          HEALTHIA_GCS_BUCKET: ${{ env.GCS_BUCKET }}
+          HEALTHIA_DEMO_TARGET_SECONDS: "285"
+        run: python scripts/record_submission_demo.py
+      - name: Require exact-head Wave 3 semantic gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$CANDIDATE_SHA" "${{ steps.cloud.outputs.revision }}" <<'PY'
+          import json, pathlib, sys
+          expected, revision = sys.argv[1:3]
+          report=json.loads(pathlib.Path('dist/submission-demo/report.json').read_text(encoding='utf-8'))
+          if report.get('status') != 'PASS': raise SystemExit('Wave 3 recorder did not PASS')
+          if report.get('candidate_sha') != expected: raise SystemExit('Recorder is not bound to authorized SHA')
+          if report.get('cloud_revision') != revision: raise SystemExit('Recorder is not bound to the deployed revision')
+          required={
+            'wave3_unanchored_reference_fails_closed',
+            'wave3_evidence_backed_reference_resolution',
+            'wave3_places_stops_before_mission_location_consent',
+            'wave3_mission_scoped_location_consent_then_real_places',
+            'wave3_ordinal_resumes_and_selects_durable_mission',
+            'relogin_continuity_including_google_mission',
+            'zero_browser_console_or_page_errors',
+          }
+          missing=sorted(required-set(report.get('checks') or []))
+          if missing: raise SystemExit(f'Missing Wave 3 gates: {missing}')
+          print('HEALTHIA_WAVE3_REPORT_EXACT_HEAD_PASS')
+          PY
+      - name: Verify continuous recording duration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ffprobe >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y ffmpeg; fi
+          video="$(find dist/submission-demo/video -type f -name '*.webm' | head -n 1)"
+          test -n "$video"
+          duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$video")"
+          python - "$duration" <<'PY'
+          import sys
+          d=float(sys.argv[1])
+          if not 250 <= d <= 360: raise SystemExit(f'Wave 3 duration outside 4:10-6:00: {d:.2f}s')
+          print(f'HEALTHIA_WAVE3_ONE_TAKE_DURATION_OK {d:.2f}s')
+          PY
+      - name: Add sanitized private evidence envelope
+        shell: bash
+        env:
+          REVISION: ${{ steps.cloud.outputs.revision }}
+          IMAGE: ${{ steps.cloud.outputs.image }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+          root=pathlib.Path('dist/submission-demo')
+          report=json.loads((root/'report.json').read_text(encoding='utf-8'))
+          video=next((root/'video').glob('*.webm'))
+          evidence={
+            'status':'PASS',
+            'candidate_sha':os.environ['CANDIDATE_SHA'],
+            'cloud_revision':os.environ['REVISION'],
+            'cloud_image':os.environ['IMAGE'],
+            'video_sha256':hashlib.sha256(video.read_bytes()).hexdigest(),
+            'synthetic_only':bool(report.get('synthetic_only')),
+            'checks':report.get('checks') or [],
+            'public_release_performed':False,
+            'secrets_exposed':False,
+            'veo_invoked':False,
+            'truth_boundary':'Private exact-head Wave 3 recording only; preserved public judge video is not replaced automatically.'
+          }
+          (root/'wave3_exact_head_evidence.json').write_text(json.dumps(evidence,indent=2),encoding='utf-8')
+          PY
+      - name: Upload private exact-head PASS evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave3-exact-head-one-take-0a0
+          path: dist/submission-demo
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload private failure diagnostics if any gate fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave3-exact-head-one-take-0a0-failure-diagnostics
+          path: dist/submission-demo
+          if-no-files-found: warn
+          retention-days: 7
