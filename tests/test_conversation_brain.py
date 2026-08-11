@@ -124,4 +124,4 @@ def test_dialogbench_context_gate_passes() -> None:
     assert report["status"] == "PASS"
     assert report["dialogue_count"] >= 120
     assert report["score"] >= 0.98
-    assert "not perfect human conversation" in report["claim_boundary"].lower()
+    assert "does not claim perfect human conversation" in report["claim_boundary"].lower()
