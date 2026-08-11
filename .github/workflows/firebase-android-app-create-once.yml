@@ -1,0 +1,354 @@
+name: KIRA one-shot Firebase Android app creation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/firebase-android-app-create-once.yml'
+      - '.kira/authorizations/firebase-android-app-create.once'
+
+concurrency:
+  group: healthia-firebase-android-create-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  create-controlled-app-once:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    env:
+      PROJECT_ID: healthia-6088a
+      PACKAGE_NAME: com.healthia.one.bridge
+      DISPLAY_NAME: HealthIA Bridge
+      MARKER: .kira/authorizations/firebase-android-app-create.once
+      REQUIRED_AUTHORIZATION: I_AUTHORIZE_FIREBASE_ANDROID_APP_CREATE_ONCE
+      TEMP_ROLE: roles/oauthconfig.editor
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Bind exact authorized head and marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "${{ github.event.pull_request.head.sha }}"
+          test -f "$MARKER"
+          authorization="$(tr -d '\r\n' < "$MARKER")"
+          if [[ "$authorization" != "$REQUIRED_AUTHORIZATION" ]]; then
+            echo 'Android app creation authorization marker is absent or invalid.' >&2
+            exit 1
+          fi
+          echo "SOURCE_SHA=$source_sha" >> "$GITHUB_ENV"
+          echo 'TEMP_ROLE_GRANTED=false' >> "$GITHUB_ENV"
+          echo 'APP_CREATED=false' >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Create exactly one controlled Firebase Android app
+        id: create
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/firebase-android-create-once
+          account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
+          test -n "$account"
+          case "$account" in
+            *.iam.gserviceaccount.com) ;;
+            *) echo 'Active CI identity is not a service account.' >&2; exit 1 ;;
+          esac
+          echo "::add-mask::$account"
+          echo "CI_ACCOUNT=$account" >> "$GITHUB_ENV"
+
+          token="$(gcloud auth print-access-token)"
+          test -n "$token"
+          echo "::add-mask::$token"
+
+          list_apps() {
+            curl -sS -o /tmp/firebase-apps.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Accept: application/json' \
+              "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true
+          }
+
+          list_code="$(list_apps)"
+          [[ "$list_code" == '200' ]] || { echo "Firebase list failed with HTTP ${list_code}." >&2; exit 1; }
+          match_count="$(python - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/firebase-apps.json').read_text(encoding='utf-8'))
+          apps=payload.get('apps') or []
+          matches=[a for a in apps if isinstance(a,dict) and str(a.get('packageName') or '')==os.environ['PACKAGE_NAME'] and str(a.get('projectId') or '')==os.environ['PROJECT_ID'] and str(a.get('state') or 'ACTIVE')=='ACTIVE']
+          print(len(matches))
+          PY
+          )"
+          rm -f /tmp/firebase-apps.json
+          if [[ "$match_count" -gt 1 ]]; then
+            echo 'More than one active controlled Firebase Android app exists; refusing mutation.' >&2
+            exit 1
+          fi
+
+          iam_test_code="$(curl -sS -o /tmp/create-permission.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            -d '{"permissions":["firebase.clients.create"]}' \
+            "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT_ID}:testIamPermissions" || true)"
+          can_create=false
+          if [[ "$iam_test_code" == '200' ]]; then
+            can_create="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              payload=json.loads(Path('/tmp/create-permission.json').read_text(encoding='utf-8'))
+          except Exception:
+              payload={}
+          print('true' if 'firebase.clients.create' in set(payload.get('permissions') or []) else 'false')
+          PY
+            )"
+          fi
+          rm -f /tmp/create-permission.json
+          echo "CREATE_PERMISSION_BEFORE=$can_create" >> "$GITHUB_ENV"
+          echo "CREATE_PERMISSION_TEST_HTTP=$iam_test_code" >> "$GITHUB_ENV"
+
+          if [[ "$match_count" == '0' && "$can_create" != 'true' ]]; then
+            gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+              --member="serviceAccount:${account}" \
+              --role="$TEMP_ROLE" \
+              --condition=None \
+              --quiet >/tmp/temp-role-grant.txt
+            rm -f /tmp/temp-role-grant.txt
+            echo 'TEMP_ROLE_GRANTED=true' >> "$GITHUB_ENV"
+
+            permission_ready=false
+            for _ in 1 2 3 4 5 6; do
+              token="$(gcloud auth print-access-token)"
+              echo "::add-mask::$token"
+              code="$(curl -sS -o /tmp/create-permission.json -w '%{http_code}' -X POST \
+                -H "Authorization: Bearer ${token}" \
+                -H 'Content-Type: application/json; charset=utf-8' \
+                -d '{"permissions":["firebase.clients.create"]}' \
+                "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT_ID}:testIamPermissions" || true)"
+              if [[ "$code" == '200' ]] && python - <<'PY'
+          import json
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/create-permission.json').read_text(encoding='utf-8'))
+          raise SystemExit(0 if 'firebase.clients.create' in set(payload.get('permissions') or []) else 1)
+          PY
+              then
+                permission_ready=true
+                break
+              fi
+              sleep 10
+            done
+            rm -f /tmp/create-permission.json
+            [[ "$permission_ready" == 'true' ]] || { echo 'Temporary create permission did not propagate.' >&2; exit 1; }
+          fi
+
+          if [[ "$match_count" == '0' ]]; then
+            token="$(gcloud auth print-access-token)"
+            echo "::add-mask::$token"
+            create_code="$(curl -sS -o /tmp/create-operation.json -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Content-Type: application/json; charset=utf-8' \
+              -d "{\"packageName\":\"${PACKAGE_NAME}\",\"displayName\":\"${DISPLAY_NAME}\"}" \
+              "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
+            rm -f /tmp/create-operation.json
+            [[ "$create_code" == '200' ]] || { echo "Firebase Android app create failed with HTTP ${create_code}." >&2; exit 1; }
+            echo 'APP_CREATED=true' >> "$GITHUB_ENV"
+          fi
+
+          active=false
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            token="$(gcloud auth print-access-token)"
+            echo "::add-mask::$token"
+            list_code="$(curl -sS -o /tmp/firebase-apps.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Accept: application/json' \
+              "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
+            if [[ "$list_code" == '200' ]]; then
+              if python - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/firebase-apps.json').read_text(encoding='utf-8'))
+          apps=payload.get('apps') or []
+          matches=[a for a in apps if isinstance(a,dict) and str(a.get('packageName') or '')==os.environ['PACKAGE_NAME'] and str(a.get('projectId') or '')==os.environ['PROJECT_ID'] and str(a.get('state') or 'ACTIVE')=='ACTIVE']
+          if len(matches)!=1:
+              raise SystemExit(1)
+          name=str(matches[0].get('name') or '').strip()
+          if not name.startswith('projects/'+os.environ['PROJECT_ID']+'/androidApps/'):
+              raise SystemExit(1)
+          Path('/tmp/firebase-app-name.txt').write_text(name,encoding='utf-8')
+          PY
+              then
+                active=true
+                break
+              fi
+            fi
+            sleep 5
+          done
+          rm -f /tmp/firebase-apps.json
+          [[ "$active" == 'true' ]] || { echo 'Controlled Firebase Android app did not become ACTIVE.' >&2; exit 1; }
+
+          app_name="$(cat /tmp/firebase-app-name.txt)"
+          echo "::add-mask::$app_name"
+          config_code="$(curl -sS -o /tmp/firebase-config.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/${app_name}/config" || true)"
+          [[ "$config_code" == '200' ]] || { rm -f /tmp/firebase-config.json /tmp/firebase-app-name.txt; echo "Firebase config read failed with HTTP ${config_code}." >&2; exit 1; }
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/firebase-config.json').read_text(encoding='utf-8'))
+          if str(payload.get('configFilename') or '') != 'google-services.json' or not str(payload.get('configFileContents') or '').strip():
+              raise SystemExit('Firebase config artifact incomplete')
+          PY
+          rm -f /tmp/firebase-config.json /tmp/firebase-app-name.txt
+          echo "FIREBASE_CONFIG_HTTP=$config_code" >> "$GITHUB_ENV"
+
+      - name: Remove temporary create role
+        id: cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          removed=false
+          if [[ "${TEMP_ROLE_GRANTED:-false}" == 'true' ]]; then
+            test -n "${CI_ACCOUNT:-}"
+            gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+              --member="serviceAccount:${CI_ACCOUNT}" \
+              --role="$TEMP_ROLE" \
+              --condition=None \
+              --quiet >/tmp/temp-role-remove.txt
+            rm -f /tmp/temp-role-remove.txt
+            removed=true
+          fi
+          echo "removed=$removed" >> "$GITHUB_OUTPUT"
+          echo "TEMP_ROLE_REMOVED=$removed" >> "$GITHUB_ENV"
+
+      - name: Verify controlled app and viewer config after cleanup
+        id: verify
+        if: always() && steps.create.conclusion == 'success' && steps.cleanup.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          echo "::add-mask::$token"
+          list_code="$(curl -sS -o /tmp/firebase-apps.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
+          [[ "$list_code" == '200' ]] || exit 1
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/firebase-apps.json').read_text(encoding='utf-8'))
+          apps=payload.get('apps') or []
+          matches=[a for a in apps if isinstance(a,dict) and str(a.get('packageName') or '')==os.environ['PACKAGE_NAME'] and str(a.get('projectId') or '')==os.environ['PROJECT_ID'] and str(a.get('state') or 'ACTIVE')=='ACTIVE']
+          if len(matches)!=1:
+              raise SystemExit(1)
+          name=str(matches[0].get('name') or '').strip()
+          Path('/tmp/firebase-app-name.txt').write_text(name,encoding='utf-8')
+          PY
+          rm -f /tmp/firebase-apps.json
+          app_name="$(cat /tmp/firebase-app-name.txt)"
+          echo "::add-mask::$app_name"
+          config_code="$(curl -sS -o /tmp/firebase-config.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/${app_name}/config" || true)"
+          rm -f /tmp/firebase-app-name.txt
+          [[ "$config_code" == '200' ]] || { rm -f /tmp/firebase-config.json; exit 1; }
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/firebase-config.json').read_text(encoding='utf-8'))
+          if str(payload.get('configFilename') or '') != 'google-services.json' or not str(payload.get('configFileContents') or '').strip():
+              raise SystemExit(1)
+          PY
+          rm -f /tmp/firebase-config.json
+          echo 'firebase_ready=true' >> "$GITHUB_OUTPUT"
+
+      - name: Build sanitized creation evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/firebase-android-create-once
+          export CREATE_CONCLUSION="${{ steps.create.conclusion }}" CLEANUP_CONCLUSION="${{ steps.cleanup.conclusion }}" VERIFY_READY="${{ steps.verify.outputs.firebase_ready || 'false' }}"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          account=os.environ.get('CI_ACCOUNT','')
+          out={
+              'status':'LIVE_PASS' if os.environ.get('VERIFY_READY')=='true' else 'FAILED',
+              'source_sha':os.environ.get('SOURCE_SHA',''),
+              'project_id':os.environ['PROJECT_ID'],
+              'package_name':os.environ['PACKAGE_NAME'],
+              'app_created':os.environ.get('APP_CREATED')=='true',
+              'create_permission_before':os.environ.get('CREATE_PERMISSION_BEFORE')=='true',
+              'create_permission_test_http':int(os.environ.get('CREATE_PERMISSION_TEST_HTTP') or 0),
+              'temporary_role':os.environ['TEMP_ROLE'] if os.environ.get('TEMP_ROLE_GRANTED')=='true' else None,
+              'temporary_role_granted':os.environ.get('TEMP_ROLE_GRANTED')=='true',
+              'temporary_role_removed':os.environ.get('TEMP_ROLE_REMOVED')=='true',
+              'firebase_config_available_after_cleanup':os.environ.get('VERIFY_READY')=='true',
+              'active_service_account_sha256':hashlib.sha256(account.encode()).hexdigest() if account else None,
+              'api_enable_mutation':False,
+              'billing_mutation':False,
+              'other_firebase_app_mutation':False,
+              'secret_material_exposed':False,
+              'create_step':os.environ.get('CREATE_CONCLUSION',''),
+              'cleanup_step':os.environ.get('CLEANUP_CONCLUSION',''),
+          }
+          Path('dist/firebase-android-create-once/result.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+      - name: Refuse secret-like evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|client_secret|access_token|refresh_token|ya29\.|AIza[0-9A-Za-z_-]{20,}|1:[0-9]+:android:[0-9a-f]+|iam\.gserviceaccount\.com)' dist/firebase-android-create-once; then
+            rm -rf dist/firebase-android-create-once
+            echo 'Sensitive-looking material detected; refusing upload.' >&2
+            exit 1
+          fi
+
+      - name: Upload one-shot Firebase app creation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Firebase-Android-App-One-Shot
+          path: dist/firebase-android-create-once/result.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Dispatch FCM-ready Android build
+        if: steps.verify.outputs.firebase_ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -d '{"ref":"kira/google-constellation-wave2-live"}' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/android-bridge.yml/dispatches"
+          echo 'Android build dispatched after controlled Firebase app creation and cleanup.'
