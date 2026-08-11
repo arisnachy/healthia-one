@@ -83,11 +83,12 @@ def test_wave3_recording_never_auto_publishes_or_claims_submission_replacement()
     assert "HealthIA-Wave3-exact-head-one-take" in workflow
 
 
-def test_wave3_recording_does_not_enable_new_apis_or_touch_veo() -> None:
+def test_wave3_recording_does_not_enable_new_apis_or_invoke_veo() -> None:
     workflow = (ROOT / ".github/workflows/wave3-exact-head-one-take.yml").read_text(encoding="utf-8")
     lowered = workflow.lower()
     assert "gcloud services enable" not in lowered
     assert "serviceusage.services.enable" not in lowered
-    assert "veo" not in lowered
+    assert "veo_invoked': false" in lowered
+    assert "veo_invoked': true" not in lowered
     assert "roles/owner" not in lowered
     assert "roles/editor" not in lowered
