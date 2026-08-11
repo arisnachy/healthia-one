@@ -232,7 +232,8 @@ def run() -> dict:
         page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
         first_block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
         require(first_block.locator(".clinical-question").count() == 5, "first live block is not five questions")
-        require("Case-specific questions" in first_block.inner_text(), "clinical block chrome is not English")
+        require("I will ask one useful thing at a time" in first_block.inner_text(), "clinical conversational block chrome is not English")
+        require(first_block.locator(".clinical-next-question").inner_text() == "Continue", "clinical conversational control is not English")
         report["checks"].append("live_english_gemini_adk_question_block_1")
         overlay(page, "Gemini + Google ADK", "ADK executes the authorized clinical baseline tool before Gemini returns exactly five case-specific questions in the patient's language.", 13)
         clear_overlay(page)
@@ -300,7 +301,7 @@ def run() -> dict:
 
         # Wave 3: autonomous Google navigation must stop before Places until this mission has explicit consent.
         page.locator('.main-nav [data-open="chat"]').click()
-        navigation_reply = send_and_wait(page, "Find a clinic that can help with follow-up care in Santiago.", timeout_s=90)
+        navigation_reply = send_and_wait(page, "Find a clinic that can help with follow-up care in Santiago de los Caballeros, Dominican Republic.", timeout_s=90)
         nav_meta = navigation_reply.get("metadata") or {}
         nav_id = str(nav_meta.get("google_mission_id") or "")
         require(nav_id.startswith("gmission_"), "Google navigation mission was not created")
