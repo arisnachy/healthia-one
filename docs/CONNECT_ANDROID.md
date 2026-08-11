@@ -234,6 +234,10 @@ El `proof_id` es evidencia operativa sintética; no contiene diagnóstico, resul
 
 El preflight FCM examina únicamente `healthia_fcm_registrations/*/devices/*` y reporta por separado documentos, tombstones de privacidad, documentos que aún contienen token y candidatos activos. Un tombstone correcto no se confunde con un token activo.
 
+### Estado sin autorización LIVE
+
+Mientras Firebase Management siga en `BLOCKED_FIREBASE_READ_IAM` y no exista un APK FCM-ready instalado y con opt-in, el estado correcto seguirá siendo `BLOCKED_DEVICE`. En preflight no se envía ningún mensaje. El paso LIVE sólo puede ejecutarse con la autorización exacta `I_AUTHORIZE_CONTROLLED_FCM_PROOF` y con exactamente un registro activo controlado.
+
 ## 6. De dónde salen los datos
 
 El puente lee registros que ya estén presentes en Health Connect:
