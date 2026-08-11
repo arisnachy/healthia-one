@@ -1,0 +1,56 @@
+name: KIRA Wave 3 observe start once
+
+on:
+  push:
+    branches:
+      - kira/google-constellation-wave2-live
+    paths:
+      - .github/workflows/kira-wave3-observe-start-once.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 6
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RESULT_PATH: .kira/wave3_exact_head_one_take_started.json
+    steps:
+      - name: Find canonical Wave 3 dispatch and record sanitized start marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_json=""
+          for i in $(seq 1 60); do
+            run_json="$(gh api "/repos/${REPO}/actions/workflows/wave3-exact-head-one-take.yml/runs?event=workflow_dispatch&branch=kira%2Fgoogle-constellation-wave2-live&per_page=5" --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0] // empty')"
+            if [ -n "$run_json" ]; then break; fi
+            sleep 3
+          done
+          if [ -z "$run_json" ]; then
+            echo "No Wave 3 dispatch found" >&2
+            exit 2
+          fi
+          python - "$run_json" <<'PY' > /tmp/start.json
+          import json, sys
+          r=json.loads(sys.argv[1])
+          out={
+            'candidate_sha':'65a00f092f24a8bd2361516b7875f4a8d9b6ed18',
+            'canonical_run_id':int(r['id']),
+            'status':r.get('status'),
+            'conclusion':r.get('conclusion'),
+            'event':r.get('event'),
+            'public_release_performed':False,
+            'secrets_exposed':False,
+          }
+          print(json.dumps(out, indent=2, sort_keys=True))
+          PY
+          encoded="$(base64 -w0 /tmp/start.json)"
+          gh api --method PUT "/repos/${REPO}/contents/${RESULT_PATH}" \
+            -f message='KIRA: record sanitized Wave 3 one-take start' \
+            -f content="$encoded" \
+            -f branch='kira/google-constellation-wave2-live' >/dev/null
+          echo "HEALTHIA_WAVE3_START_MARKER_WRITTEN"
