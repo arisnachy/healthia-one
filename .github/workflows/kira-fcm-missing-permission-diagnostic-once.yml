@@ -1,124 +1,14 @@
-name: KIRA FCM exact denied-permission diagnostic
+name: KIRA retired FCM exact denied-permission diagnostic
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/kira-fcm-missing-permission-diagnostic-once.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  diagnose:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+  retired:
+    if: false
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    env:
-      PROJECT_ID: healthia-6088a
-      TEMP_ROLE: roles/firebasecloudmessaging.admin
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Bind source
-        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-      - name: Authenticate
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
-          create_credentials_file: true
-      - uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-      - name: Install Firestore client
-        run: python -m pip install --quiet "google-cloud-firestore>=2.21,<3"
-      - name: Capture exactly one active token ephemerally
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/fcm-denied-permission
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from google.cloud import firestore
-          c=[]
-          for s in firestore.Client(project=os.environ['PROJECT_ID']).collection_group('devices').stream():
-              if not s.reference.path.startswith('healthia_fcm_registrations/'): continue
-              f=s.to_dict() or {}; raw=str(f.get('registration_token') or ''); d=str(f.get('token_sha256') or '')
-              valid=len(d)==64 and all(x in '0123456789abcdefABCDEF' for x in d)
-              if {'patient_id','connection_id','device_id','enabled'} <= set(f) and bool(f.get('enabled',True)) and len(raw)>=16 and valid: c.append(raw)
-          if len(c)!=1: raise SystemExit('Exactly one active FCM registration required')
-          Path('/tmp/fcm-token').write_text(c[0])
-          PY
-      - name: Grant temporary FCM API admin
-        shell: bash
-        run: |
-          set -euo pipefail
-          ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"; test -n "$ACCOUNT"; echo "::add-mask::$ACCOUNT"
-          MEMBER="serviceAccount:$ACCOUNT"; echo "::add-mask::$MEMBER"; printf '%s' "$MEMBER" >/tmp/fcm-member
-          gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --condition=None --quiet >/dev/null
-          touch /tmp/fcm-temp-role
-          sleep 20
-      - name: Extract exact validate-only denied permission
-        shell: bash
-        run: |
-          set -euo pipefail
-          TOKEN="$(cat /tmp/fcm-token)"; echo "::add-mask::$TOKEN"
-          ACCESS="$(gcloud auth print-access-token)"; echo "::add-mask::$ACCESS"; export TOKEN ACCESS
-          python - <<'PY'
-          import json, os, urllib.error, urllib.request
-          from pathlib import Path
-          payload={'validate_only':True,'message':{'token':os.environ['TOKEN'],'data':{'kind':'healthia_update','proof_id':'diagnostic_validation_only'},'android':{'priority':'HIGH'}}}
-          req=urllib.request.Request(f"https://fcm.googleapis.com/v1/projects/{os.environ['PROJECT_ID']}/messages:send",data=json.dumps(payload,separators=(',',':')).encode(),headers={'Authorization':'Bearer '+os.environ['ACCESS'],'Content-Type':'application/json'},method='POST')
-          status=0; rpc=''; reason=''; domain=''; permission=''; method=''; validation_ok=False
-          try:
-              with urllib.request.urlopen(req,timeout=60) as r: status=r.status; r.read(); validation_ok=status==200
-          except urllib.error.HTTPError as e:
-              status=e.code
-              try: body=json.loads(e.read().decode() or '{}')
-              except Exception: body={}
-              err=body.get('error') or {}; rpc=str(err.get('status') or '')
-              for d in err.get('details') or []:
-                  if isinstance(d,dict) and d.get('@type','').endswith('ErrorInfo'):
-                      reason=str(d.get('reason') or ''); domain=str(d.get('domain') or ''); m=d.get('metadata') or {}; permission=str(m.get('permission') or ''); method=str(m.get('method') or '')
-          allowed=('cloudmessaging.','firebase.','resourcemanager.','serviceusage.','iam.')
-          safe_permission=permission if (not permission or permission.startswith(allowed)) else 'OTHER_PERMISSION'
-          safe_method=method if (not method or len(method)<200) else 'OTHER_METHOD'
-          out={'status':'VALIDATION_PASS' if validation_ok else 'VALIDATION_DENIED','validate_only':True,'message_delivered':False,'http_status':status,'rpc_status':rpc,'error_info_reason':reason,'error_info_domain':domain,'denied_permission':safe_permission,'denied_method':safe_method,'validation_ok':validation_ok,'source_sha':os.environ.get('SOURCE_SHA',''),'raw_token_exposed':False,'secret_material_exposed':False}
-          Path('dist/fcm-denied-permission/validation.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
-          PY
-      - name: Remove temporary FCM API admin
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -f /tmp/fcm-temp-role && -f /tmp/fcm-member ]]; then MEMBER="$(cat /tmp/fcm-member)"; echo "::add-mask::$MEMBER"; gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --condition=None --quiet >/dev/null || gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$TEMP_ROLE" --quiet >/dev/null; fi
-      - name: Verify cleanup and summarize
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          LEFT=false
-          if [[ -f /tmp/fcm-member ]]; then MEMBER="$(cat /tmp/fcm-member)"; echo "::add-mask::$MEMBER"; if gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role:$TEMP_ROLE AND bindings.members:$MEMBER" --format='value(bindings.role)' | grep -Fxq "$TEMP_ROLE"; then LEFT=true; fi; fi
-          export LEFT
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          r=Path('dist/fcm-denied-permission'); v=json.loads((r/'validation.json').read_text()) if (r/'validation.json').exists() else {}
-          out={'status':'DIAGNOSTIC_COMPLETE','validation_status':v.get('status'),'validation_http_status':v.get('http_status'),'validation_rpc_status':v.get('rpc_status'),'validation_error_info_reason':v.get('error_info_reason'),'validation_error_info_domain':v.get('error_info_domain'),'denied_permission':v.get('denied_permission'),'denied_method':v.get('denied_method'),'validation_ok':v.get('validation_ok'),'message_delivered':False,'temporary_fcm_role_removed':os.environ.get('LEFT','true').lower()!='true','api_enable_mutation':False,'secret_material_exposed':False,'source_sha':os.environ.get('SOURCE_SHA','')}
-          (r/'summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n'); print(json.dumps(out,sort_keys=True))
-          if not out['temporary_fcm_role_removed']: raise SystemExit('Temporary FCM role cleanup failed')
-          PY
-          rm -f /tmp/fcm-token /tmp/fcm-member /tmp/fcm-temp-role
-          if grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|registration_token["=: ]|proof_id["=: ]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/fcm-denied-permission; then rm -rf dist/fcm-denied-permission; exit 1; fi
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: HealthIA-FCM-Exact-Denied-Permission
-          path: dist/fcm-denied-permission
-          if-no-files-found: error
-          retention-days: 7
+      - run: echo retired
