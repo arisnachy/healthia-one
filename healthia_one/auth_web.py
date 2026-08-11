@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 from healthia_one.auth import AccountManager, AuthError, bind_principal, current_principal, reset_principal
 from healthia_one.config import Settings
-from healthia_one.fcm_device_api import build_fcm_device_router
 from healthia_one.google_constellation_api import build_google_constellation_router
 from healthia_one.google_constellation_singleton import get_google_constellation_service
 from healthia_one.google_oauth_web import build_google_oauth_browser_flow, build_google_oauth_router
@@ -149,10 +148,9 @@ def install_patient_auth(
         response.delete_cookie(settings.session_cookie_name, path="/")
         return response
 
-    # Paired-device FCM registration is independent of the browser session and
-    # uses the signed device bearer plus the persisted device connection state.
-    # Raw registration tokens are server-only and never returned by this router.
-    app.include_router(build_fcm_device_router(service, settings))
+    # FCM routes are mounted once by app.main so they share the production
+    # pairing verifier and registration store with device revocation cleanup.
+    # This module only keeps the browser-session middleware exception above.
 
     # Opportunity and Google Constellation data are mounted after the same
     # patient-session middleware. Neither prefix is public, so Cloud mode always
