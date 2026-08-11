@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from healthia_one.google_constellation import GoogleAction
+from healthia_one.google_constellation import GrantBundle, GoogleAction, active_grant_bundles
 from healthia_one.google_mission_runtime import (
     GoogleHealthMission,
     GoogleHealthMissionCoordinator,
@@ -64,6 +64,22 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
         self.store.save(mission)
         return mission
 
+    def _block_for_location_consent(self, mission: GoogleHealthMission) -> GoogleHealthMission:
+        mission.state = MissionState.BLOCKED
+        mission.tool_outputs["authorization_boundary"] = {
+            "kind": "maps_location_for_mission",
+            "mission_id": mission.id,
+            "missing_grants": [str(GrantBundle.MAPS_LOCATION)],
+            "external_action_performed": False,
+            "scope": "this_mission_only",
+        }
+        mission.record(
+            "maps.location_consent_required",
+            "Places lookup is paused until the patient explicitly grants location lookup for this mission; no search was performed.",
+        )
+        self.store.save(mission)
+        return mission
+
     def discover(self, mission, grants, *, radius_m: int = 10000):
         if mission.state not in {MissionState.RECEIVED, MissionState.DISCOVERING, MissionState.BLOCKED}:
             raise MissionTransitionError(f"Cannot discover providers from {mission.state}")
@@ -88,6 +104,11 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
             location_mode = "explicit_text"
         else:
             mission.state = MissionState.BLOCKED
+            mission.tool_outputs["authorization_boundary"] = {
+                "kind": "location_evidence_required",
+                "mission_id": mission.id,
+                "external_action_performed": False,
+            }
             mission.record(
                 "maps.location_required",
                 "Navigation needs patient-authorized coordinates or explicit location text; locale/timezone were not used as location.",
@@ -95,6 +116,13 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
             self.store.save(mission)
             return mission
 
+        active = active_grant_bundles(grants, mission.patient_id, mission.id)
+        if GrantBundle.MAPS_LOCATION not in active:
+            return self._block_for_location_consent(mission)
+
+        # A prior consent boundary is stale once this exact mission has an active
+        # mission-scoped (or legacy account-level) Maps capability grant.
+        mission.tool_outputs.pop("authorization_boundary", None)
         receipt, outcome = self._execute(mission, grants, action, payload)
         if receipt.status != "completed" or outcome is None:
             mission.state = MissionState.BLOCKED
