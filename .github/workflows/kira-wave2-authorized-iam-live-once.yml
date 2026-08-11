@@ -1,0 +1,214 @@
+name: KIRA authorized Wave 2 IAM + LIVE once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/kira-wave2-authorized-iam-live-once.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: kira-wave2-authorized-iam-live-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  live-once:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    env:
+      PROJECT_ID: healthia-6088a
+      TARGET_BRANCH: kira/google-constellation-wave2-live
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AUTHORIZATION: I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Enforce exact one-shot authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]] || { echo 'Retry refused: provider proof is one-shot.' >&2; exit 1; }
+          [[ "$AUTHORIZATION" == "I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE" ]] || { echo 'Exact authorization missing.' >&2; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Grant only temporary provider roles not already present
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
+          test -n "$ACCOUNT"
+          echo "::add-mask::$ACCOUNT"
+          MEMBER="serviceAccount:$ACCOUNT"
+          echo "::add-mask::$MEMBER"
+          printf '%s' "$MEMBER" > /tmp/wave2-member
+          : > /tmp/wave2-granted-roles
+          roles=(
+            roles/serviceusage.serviceUsageAdmin
+            roles/speech.client
+            roles/documentai.editor
+            roles/storage.admin
+            roles/healthcare.datasetAdmin
+            roles/healthcare.fhirStoreAdmin
+            roles/healthcare.fhirResourceEditor
+            roles/healthcare.dicomStoreAdmin
+            roles/healthcare.dicomEditor
+          )
+          for role in "${roles[@]}"; do
+            if gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role:$role AND bindings.members:$MEMBER" --format='value(bindings.role)' | grep -Fxq "$role"; then
+              echo "Preserving pre-existing role: $role"
+            else
+              gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$role" --condition=None --quiet >/dev/null
+              printf '%s\n' "$role" >> /tmp/wave2-granted-roles
+              echo "Temporary role granted: $role"
+            fi
+          done
+
+      - name: Wait for Service Usage propagation and enable only authorized APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=false
+          for attempt in $(seq 1 32); do
+            if gcloud services enable speech.googleapis.com documentai.googleapis.com healthcare.googleapis.com --project "$PROJECT_ID" --quiet >/tmp/wave2-enable.out 2>/tmp/wave2-enable.err; then
+              ok=true
+              echo "Authorized API enablement accepted on attempt $attempt"
+              break
+            fi
+            if grep -Eiq '(billing|quota|organization policy|org policy|denied by policy)' /tmp/wave2-enable.err; then
+              cat /tmp/wave2-enable.err >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          rm -f /tmp/wave2-enable.out /tmp/wave2-enable.err
+          [[ "$ok" == true ]] || { echo 'Service Usage permission did not propagate within the one-shot window.' >&2; exit 1; }
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          for api in speech.googleapis.com documentai.googleapis.com healthcare.googleapis.com; do
+            grep -Fxq "$api" <<<"$enabled" || { echo "Authorized API not enabled: $api" >&2; exit 1; }
+          done
+
+      - name: Dispatch permanent provider LIVE harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run google-wave2-provider-gates.yml --repo "$GITHUB_REPOSITORY" --ref "$TARGET_BRANCH" -f mode=live -f cost_authorization="$AUTHORIZATION"
+          run_id=''
+          for _ in $(seq 1 40); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow google-wave2-provider-gates.yml --branch "$TARGET_BRANCH" --event workflow_dispatch --limit 30 --json databaseId,headSha,createdAt | jq -r --arg sha "$TARGET_SHA" '[.[] | select(.headSha==$sha)] | sort_by(.createdAt) | reverse | .[0].databaseId // empty')"
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          [[ -n "$run_id" ]] || { echo 'Provider LIVE run not observed.' >&2; exit 1; }
+          echo "PROVIDER_RUN_ID=$run_id" >> "$GITHUB_ENV"
+          for _ in $(seq 1 240); do
+            state="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq '[.status,(.conclusion // "")]|join("|")' 2>/dev/null || true)"
+            if [[ "$state" == completed\|success ]]; then break; fi
+            if [[ "$state" == completed\|* ]]; then echo "Provider LIVE run failed: $state" >&2; exit 1; fi
+            sleep 5
+          done
+          state="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq '[.status,(.conclusion // "")]|join("|")' 2>/dev/null || true)"
+          [[ "$state" == completed\|success ]] || { echo "Provider LIVE run did not finish successfully: $state" >&2; exit 1; }
+
+      - name: Dispatch private-GCS Document AI LIVE harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run google-wave2-documentai-gcs-proof.yml --repo "$GITHUB_REPOSITORY" --ref "$TARGET_BRANCH" -f mode=live -f cost_authorization="$AUTHORIZATION"
+          run_id=''
+          for _ in $(seq 1 40); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow google-wave2-documentai-gcs-proof.yml --branch "$TARGET_BRANCH" --event workflow_dispatch --limit 30 --json databaseId,headSha,createdAt | jq -r --arg sha "$TARGET_SHA" '[.[] | select(.headSha==$sha)] | sort_by(.createdAt) | reverse | .[0].databaseId // empty')"
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          [[ -n "$run_id" ]] || { echo 'Document AI/GCS LIVE run not observed.' >&2; exit 1; }
+          echo "DOCUMENTAI_GCS_RUN_ID=$run_id" >> "$GITHUB_ENV"
+          for _ in $(seq 1 240); do
+            state="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq '[.status,(.conclusion // "")]|join("|")' 2>/dev/null || true)"
+            if [[ "$state" == completed\|success ]]; then break; fi
+            if [[ "$state" == completed\|* ]]; then echo "Document AI/GCS LIVE run failed: $state" >&2; exit 1; fi
+            sleep 5
+          done
+          state="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status,conclusion --jq '[.status,(.conclusion // "")]|join("|")' 2>/dev/null || true)"
+          [[ "$state" == completed\|success ]] || { echo "Document AI/GCS LIVE run did not finish successfully: $state" >&2; exit 1; }
+
+      - name: Remove only provider roles granted by this one-shot
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f /tmp/wave2-member && -f /tmp/wave2-granted-roles ]]; then
+            MEMBER="$(cat /tmp/wave2-member)"
+            echo "::add-mask::$MEMBER"
+            while IFS= read -r role; do
+              [[ -z "$role" ]] && continue
+              gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$role" --condition=None --quiet >/dev/null || \
+                gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="$MEMBER" --role="$role" --quiet >/dev/null
+            done < /tmp/wave2-granted-roles
+          fi
+
+      - name: Verify cleanup and persist sanitized transaction summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/kira-wave2-authorized-iam-live
+          left=0
+          granted_count=0
+          if [[ -f /tmp/wave2-member && -f /tmp/wave2-granted-roles ]]; then
+            MEMBER="$(cat /tmp/wave2-member)"
+            echo "::add-mask::$MEMBER"
+            granted_count="$(grep -cve '^$' /tmp/wave2-granted-roles || true)"
+            while IFS= read -r role; do
+              [[ -z "$role" ]] && continue
+              if gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role:$role AND bindings.members:$MEMBER" --format='value(bindings.role)' | grep -Fxq "$role"; then
+                left=$((left+1))
+              fi
+            done < /tmp/wave2-granted-roles
+          fi
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          export LEFT="$left" GRANTED_COUNT="$granted_count" ENABLED="$enabled"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          enabled=set(os.environ.get('ENABLED','').splitlines())
+          required={'speech.googleapis.com','documentai.googleapis.com','healthcare.googleapis.com'}
+          out={
+            'status':'TRANSACTION_COMPLETE' if os.environ.get('LEFT')=='0' else 'CLEANUP_FAILED',
+            'source_sha':os.environ.get('TARGET_SHA',''),
+            'authorized_apis_enabled':required.issubset(enabled),
+            'temporary_roles_granted_count':int(os.environ.get('GRANTED_COUNT','0') or 0),
+            'temporary_roles_remaining_count':int(os.environ.get('LEFT','0') or 0),
+            'provider_run_id':os.environ.get('PROVIDER_RUN_ID',''),
+            'documentai_gcs_run_id':os.environ.get('DOCUMENTAI_GCS_RUN_ID',''),
+            'veo_authorized':False,
+            'clinical_content':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/kira-wave2-authorized-iam-live/summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          if out['temporary_roles_remaining_count'] != 0: raise SystemExit('Temporary provider role cleanup failed')
+          PY
+          rm -f /tmp/wave2-member /tmp/wave2-granted-roles
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: HealthIA-KIRA-Wave2-Authorized-IAM-LIVE
+          path: dist/kira-wave2-authorized-iam-live/summary.json
+          if-no-files-found: warn
+          retention-days: 30
