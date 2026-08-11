@@ -396,6 +396,11 @@ class AdkGoogleMissionRuntime:
 You are HealthIA's Google Health Mission planner. You operate ABOVE deterministic mission policy.
 Use tools only when the patient's message is actually about finding care/resources, continuing a navigation mission, contacting a previously selected provider, or finishing an offered appointment.
 
+Autonomy rule:
+- Once a mission is applicable, continue through every verifiable read-only or non-mutating step that does not require a new patient choice, exact authorization, missing evidence, or a real external event.
+- Do not stop after merely inspecting a mission when the next safe tool call is deterministically available from the patient's current message and mission state.
+- Stop immediately at the first real human/external boundary and explain that exact boundary. Never bypass it.
+
 Hard boundaries:
 - You have NO tool that grants Google permissions, connects OAuth, or creates patient authorization. Never claim you authorized yourself.
 - Never invent latitude/longitude, a location, a provider email, a place, an appointment offer, a document, or a Google receipt.
@@ -451,11 +456,15 @@ Return only the requested JSON planning object after using tools as needed.
                 "If the current patient message explicitly names a search location, pass only that explicit text to "
                 "start_navigation_mission.location_text. Do not expand or infer a city/country not written by the patient."
             ),
-            "policy": "Use mission tools, not raw Google APIs. Never authorize an action yourself.",
+            "policy": (
+                "Use mission tools, not raw Google APIs. Never authorize an action yourself. "
+                "Advance safe steps until the next human choice, authorization, missing-evidence, or external-event boundary."
+            ),
         }
 
         final_text = ""
         last_text = ""
+        executed_tools: list[str] = []
         message = types.Content(
             role="user",
             parts=[types.Part(text=json.dumps(prompt, ensure_ascii=False, default=str))],
@@ -466,9 +475,15 @@ Return only the requested JSON planning object after using tools as needed.
             new_message=message,
         ):
             content = getattr(event, "content", None)
+            parts = list(getattr(content, "parts", None) or [])
+            for part in parts:
+                function_call = getattr(part, "function_call", None)
+                name = str(getattr(function_call, "name", "") or "").strip()
+                if name and name in self.tool_names() and name not in executed_tools:
+                    executed_tools.append(name)
             text_parts = [
                 str(getattr(part, "text", "") or "")
-                for part in (getattr(content, "parts", None) or [])
+                for part in parts
                 if getattr(part, "text", None) and not getattr(part, "thought", False)
             ]
             if text_parts:
@@ -488,4 +503,12 @@ Return only the requested JSON planning object after using tools as needed.
             if start < 0 or end <= start:
                 return None
             payload = json.loads(final_text[start : end + 1])
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        # Execution evidence comes from ADK events, not from model prose.
+        payload["_execution"] = {
+            "session_id": session_id,
+            "executed_tools": executed_tools,
+            "tool_count": len(executed_tools),
+        }
+        return payload
