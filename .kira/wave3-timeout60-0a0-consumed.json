@@ -1,1 +1,0 @@
-{"candidate_sha":"0a0eb9e2f79f920514192a9e8373c33bf4aefbe5","source_revision":"healthia-one-demo-00018-xs2","runtime_change":"HEALTHIA_LLM_TIMEOUT_SECONDS=60","same_image_required":true,"redeploy_from_source":false,"public_release_performed":false}
