@@ -69,12 +69,12 @@ def test_fcm_router_has_one_production_mount_and_auth_keeps_only_session_excepti
     assert 'path.startswith("/api/devices/fcm/")' in auth_source
 
 
-def test_readiness_advertises_private_fcm_capability() -> None:
-    capability = "fcm_private_notifications"
-    route = next(route for route in main.app.routes if route.path == "/api/readiness")
-    assert route.endpoint is main.readiness
-    # Keep this structural so it never needs a provider credential or billable call.
-    assert capability in main.readiness.__code__.co_consts
+def test_readiness_advertises_private_fcm_capability_over_http() -> None:
+    with TestClient(main.app) as client:
+        response = client.get("/api/readiness")
+
+    assert response.status_code == 200
+    assert "fcm_private_notifications" in response.json()["capabilities"]
 
 
 @pytest.mark.asyncio
