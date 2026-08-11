@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/google-fcm-live-delivery.yml"
       - "app/main.py"
+      - "healthia_one/auth_web.py"
       - "healthia_one/fcm_registration.py"
       - "healthia_one/fcm_device_api.py"
       - "tests/test_fcm_delivery_ack.py"
