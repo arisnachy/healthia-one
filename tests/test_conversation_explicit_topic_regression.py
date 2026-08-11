@@ -18,3 +18,22 @@ def test_existing_consultation_preparation_route_survives_conversation_brain_har
     response = respond(seed_state(), "Prepara mi próxima consulta médica")
     assert response.mission is not None
     assert response.mission.mission_type == "consultation_preparation"
+
+
+def test_short_standalone_command_is_not_treated_as_ellipsis() -> None:
+    frame = build_frame(PatientState(), "Abre mi perfil")
+    assert frame.ambiguous_reference is False
+    assert frame.needs_clarification is False
+
+
+def test_reference_signal_it_does_not_match_inside_spanish_words() -> None:
+    frame = build_frame(PatientState(), "Prepara mi cita")
+    assert frame.current_topic == "appointments"
+    assert frame.ambiguous_reference is False
+    assert frame.needs_clarification is False
+
+
+def test_real_short_ellipsis_remains_context_dependent() -> None:
+    frame = build_frame(PatientState(), "¿Y mañana?")
+    assert frame.ambiguous_reference is True
+    assert frame.needs_clarification is True
