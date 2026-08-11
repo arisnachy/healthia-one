@@ -68,3 +68,60 @@ def test_adk_autonomy_and_execution_receipt_are_locked_to_real_events() -> None:
     assert '### Comprobante de misión' in chat
     assert 'content = f"{content}\\n\\n{_receipt_markdown(receipt)}"' in chat
     assert "HealthIA no ejecutó ese paso por su cuenta" in chat
+
+
+def test_adk_tool_response_short_circuits_exact_location_authorization_boundary() -> None:
+    from healthia_one.google_mission_adk import _boundary_plan_from_tool_response
+
+    plan = _boundary_plan_from_tool_response(
+        "discover_care_options",
+        {
+            "result": {
+                "ok": True,
+                "mission_id": "gmission_demo",
+                "state": "blocked",
+                "next_action": "authorize_location_for_mission",
+                "requires_authorization": True,
+                "authorization_kind": "maps_location_for_mission",
+                "public_summary": "Google Places lookup is paused; no Places search was performed.",
+                "data": {"candidates": []},
+            }
+        },
+    )
+    assert plan is not None
+    assert plan["mission_id"] == "gmission_demo"
+    assert plan["state"] == "blocked"
+    assert plan["requires_human_authorization"] is True
+    assert plan["authorization_kind"] == "maps_location_for_mission"
+    assert plan["next_action"] == "authorize_location_for_mission"
+    assert plan["ui_action"]["type"] == "authorize_google_location"
+    assert "no Places search" in plan["patient_message"]
+    assert plan["_boundary_source"] == "tool_response:discover_care_options"
+
+
+def test_adk_tool_response_does_not_short_circuit_without_real_authorization_boundary() -> None:
+    from healthia_one.google_mission_adk import _boundary_plan_from_tool_response
+
+    assert _boundary_plan_from_tool_response(
+        "discover_care_options",
+        {
+            "result": {
+                "mission_id": "gmission_demo",
+                "state": "awaiting_selection",
+                "next_action": "patient_or_context_selects_candidate",
+                "requires_authorization": False,
+                "authorization_kind": "",
+                "public_summary": "Found two place candidates.",
+            }
+        },
+    ) is None
+
+
+def test_adk_runtime_reads_function_response_events_and_returns_before_post_tool_model_round() -> None:
+    source = (ROOT / "healthia_one/google_mission_adk.py").read_text(encoding="utf-8")
+    assert 'getattr(part, "function_response", None)' in source
+    assert '_boundary_plan_from_tool_response(response_name, response_payload)' in source
+    assert '"stopped_at_real_boundary": True' in source
+    assert 'return boundary_payload' in source
+    assert '"Google Places lookup is paused until the patient explicitly authorizes location lookup for this mission; "' in source
+    assert '"no Places search was performed."' in source
