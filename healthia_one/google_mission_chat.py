@@ -92,9 +92,6 @@ def should_consider_google_mission(state: PatientState, patient_text: str) -> bo
     if not mission_id:
         return False
 
-    # An explicit switch to results/measurements/treatment/etc. wins over an old
-    # Google mission. Appointment language is intentionally allowed because it
-    # may be the active navigation mission reaching scheduling.
     topic = explicit_topic(patient_text)
     if topic in _NON_GOOGLE_EXPLICIT_TOPICS:
         return False
@@ -104,8 +101,6 @@ def should_consider_google_mission(state: PatientState, patient_text: str) -> bo
         return True
     if normalized in {_normalize(item) for item in _STRONG_GENERIC_CONTINUATIONS}:
         return True
-    # Correction/ellipsis such as “no, la segunda” is allowed to resume only
-    # when there is a durable active Google mission to inspect first.
     return bool(frame.ambiguous_reference and (frame.correction or len(normalized.split()) >= 2))
 
 
@@ -133,14 +128,24 @@ def _public_step_labels(executed_tools: list[str]) -> list[str]:
     return [labels[name] for name in executed_tools if name in labels]
 
 
-class GoogleMissionConversationRouter:
-    """Chat-first semantic entry to the shared Google mission runtime.
+def _receipt_markdown(receipt: dict) -> str:
+    steps = [str(item) for item in receipt.get("executed_steps", []) if str(item)]
+    lines = ["### Comprobante de misión"]
+    if steps:
+        lines.extend(f"- ✓ {step}" for step in steps)
+    if receipt.get("requires_human_authorization"):
+        lines.append("- ⏸ Detenido en autorización humana; HealthIA no ejecutó ese paso por su cuenta.")
+    elif receipt.get("outcome") == "waiting_external_event":
+        lines.append("- ⏳ Esperando una respuesta externa real; HealthIA no hará polling ni inventará una respuesta.")
+    elif receipt.get("outcome") == "completed":
+        lines.append("- ✓ Misión cerrada con resultado durable.")
+    elif receipt.get("next_action"):
+        lines.append(f"- Siguiente paso: {receipt['next_action']}")
+    return "\n".join(lines)
 
-    This router must be invoked only after deterministic clinical safety. It has
-    no authorization-creation method. Gemini can inspect/start/advance a mission,
-    but exact external mutations still stop at the durable human authorization
-    boundary.
-    """
+
+class GoogleMissionConversationRouter:
+    """Chat-first semantic entry to the shared Google mission runtime."""
 
     def __init__(self, settings) -> None:
         self.settings = settings
@@ -151,8 +156,6 @@ class GoogleMissionConversationRouter:
         if not should_consider_google_mission(state, patient_text):
             return None
         if not self.adk.ready:
-            # Do not replace a normal HealthIA reply with a pretend Google action
-            # when the real Gemini/ADK mission runtime is unavailable.
             return None
 
         plan = await self.adk.run(
@@ -192,6 +195,7 @@ class GoogleMissionConversationRouter:
             "tool_count": len(executed_tools),
             "durable_mission": bool(mission_id),
         }
+        content = f"{content}\n\n{_receipt_markdown(receipt)}"
 
         metadata = {
             "google_constellation": True,
@@ -206,8 +210,6 @@ class GoogleMissionConversationRouter:
         }
         ui_action = plan.get("ui_action")
         if isinstance(ui_action, dict):
-            # The model may request only ordinary Health OS navigation metadata;
-            # authorization remains a deterministic patient action outside ADK.
             metadata["ui_action"] = ui_action
 
         audit(
