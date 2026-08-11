@@ -25,6 +25,7 @@ import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private lateinit var repository: HealthConnectRepository
+    private var pendingNotificationOptInCompletion: ((Boolean, String) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +53,23 @@ class MainActivity : ComponentActivity() {
         // Foreground token refresh occurs only after an explicit private-notification
         // opt-in has been persisted locally.
         FirebaseRuntime.syncRegistration(applicationContext)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST) return
+        val complete = pendingNotificationOptInCompletion ?: return
+        pendingNotificationOptInCompletion = null
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            complete(false, "El permiso de notificaciones no fue concedido; las notificaciones privadas siguen desactivadas.")
+            return
+        }
+        setPrivateNotifications(true, complete)
     }
 
     private fun connectBridge(baseUrl: String, code: String, updateStatus: (String) -> Unit) {
@@ -110,11 +128,8 @@ class MainActivity : ComponentActivity() {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
+            pendingNotificationOptInCompletion = complete
             requestNotificationPermissionIfNeeded()
-            complete(
-                false,
-                "Android debe conceder el permiso de notificaciones antes del opt-in. Después de concederlo, pulsa Reactivar notificaciones privadas otra vez.",
-            )
             return
         }
 
@@ -157,7 +172,7 @@ class MainActivity : ComponentActivity() {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 42001)
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
         }
     }
 
@@ -213,6 +228,10 @@ class MainActivity : ComponentActivity() {
         return preferences.getString("device_id", null) ?: UUID.randomUUID().toString().also {
             preferences.edit().putString("device_id", it).apply()
         }
+    }
+
+    companion object {
+        private const val NOTIFICATION_PERMISSION_REQUEST = 42001
     }
 }
 
