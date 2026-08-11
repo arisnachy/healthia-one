@@ -8,7 +8,7 @@ from healthia_one.control import audit
 from healthia_one.conversation_brain import build_frame, explicit_topic, semantic_packet
 from healthia_one.google_constellation import GrantBundle
 from healthia_one.google_constellation_singleton import get_google_constellation_service
-from healthia_one.google_mission_adk import AdkGoogleMissionRuntime
+from healthia_one.google_mission_adk import AdkGoogleMissionRuntime, GoogleMissionToolFacade
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
 
 
@@ -226,6 +226,100 @@ class GoogleMissionConversationRouter:
             return None
 
         location_consent_granted, consent_mission_id = self._grant_explicit_location_consent(state, patient_text)
+
+        # Exact mission-scoped location consent is the last human boundary before
+        # the already-planned read-only Places lookup. Resume the same ADK tool
+        # deterministically instead of asking Gemini to reinterpret the consent turn.
+        if location_consent_granted and consent_mission_id:
+            tool_result = GoogleMissionToolFacade(
+                constellation=self.constellation,
+                patient_id=state.profile.id,
+                patient_text=patient_text,
+            ).discover_care_options(consent_mission_id)
+            consent_mission = self.constellation.load_mission(state.profile.id, consent_mission_id)
+            candidates = (consent_mission.tool_outputs or {}).get("place_candidates") or []
+            boundary = (consent_mission.tool_outputs or {}).get("authorization_boundary") or {}
+            state_name = str(consent_mission.state)
+            search_completed = not boundary and state_name == "awaiting_selection"
+            next_action = (
+                "patient_or_context_selects_candidate"
+                if candidates
+                else "refine_search_or_location"
+            )
+            english = "authorize" in _normalize(patient_text) or "location" in _normalize(patient_text)
+            if search_completed and candidates:
+                lead = (
+                    f"Your location permission was applied only to this mission. I resumed the authorized Google Places search and found {len(candidates)} candidate(s). Choose the option you prefer."
+                    if english else
+                    f"Tu permiso de ubicación quedó limitado a esta misión. Reanudé la búsqueda autorizada en Google Places y encontré {len(candidates)} opción(es). Elige la que prefieras."
+                )
+            elif search_completed:
+                lead = (
+                    "Your location permission was applied only to this mission. I completed the authorized Google Places search, but it returned no candidates; I will not invent one."
+                    if english else
+                    "Tu permiso de ubicación quedó limitado a esta misión. Completé la búsqueda autorizada en Google Places, pero no devolvió candidatos; no voy a inventar uno."
+                )
+            else:
+                lead = (
+                    "Your mission-scoped location permission was recorded, but the authorized Google Places lookup could not complete. I did not invent a result."
+                    if english else
+                    "Tu permiso de ubicación quedó registrado sólo para esta misión, pero la búsqueda autorizada en Google Places no pudo completarse. No inventé resultados."
+                )
+            receipt = {
+                "mission_id": consent_mission_id,
+                "state": state_name,
+                "outcome": "advanced" if search_completed else "blocked",
+                "next_action": next_action,
+                "requires_human_authorization": False,
+                "authorization_kind": "",
+                "executed_steps": [
+                    "Registró consentimiento temporal de ubicación para esta misión",
+                    (
+                        "Buscó opciones verificables en Google Places"
+                        if search_completed else
+                        "Intentó la búsqueda autorizada en Google Places"
+                    ),
+                ],
+                "tool_count": 1,
+                "durable_mission": True,
+            }
+            audit(
+                state,
+                actor="google_adk_policy",
+                action="resume_google_health_mission_after_location_consent",
+                resource_type="google_health_mission",
+                resource_id=consent_mission_id,
+                details={
+                    "state": state_name,
+                    "candidate_count": len(candidates),
+                    "search_completed": search_completed,
+                    "executed_tool": "discover_care_options",
+                    "external_mutation": False,
+                },
+            )
+            return ChatResponse(
+                message=ChatMessage(
+                    patient_id=state.profile.id,
+                    role="assistant",
+                    author="HealthIA",
+                    content=f"{lead}\n\n{_receipt_markdown(receipt)}",
+                    metadata={
+                        "google_constellation": True,
+                        "google_mission_id": consent_mission_id,
+                        "google_mission_state": state_name,
+                        "google_mission_next_action": next_action,
+                        "requires_human_authorization": False,
+                        "authorization_kind": "",
+                        "health_os_control": True,
+                        "autonomy_policy": "advance_until_human_or_external_event_boundary",
+                        "public_action_receipt": receipt,
+                        "external_action_executed": search_completed,
+                        "external_mutation_performed": False,
+                        "policy_executed_tool": "discover_care_options",
+                    },
+                )
+            )
+
         if not self.adk.ready:
             if not location_consent_granted:
                 return None
