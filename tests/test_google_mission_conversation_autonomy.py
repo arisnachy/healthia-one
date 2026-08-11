@@ -125,3 +125,93 @@ def test_adk_runtime_reads_function_response_events_and_returns_before_post_tool
     assert 'return boundary_payload' in source
     assert '"Google Places lookup is paused until the patient explicitly authorizes location lookup for this mission; "' in source
     assert '"no Places search was performed."' in source
+
+
+def test_explicit_candidate_ordinal_parser_is_bounded_and_bilingual() -> None:
+    from healthia_one.google_mission_chat import _explicit_candidate_ordinal_index
+
+    assert _explicit_candidate_ordinal_index("The first one.") == 0
+    assert _explicit_candidate_ordinal_index("The second one.") == 1
+    assert _explicit_candidate_ordinal_index("No, the third one") == 2
+    assert _explicit_candidate_ordinal_index("la primera") == 0
+    assert _explicit_candidate_ordinal_index("No, la segunda") == 1
+    assert _explicit_candidate_ordinal_index("el tercero") == 2
+    assert _explicit_candidate_ordinal_index("the second clinic near me") is None
+    assert _explicit_candidate_ordinal_index("second opinion") is None
+
+
+def test_explicit_ordinal_selection_bypasses_adk_and_persists_exact_discovered_candidate() -> None:
+    import asyncio
+    from healthia_one.google_mission_chat import GoogleMissionConversationRouter
+    from healthia_one.google_mission_runtime import MemoryMissionStore, MissionState
+    from healthia_one.google_navigation_coordinator import HealthIAGoogleMissionCoordinator
+    from healthia_one.models import ChatMessage, PatientState
+
+    class _MustNotExecuteProvider:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("No provider connector is needed to select an already discovered candidate")
+
+    class _Constellation:
+        def __init__(self, patient_id: str):
+            self.patient_id = patient_id
+            self.store = MemoryMissionStore()
+            self.coordinator = HealthIAGoogleMissionCoordinator(_MustNotExecuteProvider(), store=self.store)
+        def load_mission(self, patient_id: str, mission_id: str):
+            assert patient_id == self.patient_id
+            value = self.store.load(patient_id, mission_id)
+            if value is None:
+                raise KeyError(mission_id)
+            return value
+        def grants(self, patient_id: str):
+            assert patient_id == self.patient_id
+            return []
+
+    class _AdkMustNotInterpretOrdinal:
+        ready = True
+        async def run(self, **_kwargs):
+            raise AssertionError("An explicit ordinal candidate choice must not require Gemini interpretation")
+
+    state = PatientState()
+    constellation = _Constellation(state.profile.id)
+    mission = constellation.coordinator.create_navigation_mission(
+        patient_id=state.profile.id,
+        condition_or_need="follow-up care",
+        provider_query="clinic",
+        location_text="Santiago de los Caballeros, Dominican Republic",
+    )
+    mission.state = MissionState.AWAITING_SELECTION
+    mission.tool_outputs["place_candidates"] = [
+        {"id": "place-a", "displayName": {"text": "Clinic A"}, "formattedAddress": "Synthetic A"},
+        {"id": "place-b", "displayName": {"text": "Clinic B"}, "formattedAddress": "Synthetic B"},
+        {"id": "place-c", "displayName": {"text": "Clinic C"}, "formattedAddress": "Synthetic C"},
+    ]
+    constellation.store.save(mission)
+    state.messages.append(
+        ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content="I found three verified options.",
+            metadata={
+                "google_mission_id": mission.id,
+                "google_mission_state": "awaiting_selection",
+                "google_mission_next_action": "patient_or_context_selects_candidate",
+            },
+        )
+    )
+
+    router = GoogleMissionConversationRouter.__new__(GoogleMissionConversationRouter)
+    router.settings = None
+    router.constellation = constellation
+    router.adk = _AdkMustNotInterpretOrdinal()
+    response = asyncio.run(router.respond(state, "The second one."))
+    persisted = constellation.load_mission(state.profile.id, mission.id)
+
+    assert persisted.selected_place["id"] == "place-b"
+    assert response.message.metadata["google_mission_id"] == mission.id
+    assert response.message.metadata["deterministic_candidate_index"] == 1
+    assert response.message.metadata["policy_executed_tool"] == "select_discovered_candidate"
+    assert response.message.metadata["external_action_executed"] is False
+    assert response.message.metadata["external_mutation_performed"] is False
+    receipt = response.message.metadata["public_action_receipt"]
+    assert receipt["tool_count"] == 1
+    assert any("selection" in str(step).lower() or "selección" in str(step).lower() for step in receipt["executed_steps"])

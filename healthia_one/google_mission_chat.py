@@ -96,6 +96,24 @@ def _is_location_consent(patient_text: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in _LOCATION_CONSENT_PATTERNS)
 
 
+def _explicit_candidate_ordinal_index(patient_text: str) -> int | None:
+    """Resolve only an explicit bounded ordinal choice; never infer one from prose."""
+    normalized = re.sub(r"[.!?]+$", "", _normalize(patient_text)).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    patterns = (
+        (0, r"(?:no[, ]+)?(?:the )?first(?: one)?"),
+        (1, r"(?:no[, ]+)?(?:the )?second(?: one)?"),
+        (2, r"(?:no[, ]+)?(?:the )?third(?: one)?"),
+        (0, r"(?:no[, ]+)?(?:el |la )?(?:primero|primera)"),
+        (1, r"(?:no[, ]+)?(?:el |la )?(?:segundo|segunda)"),
+        (2, r"(?:no[, ]+)?(?:el |la )?(?:tercero|tercera)"),
+    )
+    for index, pattern in patterns:
+        if re.fullmatch(pattern, normalized):
+            return index
+    return None
+
+
 def should_consider_google_mission(state: PatientState, patient_text: str) -> bool:
     normalized = _normalize(patient_text)
     if not normalized or any(item in normalized for item in _NEGATIVE_CONTEXTS):
@@ -224,6 +242,126 @@ class GoogleMissionConversationRouter:
     async def respond(self, state: PatientState, patient_text: str) -> ChatResponse | None:
         if not should_consider_google_mission(state, patient_text):
             return None
+
+        # A numbered choice over an already-discovered durable candidate list is
+        # deterministic patient intent, not a planning problem. Apply it directly
+        # instead of spending a Gemini round to translate "the second one" into 1.
+        ordinal_index = _explicit_candidate_ordinal_index(patient_text)
+        ordinal_mission_id = latest_google_mission_id(state)
+        if ordinal_index is not None and ordinal_mission_id:
+            try:
+                ordinal_mission = self.constellation.load_mission(state.profile.id, ordinal_mission_id)
+            except (KeyError, PermissionError):
+                ordinal_mission = None
+            candidates = (ordinal_mission.tool_outputs or {}).get("place_candidates") or [] if ordinal_mission else []
+            if ordinal_mission is not None and str(ordinal_mission.state) == "awaiting_selection" and candidates:
+                english = bool(re.search(r"\b(first|second|third)\b", _normalize(patient_text)))
+                if ordinal_index >= len(candidates):
+                    lead = (
+                        "That numbered option is not available in the current verified candidate list. I did not select a different place."
+                        if english else
+                        "Esa opción numerada no existe en la lista verificada actual. No seleccioné otro lugar."
+                    )
+                    receipt = {
+                        "mission_id": ordinal_mission_id,
+                        "state": str(ordinal_mission.state),
+                        "outcome": "blocked",
+                        "next_action": "choose_available_discovered_candidate",
+                        "requires_human_authorization": False,
+                        "authorization_kind": "",
+                        "executed_steps": [],
+                        "tool_count": 0,
+                        "durable_mission": True,
+                    }
+                    return ChatResponse(
+                        message=ChatMessage(
+                            patient_id=state.profile.id,
+                            role="assistant",
+                            author="HealthIA",
+                            content=f"{lead}\n\n{_receipt_markdown(receipt)}",
+                            metadata={
+                                "google_constellation": True,
+                                "google_mission_id": ordinal_mission_id,
+                                "google_mission_state": str(ordinal_mission.state),
+                                "google_mission_next_action": "choose_available_discovered_candidate",
+                                "requires_human_authorization": False,
+                                "authorization_kind": "",
+                                "public_action_receipt": receipt,
+                                "external_action_executed": False,
+                                "external_mutation_performed": False,
+                                "response_locale": "en" if english else "es",
+                            },
+                        )
+                    )
+
+                tool_result = GoogleMissionToolFacade(
+                    constellation=self.constellation,
+                    patient_id=state.profile.id,
+                    patient_text=patient_text,
+                ).select_discovered_candidate(ordinal_mission_id, ordinal_index)
+                selected_mission = self.constellation.load_mission(state.profile.id, ordinal_mission_id)
+                selected_place = selected_mission.selected_place or {}
+                expected_place = candidates[ordinal_index]
+                selection_verified = bool(selected_place) and str(selected_place.get("id") or "") == str(expected_place.get("id") or "")
+                if not bool(tool_result.get("ok")) or not selection_verified:
+                    raise RuntimeError("Deterministic candidate selection did not persist the exact requested discovered option")
+                ordinal_label = ("first", "second", "third")[ordinal_index] if english else ("primera", "segunda", "tercera")[ordinal_index]
+                lead = (
+                    f"I selected the {ordinal_label} verified option from this mission's Google Places results. I did not invent contact details or perform an external write."
+                    if english else
+                    f"Seleccioné la {ordinal_label} opción verificada de los resultados de Google Places de esta misión. No inventé datos de contacto ni hice una escritura externa."
+                )
+                receipt = {
+                    "mission_id": ordinal_mission_id,
+                    "state": str(selected_mission.state),
+                    "outcome": "advanced",
+                    "next_action": "continue_with_selected_candidate",
+                    "requires_human_authorization": False,
+                    "authorization_kind": "",
+                    "executed_steps": [
+                        "Applied the patient's exact candidate selection" if english else "Aplicó la selección exacta del paciente"
+                    ],
+                    "tool_count": 1,
+                    "durable_mission": True,
+                }
+                audit(
+                    state,
+                    actor="google_deterministic_policy",
+                    action="select_google_mission_candidate_by_explicit_ordinal",
+                    resource_type="google_health_mission",
+                    resource_id=ordinal_mission_id,
+                    details={
+                        "candidate_index": ordinal_index,
+                        "selection_verified": True,
+                        "executed_tool": "select_discovered_candidate",
+                        "external_mutation": False,
+                        "model_interpretation_required": False,
+                    },
+                )
+                return ChatResponse(
+                    message=ChatMessage(
+                        patient_id=state.profile.id,
+                        role="assistant",
+                        author="HealthIA",
+                        content=f"{lead}\n\n{_receipt_markdown(receipt)}",
+                        metadata={
+                            "google_constellation": True,
+                            "google_mission_id": ordinal_mission_id,
+                            "google_mission_state": str(selected_mission.state),
+                            "google_mission_next_action": "continue_with_selected_candidate",
+                            "requires_human_authorization": False,
+                            "authorization_kind": "",
+                            "health_os_control": True,
+                            "autonomy_policy": "advance_until_human_or_external_event_boundary",
+                            "public_action_receipt": receipt,
+                            "external_action_executed": False,
+                            "external_mutation_performed": False,
+                            "policy_executed_tool": "select_discovered_candidate",
+                            "deterministic_candidate_index": ordinal_index,
+                            "response_locale": "en" if english else "es",
+                        },
+                    )
+                )
 
         location_consent_granted, consent_mission_id = self._grant_explicit_location_consent(state, patient_text)
 
