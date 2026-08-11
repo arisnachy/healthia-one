@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 
+from healthia_one.control import audit
+from healthia_one.conversation_brain import build_frame, explicit_topic, semantic_packet
 from healthia_one.google_constellation_singleton import get_google_constellation_service
 from healthia_one.google_mission_adk import AdkGoogleMissionRuntime
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
@@ -31,13 +34,33 @@ _CONTINUATION_PATTERNS = (
     r"\bque contestaron\b",
     r"\bque respondieron\b",
     r"\bque paso con (?:la cita|el centro|la solicitud)\b",
+    r"\b(?:el|la) (?:primero|primera|segundo|segunda|tercero|tercera)\b",
+    r"\bese me sirve\b",
+    r"\besa me sirve\b",
+    r"\bme sirve (?:ese|esa|el primero|la primera|el segundo|la segunda)\b",
     r"\bel (?:lunes|martes|miercoles|jueves|viernes|sabado|domingo) me sirve\b",
     r"\bagenda (?:esa|la) cita\b",
     r"\bagendala\b",
+    r"\breservala\b",
+    r"\bcontinua con (?:eso|esa|ese|la mision|la misión)\b",
     r"\bcontact (?:that|the) (?:center|clinic|provider)\b",
     r"\bwhat did they (?:say|reply)\b",
     r"\bbook (?:that|the) appointment\b",
+    r"\bthe (?:first|second|third) one\b",
+    r"\bthat one works\b",
+    r"\bcontinue (?:that|the mission)\b",
 )
+
+_STRONG_GENERIC_CONTINUATIONS = {
+    "dale con eso",
+    "continua con eso",
+    "continúa con eso",
+    "sigue con eso",
+    "hazlo con ese",
+    "hazlo con esa",
+    "go ahead with that",
+    "continue with that",
+}
 
 _NEGATIVE_CONTEXTS = (
     "beneficios de caminar",
@@ -45,6 +68,8 @@ _NEGATIVE_CONTEXTS = (
     "benefits of walking",
     "benefits of exercise",
 )
+
+_NON_GOOGLE_EXPLICIT_TOPICS = {"results", "measurements", "treatment", "family", "documents", "devices", "control", "timeline"}
 
 
 def latest_google_mission_id(state: PatientState) -> str:
@@ -62,23 +87,50 @@ def should_consider_google_mission(state: PatientState, patient_text: str) -> bo
         return False
     if any(re.search(pattern, normalized) for pattern in _NAVIGATION_PATTERNS):
         return True
-    if latest_google_mission_id(state) and any(
-        re.search(pattern, normalized) for pattern in _CONTINUATION_PATTERNS
-    ):
-        return True
-    return False
 
-
-def _conversation_context(state: PatientState) -> str:
-    lines: list[str] = []
-    for item in state.messages[-10:]:
-        content = " ".join(str(item.content or "").split())[:700]
-        if content:
-            lines.append(f"{item.role}: {content}")
     mission_id = latest_google_mission_id(state)
-    if mission_id:
-        lines.append(f"active_google_mission_id: {mission_id}")
-    return "\n".join(lines)[-6000:]
+    if not mission_id:
+        return False
+
+    # An explicit switch to results/measurements/treatment/etc. wins over an old
+    # Google mission. Appointment language is intentionally allowed because it
+    # may be the active navigation mission reaching scheduling.
+    topic = explicit_topic(patient_text)
+    if topic in _NON_GOOGLE_EXPLICIT_TOPICS:
+        return False
+
+    frame = build_frame(state, patient_text)
+    if any(re.search(pattern, normalized) for pattern in _CONTINUATION_PATTERNS):
+        return True
+    if normalized in {_normalize(item) for item in _STRONG_GENERIC_CONTINUATIONS}:
+        return True
+    # Correction/ellipsis such as “no, la segunda” is allowed to resume only
+    # when there is a durable active Google mission to inspect first.
+    return bool(frame.ambiguous_reference and (frame.correction or len(normalized.split()) >= 2))
+
+
+def _conversation_context(state: PatientState, patient_text: str) -> str:
+    packet = semantic_packet(state, patient_text)
+    packet["active_google_mission_id"] = latest_google_mission_id(state)
+    packet["mission_policy"] = (
+        "Advance every verifiable non-mutating/read-only step until the next patient choice, exact authorization, "
+        "or real external event boundary. Never infer an external reply or consent."
+    )
+    return json.dumps(packet, ensure_ascii=False, default=str)[:6000]
+
+
+def _public_step_labels(executed_tools: list[str]) -> list[str]:
+    labels = {
+        "inspect_google_health_mission": "Revisó el estado durable de la misión",
+        "start_navigation_mission": "Creó la misión de navegación",
+        "discover_care_options": "Buscó opciones verificables",
+        "select_discovered_candidate": "Aplicó la selección del paciente",
+        "check_calendar_window": "Revisó disponibilidad autorizada",
+        "contact_selected_provider": "Intentó avanzar el contacto bajo autorización",
+        "select_offered_slot": "Aplicó el horario ofrecido elegido",
+        "finalize_selected_appointment": "Intentó cerrar cita/seguimiento bajo autorización",
+    }
+    return [labels[name] for name in executed_tools if name in labels]
 
 
 class GoogleMissionConversationRouter:
@@ -106,7 +158,7 @@ class GoogleMissionConversationRouter:
         plan = await self.adk.run(
             patient_id=state.profile.id,
             patient_text=patient_text,
-            conversation_context=_conversation_context(state),
+            conversation_context=_conversation_context(state, patient_text),
             authorized_location=None,
         )
         if not plan or str(plan.get("intent") or "") == "not_applicable":
@@ -121,6 +173,26 @@ class GoogleMissionConversationRouter:
         if not content:
             content = "Organicé esta tarea como una misión de navegación sanitaria y conservaré cada acción verificable."
 
+        execution = plan.get("_execution") if isinstance(plan.get("_execution"), dict) else {}
+        executed_tools = [str(item) for item in execution.get("executed_tools", []) if str(item)]
+        outcome = (
+            "waiting_authorization" if requires_auth else
+            "waiting_external_event" if state_name == "awaiting_external_event" else
+            "completed" if state_name == "completed" else
+            "advanced"
+        )
+        receipt = {
+            "mission_id": mission_id,
+            "state": state_name,
+            "outcome": outcome,
+            "next_action": next_action,
+            "requires_human_authorization": requires_auth,
+            "authorization_kind": auth_kind,
+            "executed_steps": _public_step_labels(executed_tools),
+            "tool_count": len(executed_tools),
+            "durable_mission": bool(mission_id),
+        }
+
         metadata = {
             "google_constellation": True,
             "google_mission_id": mission_id,
@@ -129,12 +201,30 @@ class GoogleMissionConversationRouter:
             "requires_human_authorization": requires_auth,
             "authorization_kind": auth_kind,
             "health_os_control": bool(mission_id),
+            "autonomy_policy": "advance_until_human_or_external_event_boundary",
+            "public_action_receipt": receipt,
         }
         ui_action = plan.get("ui_action")
         if isinstance(ui_action, dict):
             # The model may request only ordinary Health OS navigation metadata;
             # authorization remains a deterministic patient action outside ADK.
             metadata["ui_action"] = ui_action
+
+        audit(
+            state,
+            actor="google_adk",
+            action="advance_google_health_mission",
+            resource_type="google_health_mission",
+            resource_id=mission_id,
+            details={
+                "state": state_name,
+                "next_action": next_action,
+                "requires_human_authorization": requires_auth,
+                "authorization_kind": auth_kind,
+                "executed_tools": executed_tools,
+                "tool_count": len(executed_tools),
+            },
+        )
 
         return ChatResponse(
             message=ChatMessage(
