@@ -3,7 +3,7 @@ from __future__ import annotations
 from healthia_one.conversation_brain import build_frame, explicit_topic
 from healthia_one.models import PatientState
 from healthia_one.orchestrator import respond
-from healthia_one.seed import seed_state
+from healthia_one.service import seed_state
 
 
 def test_consultation_is_explicit_topic_not_unanchored_short_followup() -> None:
