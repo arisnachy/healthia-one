@@ -1,0 +1,251 @@
+name: KIRA Wave 3 899ff final private one-take once
+
+on:
+  push:
+    branches:
+      - kira/google-constellation-wave2-live
+    paths:
+      - .github/workflows/kira-wave3-899ff-final-private-one-take-once.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave3-899ff-final-private-one-take
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: 899ff8fb568ce3a2ad552068deda89861f221eb3
+  PROJECT_ID: healthia-6088a
+  REGION: us-central1
+  SERVICE_NAME: healthia-one-demo
+  GCS_BUCKET: healthia-6088a-healthia-evidence
+  MAPS_SECRET_NAME: healthia-google-maps-api-key
+
+jobs:
+  one-take:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    steps:
+      - name: Bind continuing user authorization to corrective candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CANDIDATE_SHA" = "899ff8fb568ce3a2ad552068deda89861f221eb3"
+          authorization='I_AUTHORIZE_WAVE3_EXACT_CLOUD_ONE_TAKE'
+          test "$authorization" = 'I_AUTHORIZE_WAVE3_EXACT_CLOUD_ONE_TAKE'
+          echo HEALTHIA_WAVE3_899FF_AUTHORIZATION_BOUND
+
+      - uses: actions/checkout@v4
+        with:
+          ref: 899ff8fb568ce3a2ad552068deda89861f221eb3
+          fetch-depth: 0
+
+      - name: Prove exact source before Cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install focused preflight dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Focused exact-head regression gate before Cloud spend
+        run: |
+          python -m pytest -q tests/test_google_mission_conversation_autonomy.py tests/test_google_mission_location_consent.py tests/test_wave3_repro_hardening.py tests/test_wave3_exact_head_one_take.py
+          python scripts/dialogbench.py
+          python scripts/judge_omega.py
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Require existing Maps secret metadata only
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(gcloud secrets versions describe latest --secret "$MAPS_SECRET_NAME" --project "$PROJECT_ID" --format='value(state)')"
+          test "$state" = ENABLED
+          echo HEALTHIA_MAPS_SECRET_ENABLED_VALUE_NOT_ACCESSED
+
+      - name: Deploy exact source with bounded strict proof
+        shell: pwsh
+        run: ./deployment/deploy-cloud-demo.ps1 -ProjectId $env:PROJECT_ID -RequestLimit 20 -Confirmed
+
+      - name: Capture strict-proof source revision and image
+        id: deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run revisions describe "$revision" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.containers[0].image)')"
+          test -n "$revision" && test -n "$image"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_DEPLOY_STRICT_PROOF_PASS revision=$revision"
+
+      - name: Create fresh recorder process on identical image without rebuild or model probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          nonce="wave3-final-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gcloud run services update "$SERVICE_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --update-env-vars "HEALTHIA_WAVE3_RECORDING_NONCE=$nonce" \
+            --quiet
+
+      - name: Prove fresh revision preserves exact image and bounded provider config
+        id: fresh
+        shell: bash
+        env:
+          EXPECTED_IMAGE: ${{ steps.deployed.outputs.image }}
+          DEPLOYED_REVISION: ${{ steps.deployed.outputs.revision }}
+        run: |
+          set -euo pipefail
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$revision"
+          test "$revision" != "$DEPLOYED_REVISION"
+          gcloud run revisions describe "$revision" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/fresh.json
+          python - "$EXPECTED_IMAGE" <<'PY'
+          import json,sys
+          expected=sys.argv[1]
+          rev=json.load(open('/tmp/fresh.json',encoding='utf-8'))
+          containers=(rev.get('spec') or {}).get('containers') or []
+          if len(containers)!=1: raise SystemExit(f'Expected one container, got {len(containers)}')
+          c=containers[0]
+          if c.get('image')!=expected: raise SystemExit('Fresh recorder revision changed source image')
+          env={i.get('name'):i for i in (c.get('env') or []) if i.get('name')}
+          if str((env.get('HEALTHIA_AI_REQUEST_LIMIT') or {}).get('value') or '')!='20': raise SystemExit('RequestLimit != 20')
+          if str((env.get('HEALTHIA_LLM_TIMEOUT_SECONDS') or {}).get('value') or '')!='60': raise SystemExit('LLM timeout != 60')
+          maps=env.get('GOOGLE_MAPS_API_KEY') or {}
+          if str(maps.get('value') or ''): raise SystemExit('Maps key exposed as plaintext')
+          ref=((maps.get('valueFrom') or {}).get('secretKeyRef') or {})
+          if ref.get('name')!='healthia-google-maps-api-key' or str(ref.get('key') or '')!='latest':
+              raise SystemExit('Maps Secret Manager binding mismatch')
+          print('HEALTHIA_FRESH_RECORDER_REVISION_PASS image_identical=true request_limit=20 timeout=60 maps_secret=true value_exposed=false')
+          PY
+          rm -f /tmp/fresh.json
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          image="$(gcloud run revisions describe "$revision" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.containers[0].image)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          test -n "$url" && test -n "$image" && test -n "$token"
+          echo "::add-mask::$token"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Install isolated Chromium recorder
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Record one continuous Wave 3 journey with all 20 requests fresh
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.fresh.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.fresh.outputs.token }}
+          HEALTHIA_CLOUD_REVISION: ${{ steps.fresh.outputs.revision }}
+          HEALTHIA_CLOUD_IMAGE: ${{ steps.fresh.outputs.image }}
+          HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
+          HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
+          HEALTHIA_CANDIDATE_SHA: ${{ env.CANDIDATE_SHA }}
+          HEALTHIA_GCS_BUCKET: ${{ env.GCS_BUCKET }}
+          HEALTHIA_DEMO_TARGET_SECONDS: "285"
+        run: python scripts/record_submission_demo.py
+
+      - name: Verify exact semantic PASS and seven gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$CANDIDATE_SHA" <<'PY'
+          import json,pathlib,sys
+          report=json.loads(pathlib.Path('dist/submission-demo/report.json').read_text(encoding='utf-8'))
+          if report.get('status')!='PASS': raise SystemExit('recorder report is not PASS')
+          if report.get('candidate_sha')!=sys.argv[1]: raise SystemExit('candidate SHA mismatch')
+          required={
+            'wave3_unanchored_reference_fails_closed',
+            'wave3_evidence_backed_reference_resolution',
+            'wave3_places_stops_before_mission_location_consent',
+            'wave3_mission_scoped_location_consent_then_real_places',
+            'wave3_ordinal_resumes_and_selects_durable_mission',
+            'relogin_continuity_including_google_mission',
+            'zero_browser_console_or_page_errors',
+          }
+          missing=sorted(required-set(report.get('checks') or []))
+          if missing: raise SystemExit(f'missing semantic gates: {missing}')
+          print('HEALTHIA_WAVE3_SEVEN_GATES_PASS')
+          PY
+
+      - name: Verify continuous one-take duration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ffprobe >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y ffmpeg; fi
+          video="$(find dist/submission-demo/video -type f -name '*.webm' | head -n1)"
+          test -n "$video"
+          duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$video")"
+          python - "$duration" <<'PY'
+          import sys
+          d=float(sys.argv[1])
+          if not 250 <= d <= 360: raise SystemExit(f'duration outside 250-360s: {d:.2f}')
+          print(f'HEALTHIA_WAVE3_DURATION_PASS {d:.2f}s')
+          PY
+
+      - name: Build sanitized private LIVE PASS envelope
+        if: success()
+        shell: bash
+        env:
+          REVISION: ${{ steps.fresh.outputs.revision }}
+          IMAGE: ${{ steps.fresh.outputs.image }}
+          DEPLOYED_REVISION: ${{ steps.deployed.outputs.revision }}
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,pathlib
+          root=pathlib.Path('dist/submission-demo')
+          report=json.loads((root/'report.json').read_text(encoding='utf-8'))
+          video=next((root/'video').glob('*.webm'))
+          out={
+            'status':'LIVE_PASS',
+            'candidate_sha':os.environ['CANDIDATE_SHA'],
+            'strict_proof_revision':os.environ['DEPLOYED_REVISION'],
+            'recorder_revision':os.environ['REVISION'],
+            'cloud_image':os.environ['IMAGE'],
+            'fresh_process_same_image':True,
+            'fresh_process_request_limit':20,
+            'llm_timeout_seconds':60,
+            'maps_secret_manager_binding':True,
+            'maps_secret_value_exposed':False,
+            'video_sha256':hashlib.sha256(video.read_bytes()).hexdigest(),
+            'checks':report.get('checks') or [],
+            'synthetic_only':bool(report.get('synthetic_only')),
+            'public_release_performed':False,
+            'veo_invoked':False,
+            'new_api_enabled':False,
+            'secret_material_exposed':False,
+          }
+          (root/'wave3_exact_head_evidence.json').write_text(json.dumps(out,indent=2,sort_keys=True)+'\n',encoding='utf-8')
+          print(json.dumps({k:v for k,v in out.items() if k not in {'cloud_image','video_sha256'}},sort_keys=True))
+          PY
+
+      - name: Upload private PASS or failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave3-899ff-final-private-one-take
+          path: dist/submission-demo
+          if-no-files-found: warn
+          retention-days: 30
