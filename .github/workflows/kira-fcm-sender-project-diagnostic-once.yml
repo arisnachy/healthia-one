@@ -1,0 +1,93 @@
+name: KIRA FCM sender-project diagnostic once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/kira-fcm-sender-project-diagnostic-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-sender-project:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    env:
+      TARGET_PROJECT_ID: healthia-6088a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: Bind source
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Authenticate
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.TARGET_PROJECT_ID }}
+      - name: Compare credential sender project with target and inspect FCM API states
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/fcm-sender-project-diagnostic
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+
+          cred_path=os.environ.get('GOOGLE_APPLICATION_CREDENTIALS','')
+          data=json.loads(Path(cred_path).read_text()) if cred_path and Path(cred_path).exists() else {}
+          sender=str(data.get('project_id') or '').strip()
+          target=os.environ['TARGET_PROJECT_ID']
+          if not sender:
+              raise SystemExit('Credential sender project could not be resolved safely')
+
+          def enabled(project, service):
+              p=subprocess.run(['gcloud','services','list','--enabled','--project',project,'--filter',f'config.name={service}','--format','value(config.name)'],capture_output=True,text=True)
+              if p.returncode != 0:
+                  return None
+              return service in {line.strip() for line in p.stdout.splitlines() if line.strip()}
+
+          def project_get_access(project):
+              p=subprocess.run(['gcloud','projects','describe',project,'--format=value(projectNumber)'],capture_output=True,text=True)
+              return p.returncode == 0 and bool(p.stdout.strip())
+
+          out={
+            'status':'DIAGNOSTIC_COMPLETE',
+            'sender_project_matches_target':sender==target,
+            'sender_project_accessible_to_ci':project_get_access(sender),
+            'target_project_accessible_to_ci':project_get_access(target),
+            'sender_fcm_api_enabled':enabled(sender,'fcm.googleapis.com'),
+            'target_fcm_api_enabled':enabled(target,'fcm.googleapis.com'),
+            'sender_firebase_api_enabled':enabled(sender,'firebase.googleapis.com'),
+            'target_firebase_api_enabled':enabled(target,'firebase.googleapis.com'),
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+            'project_ids_exposed':False,
+            'provider_write':False,
+            'iam_mutation':False,
+            'api_enable_mutation':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/fcm-sender-project-diagnostic/summary.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          PY
+      - name: Reject sensitive evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -Fq 'healthia-6088a' dist/fcm-sender-project-diagnostic; then
+            echo 'Target project ID unexpectedly entered evidence.' >&2; exit 1
+          fi
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|client_email|private_key|refresh_token|client_secret|access_token|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/fcm-sender-project-diagnostic; then
+            echo 'Sensitive material detected.' >&2; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-FCM-Sender-Project-Diagnostic
+          path: dist/fcm-sender-project-diagnostic/summary.json
+          if-no-files-found: error
+          retention-days: 7
