@@ -32,7 +32,7 @@ TOPIC_SIGNALS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("results", ("resultado", "resultados", "result", "results", "laboratorio", "laboratory", "lab", "scan", "imaging", "xray", "x-ray", "ultrasound", "ecg", "ekg")),
     ("treatment", ("medicamento", "medicación", "medicacion", "medication", "medicine", "treatment", "tratamiento", "dosis", "dose")),
     ("measurements", ("presión", "presion", "blood pressure", "peso", "weight", "actividad", "activity", "steps", "medición", "medicion", "measurement")),
-    ("appointments", ("cita", "appointment", "specialist", "consulta programada", "visit")),
+    ("appointments", ("cita", "appointment", "specialist", "consulta", "consultation", "medical visit", "visit")),
     ("family", ("familia", "family", "genograma", "genogram", "antecedente familiar")),
     ("documents", ("documento", "documentos", "document", "documents", "expediente", "health record", "archivo", "file")),
     ("devices", ("dispositivo", "dispositivos", "device", "devices", "wearable", "health connect", "reloj", "watch")),
@@ -147,8 +147,6 @@ def selective_memory(state: PatientState, *, max_turns: int = 12, char_budget: i
         if message.role not in {"patient", "assistant"}:
             continue
         if message.metadata.get("proactive") and selected:
-            # Event-driven observations are persisted elsewhere; do not crowd out
-            # the conversational thread unless they are the only recent context.
             continue
         text = _public_message_text(message)
         if not text:
@@ -188,7 +186,6 @@ def _is_ambiguous_followup(text: str) -> bool:
         return True
     if any(normalized.startswith(_normalize(signal)) for signal in CONTINUATION_SIGNALS):
         return True
-    # Very short follow-ups are often semantically dependent on the prior turn.
     words = re.findall(r"[a-z0-9]+", normalized)
     return len(words) <= 5 and normalized not in {"hola", "hello", "gracias", "thanks", "thank you"}
 
@@ -203,97 +200,32 @@ def _compact_summary(state: PatientState) -> dict[str, Any]:
     latest_document = state.documents[-1] if state.documents else None
     latest_vital = state.vitals[-1] if state.vitals else None
     latest_weight = state.weights[-1] if state.weights else None
-    upcoming_appointment = next(
-        (item for item in state.appointments if str(item.status) == "scheduled"),
-        None,
-    )
+    upcoming_appointment = next((item for item in state.appointments if str(item.status) == "scheduled"), None)
     active_missions = [
-        item
-        for item in reversed(state.missions)
+        item for item in reversed(state.missions)
         if str(getattr(item.status, "value", item.status)) not in {"completed", "cancelled"}
     ][:3]
     return {
-        "latest_result": {
-            "id": latest_result.id,
-            "panel": latest_result.panel,
-            "uploaded_at": latest_result.uploaded_at.isoformat(),
-        } if latest_result else None,
-        "latest_document": {
-            "id": latest_document.id,
-            "title": latest_document.title,
-            "category": str(getattr(latest_document.category, "value", latest_document.category)),
-            "uploaded_at": latest_document.uploaded_at.isoformat(),
-        } if latest_document else None,
-        "latest_blood_pressure": {
-            "systolic": latest_vital.systolic,
-            "diastolic": latest_vital.diastolic,
-            "measured_at": latest_vital.measured_at.isoformat(),
-        } if latest_vital and latest_vital.systolic and latest_vital.diastolic else None,
-        "latest_weight": {
-            "kg": latest_weight.weight_kg,
-            "measured_at": latest_weight.measured_at.isoformat(),
-        } if latest_weight else None,
-        "upcoming_appointment": {
-            "id": upcoming_appointment.id,
-            "title": upcoming_appointment.title,
-            "scheduled_at": upcoming_appointment.scheduled_at.isoformat(),
-        } if upcoming_appointment else None,
+        "latest_result": {"id": latest_result.id, "panel": latest_result.panel, "uploaded_at": latest_result.uploaded_at.isoformat()} if latest_result else None,
+        "latest_document": {"id": latest_document.id, "title": latest_document.title, "category": str(getattr(latest_document.category, "value", latest_document.category)), "uploaded_at": latest_document.uploaded_at.isoformat()} if latest_document else None,
+        "latest_blood_pressure": {"systolic": latest_vital.systolic, "diastolic": latest_vital.diastolic, "measured_at": latest_vital.measured_at.isoformat()} if latest_vital and latest_vital.systolic and latest_vital.diastolic else None,
+        "latest_weight": {"kg": latest_weight.weight_kg, "measured_at": latest_weight.measured_at.isoformat()} if latest_weight else None,
+        "upcoming_appointment": {"id": upcoming_appointment.id, "title": upcoming_appointment.title, "scheduled_at": upcoming_appointment.scheduled_at.isoformat()} if upcoming_appointment else None,
         "active_missions": [
-            {
-                "id": mission.id,
-                "type": mission.mission_type,
-                "title": mission.title,
-                "next_action": mission.next_action,
-                "status": str(getattr(mission.status, "value", mission.status)),
-            }
+            {"id": mission.id, "type": mission.mission_type, "title": mission.title, "next_action": mission.next_action, "status": str(getattr(mission.status, "value", mission.status))}
             for mission in active_missions
         ],
     }
 
 
-def _resolve_reference(
-    *,
-    patient_text: str,
-    ambiguous: bool,
-    current_topic: str | None,
-    prior_target: str | None,
-    prior_mission_type: str | None,
-    prior_message_id: str | None,
-    prior_mission_id: str | None,
-) -> tuple[str, dict[str, Any] | None, bool]:
+def _resolve_reference(*, patient_text: str, ambiguous: bool, current_topic: str | None, prior_target: str | None, prior_mission_type: str | None, prior_message_id: str | None, prior_mission_id: str | None) -> tuple[str, dict[str, Any] | None, bool]:
     if current_topic:
-        return (
-            "explicit_current_topic",
-            {
-                "target": current_topic,
-                "mission_type": None,
-                "mission_id": None,
-                "source": "current_message",
-                "evidence_message_id": None,
-                "confidence": 1.0,
-            },
-            False,
-        )
+        return "explicit_current_topic", {"target": current_topic, "mission_type": None, "mission_id": None, "source": "current_message", "evidence_message_id": None, "confidence": 1.0}, False
     if not ambiguous:
         return "none", None, False
-
     resolved_target = prior_target or MISSION_TO_TARGET.get(prior_mission_type or "")
     if resolved_target or prior_mission_type:
-        return (
-            "resolved_recent_context",
-            {
-                "target": resolved_target,
-                "mission_type": prior_mission_type,
-                "mission_id": prior_mission_id,
-                "source": "recent_assistant_context",
-                "evidence_message_id": prior_message_id,
-                "confidence": 0.92 if resolved_target else 0.82,
-            },
-            False,
-        )
-
-    # Fail closed: a pronoun/ellipsis with no evidence-backed referent should not
-    # be silently routed as if HealthIA knew what “eso/it/the second one” meant.
+        return "resolved_recent_context", {"target": resolved_target, "mission_type": prior_mission_type, "mission_id": prior_mission_id, "source": "recent_assistant_context", "evidence_message_id": prior_message_id, "confidence": 0.92 if resolved_target else 0.82}, False
     return "needs_clarification", None, True
 
 
@@ -311,16 +243,13 @@ def build_frame(state: PatientState, patient_text: str) -> ConversationFrame:
         prior_message_id=message_id,
         prior_mission_id=mission_id,
     )
-
     routing_text = patient_text
     if reference_status == "resolved_recent_context" and resolved_reference:
         resolved_target = str(resolved_reference.get("target") or "")
         resolved_mission = str(resolved_reference.get("mission_type") or "")
         hint = ACTION_HINTS.get(resolved_target) or MISSION_HINTS.get(resolved_mission)
         if hint:
-            # Preserve the exact patient words; append only a private routing hint.
             routing_text = f"{patient_text} | CONTEXTUAL_ROUTING_HINT: {hint}"
-
     return ConversationFrame(
         recent_turns=selective_memory(state),
         compact_summary=_compact_summary(state),
@@ -337,7 +266,6 @@ def build_frame(state: PatientState, patient_text: str) -> ConversationFrame:
 
 
 def semantic_packet(state: PatientState, patient_text: str) -> dict[str, Any]:
-    """Compact context packet for semantic reference resolution without full-record dumping."""
     frame = build_frame(state, patient_text)
     return {
         "current_message": patient_text,
