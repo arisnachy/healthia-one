@@ -1,0 +1,104 @@
+name: KIRA one-shot sanitized FCM backend log diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/fcm-backend-log-diagnostic-once.yml'
+
+jobs:
+  diagnose-fcm-backend:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    permissions:
+      contents: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    env:
+      PROJECT_ID: healthia-6088a
+      SERVICE: healthia-one-fcm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Aggregate recent FCM backend request logs without identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/fcm-backend-log-diagnostic
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="healthia-one-fcm" AND logName:"run.googleapis.com%2Frequests" AND timestamp>="2026-08-11T01:20:00Z"' \
+            --project "$PROJECT_ID" \
+            --limit 500 \
+            --format=json > /tmp/request-logs.json
+          python - <<'PY'
+          import json
+          from collections import Counter, defaultdict
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          rows=json.loads(Path('/tmp/request-logs.json').read_text(encoding='utf-8') or '[]')
+          routes={
+            '/api/devices/pairing/claim':'pairing_claim',
+            '/api/devices/fcm/register/enable':'fcm_enable',
+            '/api/devices/fcm/register':'fcm_register',
+            '/api/devices/fcm/ack':'fcm_ack',
+            '/api/readiness':'readiness',
+          }
+          counts=Counter(); statuses=defaultdict(Counter)
+          for row in rows:
+            req=row.get('httpRequest') or {}
+            raw=str(req.get('requestUrl') or '')
+            try:
+              path=urlparse(raw).path
+            except Exception:
+              path=''
+            label=None
+            for prefix,name in routes.items():
+              if path == prefix or path.startswith(prefix+'/'):
+                label=name; break
+            if not label:
+              continue
+            counts[label]+=1
+            statuses[label][str(req.get('status') or 'unknown')]+=1
+          out={
+            'status':'PASS',
+            'window_start_utc':'2026-08-11T01:20:00Z',
+            'service':'healthia-one-fcm',
+            'route_counts':dict(sorted(counts.items())),
+            'status_counts':{k:dict(sorted(v.items())) for k,v in sorted(statuses.items())},
+            'raw_urls_exposed':False,
+            'device_identifiers_exposed':False,
+            'tokens_exposed':False,
+            'provider_write':False,
+            'iam_mutation':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/fcm-backend-log-diagnostic/result.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+          rm -f /tmp/request-logs.json
+      - name: Refuse secret-like evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|client_secret|access_token|refresh_token|registration_token|proof_id|device_id|connection_id|patient_id|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/fcm-backend-log-diagnostic; then
+            rm -rf dist/fcm-backend-log-diagnostic
+            echo 'Sensitive-looking material detected; refusing upload.' >&2
+            exit 1
+          fi
+      - name: Upload sanitized diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-FCM-Backend-Log-Diagnostic
+          path: dist/fcm-backend-log-diagnostic/result.json
+          if-no-files-found: error
+          retention-days: 7
