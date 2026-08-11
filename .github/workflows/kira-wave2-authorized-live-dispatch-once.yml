@@ -1,91 +1,14 @@
-name: KIRA authorized Wave 2 LIVE dispatch once
+name: KIRA retired Wave 2 LIVE dispatcher
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/kira-wave2-authorized-live-dispatch-once.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
-  actions: write
-
-concurrency:
-  group: kira-wave2-authorized-live-once-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
 
 jobs:
-  dispatch-live:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+  retired:
+    if: false
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TARGET_BRANCH: kira/google-constellation-wave2-live
-      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
-      AUTHORIZATION: I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE
     steps:
-      - name: Enforce exact one-shot authorization
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]] || { echo 'Retry refused: authorized provider execution is one-shot.' >&2; exit 1; }
-          [[ "$AUTHORIZATION" == "I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE" ]] || { echo 'Exact authorization missing.' >&2; exit 1; }
-
-      - name: Dispatch authorized STT + Document AI + Healthcare LIVE gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh workflow run google-wave2-provider-gates.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$TARGET_BRANCH" \
-            -f mode=live \
-            -f cost_authorization="$AUTHORIZATION"
-
-          run_id=''
-          for _ in $(seq 1 30); do
-            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow google-wave2-provider-gates.yml --branch "$TARGET_BRANCH" --event workflow_dispatch --limit 20 --json databaseId,headSha,createdAt | jq -r --arg sha "$TARGET_SHA" '[.[] | select(.headSha==$sha)] | sort_by(.createdAt) | reverse | .[0].databaseId // empty')"
-            [[ -n "$run_id" ]] && break
-            sleep 2
-          done
-          [[ -n "$run_id" ]] || { echo 'Authorized provider LIVE run was not observed.' >&2; exit 1; }
-          echo "PROVIDER_RUN_ID=$run_id" >> "$GITHUB_ENV"
-          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 5
-
-      - name: Dispatch mission-faithful private-GCS Document AI LIVE proof
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh workflow run google-wave2-documentai-gcs-proof.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$TARGET_BRANCH" \
-            -f mode=live \
-            -f cost_authorization="$AUTHORIZATION"
-
-          run_id=''
-          for _ in $(seq 1 30); do
-            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow google-wave2-documentai-gcs-proof.yml --branch "$TARGET_BRANCH" --event workflow_dispatch --limit 20 --json databaseId,headSha,createdAt | jq -r --arg sha "$TARGET_SHA" '[.[] | select(.headSha==$sha)] | sort_by(.createdAt) | reverse | .[0].databaseId // empty')"
-            [[ -n "$run_id" ]] && break
-            sleep 2
-          done
-          [[ -n "$run_id" ]] || { echo 'Authorized Document AI/GCS LIVE run was not observed.' >&2; exit 1; }
-          echo "DOCUMENTAI_GCS_RUN_ID=$run_id" >> "$GITHUB_ENV"
-          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 5
-
-      - name: Record non-sensitive dispatcher summary
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/kira-wave2-authorized-live
-          jq -n \
-            --arg source_sha "$TARGET_SHA" \
-            --arg provider_run "$PROVIDER_RUN_ID" \
-            --arg documentai_gcs_run "$DOCUMENTAI_GCS_RUN_ID" \
-            '{status:"AUTHORIZED_LIVE_DISPATCH_COMPLETE",source_sha:$source_sha,provider_run_id:$provider_run,documentai_gcs_run_id:$documentai_gcs_run,veo_authorized:false,clinical_content:false,secret_material_exposed:false}' \
-            > dist/kira-wave2-authorized-live/summary.json
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: HealthIA-KIRA-Wave2-Authorized-LIVE-Dispatch
-          path: dist/kira-wave2-authorized-live/summary.json
-          if-no-files-found: error
-          retention-days: 30
+      - run: echo retired
