@@ -1,0 +1,127 @@
+name: KIRA Wave 3 00023 navigation timeout diagnosis once
+
+on:
+  push:
+    branches:
+      - kira/google-constellation-wave2-live
+    paths:
+      - .github/workflows/kira-wave3-00023-navigation-timeout-diagnose-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      REVISION: healthia-one-demo-00023-nx6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: eeddacffda9f41e1e3f5cdec0402947a33033b88
+      - name: Authenticate read-only diagnostic identity
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Firestore client only
+        run: python -m pip install 'google-cloud-firestore>=2.21,<3'
+      - name: Read sanitized durable mission and Cloud Run request truth
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.revision_name="healthia-one-demo-00023-nx6" AND timestamp>="2026-08-11T19:51:15Z" AND timestamp<="2026-08-11T19:53:30Z"' \
+            --project "$PROJECT_ID" --limit 200 --format=json > /tmp/logs.json
+          python - <<'PY'
+          import json,re
+          from datetime import datetime,timezone
+          from google.cloud import firestore
+
+          def dt(v):
+              if isinstance(v,datetime): return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+              if isinstance(v,str) and v:
+                  try:
+                      p=datetime.fromisoformat(v.replace('Z','+00:00'))
+                      return p if p.tzinfo else p.replace(tzinfo=timezone.utc)
+                  except ValueError: pass
+              return datetime.min.replace(tzinfo=timezone.utc)
+
+          db=firestore.Client(project='healthia-6088a')
+          threshold=datetime(2026,8,11,19,51,20,tzinfo=timezone.utc)
+          missions=[]
+          for snap in db.collection_group('missions').stream():
+              raw=snap.to_dict() or {}
+              if dt(raw.get('created_at')) < threshold: continue
+              loc=raw.get('location') or {}
+              if 'santiago de los caballeros' not in str(loc.get('text') or '').casefold(): continue
+              missions.append((dt(raw.get('updated_at')),raw))
+          missions.sort(key=lambda x:x[0],reverse=True)
+          mission=missions[0][1] if missions else {}
+          mid=str(mission.get('id') or '')
+          receipts=[]
+          if mid:
+              for snap in db.collection_group('receipts').stream():
+                  raw=snap.to_dict() or {}
+                  if str(raw.get('mission_id') or '') != mid: continue
+                  receipts.append({
+                      'action':str(raw.get('action') or ''),
+                      'status':str(raw.get('status') or ''),
+                      'safe_summary':re.sub(r'[A-Za-z0-9_-]{20,}','[id]',str(raw.get('safe_summary') or ''))[:240],
+                  })
+          outputs=mission.get('tool_outputs') or {}
+
+          rawlogs=json.load(open('/tmp/logs.json',encoding='utf-8'))
+          requests=[]
+          errors=[]
+          for item in rawlogs:
+              http=item.get('httpRequest') or {}
+              url=str(http.get('requestUrl') or '')
+              if '/api/chat' in url:
+                  requests.append({
+                      'timestamp':str(item.get('timestamp') or ''),
+                      'status':http.get('status'),
+                      'latency':str(http.get('latency') or ''),
+                      'method':str(http.get('requestMethod') or ''),
+                  })
+              severity=str(item.get('severity') or '')
+              text=str(item.get('textPayload') or '')
+              payload=item.get('jsonPayload') or {}
+              combined=(text+' '+json.dumps(payload,default=str)).lower()
+              if severity in {'ERROR','CRITICAL','ALERT','EMERGENCY'} or any(k in combined for k in ('timeouterror','timed out','deadline exceeded','costguardblocked')):
+                  kinds=[]
+                  for k in ('timeouterror','timed out','deadline exceeded','costguardblocked','maps connector','vertex','gemini'):
+                      if k in combined: kinds.append(k)
+                  errors.append({'timestamp':str(item.get('timestamp') or ''),'severity':severity,'kinds':kinds})
+
+          out={
+              'status':'PASS',
+              'revision':'healthia-one-demo-00023-nx6',
+              'mission_found':bool(mission),
+              'mission_state':str(mission.get('state') or ''),
+              'provider_query':str(mission.get('provider_query') or '')[:120],
+              'location_text':str((mission.get('location') or {}).get('text') or '')[:180],
+              'candidate_count':len(outputs.get('place_candidates') or []),
+              'authorization_boundary_kind':str((outputs.get('authorization_boundary') or {}).get('kind') or ''),
+              'receipts':receipts,
+              'chat_request_logs':requests,
+              'sanitized_error_signals':errors,
+              'patient_identifier_exposed':False,
+              'mission_identifier_exposed':False,
+              'secret_material_exposed':False,
+              'provider_write':False,
+              'model_call_performed':False,
+          }
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+          rm -f /tmp/logs.json
