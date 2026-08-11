@@ -1,0 +1,83 @@
+name: KIRA Wave 3 monitor once
+
+on:
+  push:
+    branches:
+      - kira/google-constellation-wave2-live
+    paths:
+      - .github/workflows/kira-wave3-monitor-once.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TARGET_WORKFLOW: wave3-exact-head-one-take.yml
+      TARGET_SHA: 65a00f092f24a8bd2361516b7875f4a8d9b6ed18
+      RESULT_PATH: .kira/wave3_exact_head_one_take_runtime.json
+    steps:
+      - name: Wait for canonical workflow-dispatch run and conclusion
+        id: watch
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=""
+          for i in $(seq 1 120); do
+            run_id="$(gh api "/repos/${REPO}/actions/workflows/${TARGET_WORKFLOW}/runs?event=workflow_dispatch&branch=kira%2Fgoogle-constellation-wave2-live&per_page=10" --jq '.workflow_runs | map(select(.status != null)) | sort_by(.created_at) | reverse | .[0].id // empty')"
+            if [ -n "$run_id" ]; then break; fi
+            sleep 5
+          done
+          if [ -z "$run_id" ]; then
+            echo "No canonical Wave 3 workflow_dispatch run appeared." >&2
+            exit 2
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          for i in $(seq 1 300); do
+            status="$(gh api "/repos/${REPO}/actions/runs/${run_id}" --jq '.status')"
+            conclusion="$(gh api "/repos/${REPO}/actions/runs/${run_id}" --jq '.conclusion // ""')"
+            echo "Wave3 run ${run_id}: ${status} ${conclusion}"
+            if [ "$status" = "completed" ]; then
+              echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            sleep 10
+          done
+          test -n "${conclusion:-}"
+      - name: Write sanitized runtime marker to branch
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.watch.outputs.run_id }}
+          CONCLUSION: ${{ steps.watch.outputs.conclusion }}
+        run: |
+          set -euo pipefail
+          artifacts="$(gh api "/repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=20")"
+          python - <<'PY' > /tmp/result.json
+          import json, os, subprocess
+          payload = json.loads(subprocess.check_output([
+              'gh','api',f"/repos/{os.environ['REPO']}/actions/runs/{os.environ['RUN_ID']}/artifacts?per_page=20"
+          ], text=True))
+          out = {
+              'candidate_sha': os.environ['TARGET_SHA'],
+              'canonical_run_id': int(os.environ['RUN_ID']),
+              'conclusion': os.environ['CONCLUSION'],
+              'artifacts': [
+                  {'id': int(a['id']), 'name': a['name'], 'size_in_bytes': int(a.get('size_in_bytes') or 0), 'expired': bool(a.get('expired'))}
+                  for a in payload.get('artifacts', [])
+              ],
+              'public_release_performed': False,
+              'secrets_exposed': False,
+          }
+          print(json.dumps(out, indent=2, sort_keys=True))
+          PY
+          encoded="$(base64 -w0 /tmp/result.json)"
+          gh api --method PUT "/repos/${REPO}/contents/${RESULT_PATH}" \
+            -f message='KIRA: record sanitized Wave 3 one-take runtime result' \
+            -f content="$encoded" \
+            -f branch='kira/google-constellation-wave2-live' >/dev/null
+          echo "HEALTHIA_WAVE3_RUNTIME_MARKER_WRITTEN"
