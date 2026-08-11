@@ -114,11 +114,15 @@ def _conversation_context(state: PatientState, patient_text: str) -> str:
     return json.dumps(packet, ensure_ascii=False, default=str)[:6000]
 
 
-def _public_step_labels(executed_tools: list[str]) -> list[str]:
+def _public_step_labels(executed_tools: list[str], *, authorization_kind: str = "") -> list[str]:
     labels = {
         "inspect_google_health_mission": "Revisó el estado durable de la misión",
         "start_navigation_mission": "Creó la misión de navegación",
-        "discover_care_options": "Buscó opciones verificables",
+        "discover_care_options": (
+            "Preparó la búsqueda y comprobó el consentimiento de ubicación"
+            if authorization_kind == "maps_location_for_mission"
+            else "Buscó opciones verificables"
+        ),
         "select_discovered_candidate": "Aplicó la selección del paciente",
         "check_calendar_window": "Revisó disponibilidad autorizada",
         "contact_selected_provider": "Intentó avanzar el contacto bajo autorización",
@@ -134,7 +138,10 @@ def _receipt_markdown(receipt: dict) -> str:
     if steps:
         lines.extend(f"- ✓ {step}" for step in steps)
     if receipt.get("requires_human_authorization"):
-        lines.append("- ⏸ Detenido en autorización humana; HealthIA no ejecutó ese paso por su cuenta.")
+        if receipt.get("authorization_kind") == "maps_location_for_mission":
+            lines.append("- ⏸ Necesito tu permiso para usar la ubicación de esta misión en Google Places. Todavía no hice la búsqueda.")
+        else:
+            lines.append("- ⏸ Detenido en autorización humana; HealthIA no ejecutó ese paso por su cuenta.")
     elif receipt.get("outcome") == "waiting_external_event":
         lines.append("- ⏳ Esperando una respuesta externa real; HealthIA no hará polling ni inventará una respuesta.")
     elif receipt.get("outcome") == "completed":
@@ -142,6 +149,19 @@ def _receipt_markdown(receipt: dict) -> str:
     elif receipt.get("next_action"):
         lines.append(f"- Siguiente paso: {receipt['next_action']}")
     return "\n".join(lines)
+
+
+def _durable_boundary(constellation, patient_id: str, mission_id: str) -> dict:
+    if not mission_id:
+        return {}
+    try:
+        mission = constellation.load_mission(patient_id, mission_id)
+    except (KeyError, PermissionError):
+        return {}
+    boundary = mission.tool_outputs.get("authorization_boundary")
+    if not isinstance(boundary, dict):
+        return {}
+    return dict(boundary)
 
 
 class GoogleMissionConversationRouter:
@@ -176,6 +196,17 @@ class GoogleMissionConversationRouter:
         if not content:
             content = "Organicé esta tarea como una misión de navegación sanitaria y conservaré cada acción verificable."
 
+        # Human boundaries are projected from durable deterministic mission state,
+        # not trusted from the model's JSON. In particular, Google Places consent
+        # is mission-scoped and cannot be manufactured by ADK.
+        boundary = _durable_boundary(self.constellation, state.profile.id, mission_id)
+        boundary_kind = str(boundary.get("kind") or "")
+        if boundary_kind == "maps_location_for_mission":
+            requires_auth = True
+            auth_kind = boundary_kind
+            next_action = "authorize_location_for_mission"
+            state_name = "blocked"
+
         execution = plan.get("_execution") if isinstance(plan.get("_execution"), dict) else {}
         executed_tools = [str(item) for item in execution.get("executed_tools", []) if str(item)]
         outcome = (
@@ -191,7 +222,7 @@ class GoogleMissionConversationRouter:
             "next_action": next_action,
             "requires_human_authorization": requires_auth,
             "authorization_kind": auth_kind,
-            "executed_steps": _public_step_labels(executed_tools),
+            "executed_steps": _public_step_labels(executed_tools, authorization_kind=auth_kind),
             "tool_count": len(executed_tools),
             "durable_mission": bool(mission_id),
         }
@@ -208,9 +239,18 @@ class GoogleMissionConversationRouter:
             "autonomy_policy": "advance_until_human_or_external_event_boundary",
             "public_action_receipt": receipt,
         }
-        ui_action = plan.get("ui_action")
-        if isinstance(ui_action, dict):
-            metadata["ui_action"] = ui_action
+        if auth_kind == "maps_location_for_mission" and mission_id:
+            metadata["ui_action"] = {
+                "type": "authorize_google_location",
+                "mission_id": mission_id,
+                "ttl_minutes": 30,
+                "label_es": "Autorizar ubicación para esta misión",
+                "label_en": "Authorize location for this mission",
+            }
+        else:
+            ui_action = plan.get("ui_action")
+            if isinstance(ui_action, dict):
+                metadata["ui_action"] = ui_action
 
         audit(
             state,
