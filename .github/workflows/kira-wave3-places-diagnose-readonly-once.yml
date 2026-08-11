@@ -39,19 +39,31 @@ jobs:
           from datetime import datetime, timezone
           from google.cloud import firestore
 
+          def as_datetime(value):
+              if isinstance(value, datetime):
+                  return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+              if isinstance(value, str) and value.strip():
+                  text=value.strip().replace('Z','+00:00')
+                  try:
+                      parsed=datetime.fromisoformat(text)
+                      return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+                  except ValueError:
+                      return datetime.min.replace(tzinfo=timezone.utc)
+              return datetime.min.replace(tzinfo=timezone.utc)
+
           db=firestore.Client(project='healthia-6088a')
           threshold=datetime(2026,8,11,18,8,0,tzinfo=timezone.utc)
           matches=[]
           for snap in db.collection_group('missions').stream():
               raw=snap.to_dict() or {}
-              created=raw.get('created_at')
-              if not created or created < threshold:
+              created_dt=as_datetime(raw.get('created_at'))
+              if created_dt < threshold:
                   continue
               location=raw.get('location') or {}
               text=str(location.get('text') or '')
               if 'santiago' not in text.casefold():
                   continue
-              matches.append((raw.get('updated_at') or created, raw))
+              matches.append((as_datetime(raw.get('updated_at')) or created_dt, raw))
           if not matches:
               raise SystemExit('No recent synthetic Santiago mission found')
           matches.sort(key=lambda item:item[0], reverse=True)
