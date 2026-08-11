@@ -4,8 +4,12 @@ on:
   pull_request:
     paths:
       - ".github/workflows/google-fcm-live-delivery.yml"
+      - "app/main.py"
       - "healthia_one/fcm_registration.py"
       - "healthia_one/fcm_device_api.py"
+      - "tests/test_fcm_delivery_ack.py"
+      - "tests/test_fcm_device_api_e2e.py"
+      - "tests/test_fcm_app_wiring.py"
       - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/FirebaseRuntime.kt"
       - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/FcmRegistrationWorker.kt"
       - "android-health-bridge/app/src/main/java/com/healthia/one/bridge/FcmDeliveryAckWorker.kt"
@@ -90,28 +94,41 @@ jobs:
 
           candidates=[]
           total=0
+          tombstones=0
+          token_bearing=0
           valid_hashes=0
           for snapshot in snapshots:
+              path=snapshot.reference.path
+              if not path.startswith('healthia_fcm_registrations/'):
+                  continue
               fields=snapshot.to_dict() or {}
-              if 'registration_token' not in fields or 'token_sha256' not in fields:
+              if not {'patient_id','connection_id','device_id','enabled'} <= set(fields):
                   continue
               total += 1
               raw=str(fields.get('registration_token') or '')
               digest=str(fields.get('token_sha256') or '')
+              enabled=bool(fields.get('enabled', True))
+              if not enabled and not raw and not digest:
+                  tombstones += 1
+              if raw or digest:
+                  token_bearing += 1
               valid_digest=len(digest)==64 and all(c in '0123456789abcdefABCDEF' for c in digest)
               if valid_digest:
                   valid_hashes += 1
-              if bool(fields.get('enabled', True)) and len(raw)>=16 and valid_digest:
-                  candidates.append({'path':snapshot.reference.path,'token':raw,'digest':digest})
+              if enabled and len(raw)>=16 and valid_digest:
+                  candidates.append({'path':path,'token':raw,'digest':digest})
 
           status='READY_DEVICE_PRESENT' if len(candidates)==1 else ('BLOCKED_DEVICE' if not candidates else 'BLOCKED_AMBIGUOUS_DEVICES')
           out={
             'status':status,
             'source_sha':os.environ.get('SOURCE_SHA',''),
             'fcm_registration_documents':total,
+            'fcm_privacy_tombstones':tombstones,
+            'fcm_token_bearing_documents':token_bearing,
             'active_fcm_registration_count':len(candidates),
             'registrations_with_valid_sha256':valid_hashes,
             'registration_hash_count':len({item['digest'] for item in candidates}),
+            'collection_scope':'healthia_fcm_registrations/*/devices/*',
             'raw_token_exposed':False,
             'provider_write':False,
             'iam_mutation':False,
