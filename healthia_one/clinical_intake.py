@@ -60,11 +60,22 @@ SYMPTOM_SIGNALS = (
     "hinchazon",
     "hinchazón",
     "palpitaciones",
+    # English clinical signals are first-class evidence, not translated hints.
+    "i have pain",
+    "burning pain",
+    "burning when",
+    "urinate",
+    "urinating",
+    "urination",
+    "urinary",
+    "frequent urination",
+    "pee",
+    "peeing",
 )
 
 DOMAIN_SIGNALS: dict[str, tuple[str, ...]] = {
     "respiratory": ("tos", "garganta", "congestion", "congestión", "ronquera", "respirar", "falta de aire", "pecho"),
-    "urinary": ("orinar", "orina", "urinario", "ardor", "frecuencia urinaria", "flanco"),
+    "urinary": ("orinar", "orina", "urinario", "ardor", "frecuencia urinaria", "flanco", "urinate", "urinating", "urination", "urinary", "pee", "peeing", "frequent urination"),
     "gastrointestinal": ("abdomen", "abdominal", "diarrea", "vomito", "vómito", "nausea", "náusea", "estomago", "estómago"),
     "neurologic": ("cabeza", "cefalea", "mareo", "debilidad", "hablar", "vision", "visión", "desmayo", "confusion", "confusión"),
     "musculoskeletal": ("espalda", "lumbar", "articulacion", "articulación", "musculo", "músculo", "rodilla", "hombro"),
@@ -123,8 +134,8 @@ def detect_clinical_consultation(text: str) -> tuple[bool, str]:
         return False, "general"
 
     score = sum(1 for signal in SYMPTOM_SIGNALS if _normalize(signal) in normalized)
-    score += 1 if re.search(r"\b(duele|dolor|fiebre|ardor|mareo|tos|vomit|diarrea|sangr|debilidad|hinch)\w*\b", normalized) else 0
-    score += 1 if re.search(r"\b(desde|hace)\s+(hoy|ayer|\d+|una|dos|tres|varios?)\b", normalized) else 0
+    score += 1 if re.search(r"\b(duele|dolor|fiebre|ardor|mareo|tos|vomit|diarrea|sangr|debilidad|hinch|pain|burn|urinat|pee)\w*\b", normalized) else 0
+    score += 1 if re.search(r"\b(desde|hace|since|for)\s+(hoy|ayer|today|yesterday|\d+|una|dos|tres|varios?|one|two|three|several)\b", normalized) else 0
     score += 1 if len(normalized.split()) >= 6 and any(token in normalized for token in ("paciente", "sintoma", "sintomas", "molestia")) else 0
     if score < 1:
         return False, "general"
