@@ -51,9 +51,13 @@ def build_fcm_device_router(
             (item for item in state.device_connections if item.id == principal.connection_id),
             None,
         )
-        if connection is None or connection.status == "disconnected":
+        # A freshly paired Android has a valid signed bearer before its first
+        # Health Connect sync creates the longitudinal DeviceConnection row.
+        # Missing state is therefore not revocation. Explicit disconnect remains
+        # authoritative and permanently blocks the signed bearer.
+        if connection is not None and connection.status == "disconnected":
             raise HTTPException(status_code=401, detail="La conexión del dispositivo fue revocada.")
-        if str(connection.device_id or "") != principal.device_id:
+        if connection is not None and str(connection.device_id or "") != principal.device_id:
             raise HTTPException(status_code=401, detail="La identidad del dispositivo no coincide con la conexión.")
         return principal
 
