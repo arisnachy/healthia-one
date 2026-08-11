@@ -35,7 +35,7 @@ Para iniciar sin Google AI:
 
 El teléfono y la computadora deben estar en la misma red Wi-Fi. En el teléfono no funciona `127.0.0.1`; usa la dirección LAN impresa por el lanzador. También puedes encontrarla con `ipconfig` buscando **Dirección IPv4** en el adaptador Wi-Fi activo.
 
-Para la prueba FCM LIVE del hackathon, el bridge debe apuntar al endpoint HealthIA controlado que tenga desplegados `/api/devices/fcm/register`, `/api/devices/fcm/register/enable` y `/api/devices/fcm/ack`; un APK conectado a un backend antiguo no puede producir la evidencia de entrega completa.
+Para la prueba FCM LIVE del hackathon, el bridge debe apuntar al endpoint HealthIA controlado que tenga desplegados `/api/devices/fcm/register`, `/api/devices/fcm/register/enable`, `/api/devices/fcm/ack` y `/api/devices/fcm/status/{device_id}`; un APK conectado a un backend antiguo no puede producir la evidencia de entrega completa.
 
 ## 2. Obtener la aplicación Android
 
@@ -177,41 +177,38 @@ El código es temporal y solo puede reclamarse una vez. El bearer final del disp
 
 La variante `debug` admite HTTP solo para pruebas sintéticas en una red local confiable. La variante de producción exige HTTPS y deshabilita tráfico en texto claro.
 
-## 4. Vincular el teléfono y activar notificaciones de forma explícita
+## 4. Vincular el teléfono y elegir notificaciones
 
 En **HealthIA Android Bridge**:
 
 1. Escribe la dirección del servidor HealthIA.
 2. Escribe el código temporal de ocho dígitos.
 3. Pulsa **Vincular con HealthIA**.
-4. Las notificaciones privadas permanecen **desactivadas por defecto**; vincular el teléfono no registra FCM automáticamente.
-5. Si deseas avisos privados, pulsa **Reactivar notificaciones privadas**.
-6. En Android 13 o posterior, concede primero `POST_NOTIFICATIONS`; HealthIA no habilita FCM en servidor hasta que el permiso ya esté concedido. Si Android acaba de mostrar el diálogo, pulsa **Reactivar notificaciones privadas** otra vez después de aceptarlo.
-7. El bridge obtiene entonces el token actual de Firebase y llama al endpoint explícito `/api/devices/fcm/register/enable` con `notifications_opt_in=true`.
-8. Instala o actualiza Health Connect si la aplicación lo solicita.
-9. Pulsa **Autorizar datos en Health Connect** y concede únicamente los tipos que desees compartir.
-10. Pulsa **Sincronizar ahora** si quieres enviar datos de Health Connect.
+4. El teléfono queda vinculado, pero las notificaciones privadas permanecen **desactivadas por defecto**.
+5. Si deseas FCM, pulsa **Reactivar notificaciones privadas**.
+6. En Android 13 o superior, concede `POST_NOTIFICATIONS`; el backend no se habilita hasta que ese permiso ya esté concedido.
+7. Instala o actualiza Health Connect si la aplicación lo solicita.
+8. Pulsa **Autorizar datos en Health Connect** y concede únicamente los tipos que desees compartir.
+9. Pulsa **Sincronizar ahora** si quieres enviar datos de Health Connect.
 
-Una vez realizado el opt-in, `HealthiaFirebaseMessagingService.onNewToken()` puede renovar el registro de forma automática. Esa renovación respeta tanto el estado local como el tombstone del servidor y **no puede reactivar** una cuenta que haya desactivado las notificaciones.
+El opt-in explícito obtiene el token Firebase actual y lo envía a `/api/devices/fcm/register/enable` con `notifications_opt_in=true`. Las rotaciones posteriores usan `/api/devices/fcm/register`, pero nunca pueden reactivar un opt-out.
 
-Al pulsar **Desactivar notificaciones privadas**:
+Al pulsar **Desactivar notificaciones privadas**, Android cancela el trabajo pendiente de registro y el servidor convierte el registro en un tombstone: `enabled=false` y elimina `registration_token` y `token_sha256`. Un refresh automático, un reinicio o un cliente antiguo no pueden reactivarlo. Sólo un nuevo opt-in explícito puede guardar un token actual otra vez.
 
-- Android cancela el trabajo de registro FCM pendiente y deja de registrar tokens;
-- el backend marca el registro como `enabled=false`;
-- Firestore elimina `registration_token` y `token_sha256` del documento mediante un tombstone de privacidad;
-- una rotación posterior del token no puede revertir el opt-out;
-- para reactivar se requiere nuevamente el botón explícito y un token Firebase actual.
+El servidor tiene un único router FCM canónico conectado al mismo `DevicePairingManager` y al mismo store que usa la revocación del dispositivo. Por eso, al desconectar una conexión desde HealthIA, su registro FCM también se desactiva/tombstonea; no puede quedar como dispositivo fantasma elegible para una prueba LIVE.
 
-El token no debe copiarse manualmente ni aparecer en GitHub, logs o artefactos.
+El token FCM no debe copiarse manualmente ni aparecer en GitHub, logs o artefactos.
 
 ## 5. Prueba FCM LIVE controlada
 
-El gate FCM no considera suficiente que Google acepte un mensaje, ni siquiera que Android firme un ACK si la notificación no llegó a mostrarse.
+El gate FCM no considera suficiente que Google acepte un mensaje. Tampoco considera suficiente que el servicio Android firme un ACK si Android no pudo mostrar la notificación.
 
 La prueba completa es:
 
 ```text
-opt-in explícito + registro real del Android
+opt-in explícito en Android
+        ↓
+registro real del token
         ↓
 1 mensaje FCM data-only, PHI-neutral
         ↓
@@ -219,14 +216,12 @@ Android recibe kind=healthia_update + proof_id
         ↓
 notificación local fija realmente mostrada
         ↓
-ACK durable: notification_shown=true
+ACK durable con notification_shown=true
         ↓
 Firestore conserva proof_id + timestamp + visibilidad
         ↓
 LIVE PASS
 ```
-
-Si el teléfono recibe FCM pero Android bloquea la notificación —por ejemplo, porque `POST_NOTIFICATIONS` no está concedido— el dispositivo puede registrar la recepción con `notification_shown=false`, pero **no existe LIVE PASS**.
 
 El texto visible está fijado dentro de la aplicación:
 
@@ -235,7 +230,9 @@ HealthIA
 Tienes una actualización disponible en HealthIA.
 ```
 
-El `proof_id` es evidencia operativa sintética; no contiene diagnóstico, resultado, medicamento, nombre de paciente ni otro contenido clínico. El workflow genera un nonce aleatorio, conserva sólo su SHA-256 en el artefacto y exige que Firestore reread demuestre simultáneamente el ACK correcto y `last_delivery_notification_shown=true`.
+El `proof_id` es evidencia operativa sintética; no contiene diagnóstico, resultado, medicamento, nombre de paciente ni otro contenido clínico. El workflow conserva sólo su SHA-256 en evidencia.
+
+El preflight FCM examina únicamente `healthia_fcm_registrations/*/devices/*` y reporta por separado documentos, tombstones de privacidad, documentos que aún contienen token y candidatos activos. Un tombstone correcto no se confunde con un token activo.
 
 ## 6. De dónde salen los datos
 
