@@ -1,0 +1,34 @@
+name: KIRA Wave 3 dispatch once
+
+on:
+  push:
+    branches:
+      - kira/google-constellation-wave2-live
+    paths:
+      - .github/workflows/kira-wave3-dispatch-once.yml
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Dispatch canonical exact-head one-take
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CANDIDATE_SHA: 65a00f092f24a8bd2361516b7875f4a8d9b6ed18
+          AUTHORIZATION: I_AUTHORIZE_WAVE3_EXACT_CLOUD_ONE_TAKE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPO}/actions/workflows/wave3-exact-head-one-take.yml/dispatches" \
+            -f ref='kira/google-constellation-wave2-live' \
+            -f inputs[candidate_sha]="$CANDIDATE_SHA" \
+            -f inputs[authorization]="$AUTHORIZATION"
+          echo "HEALTHIA_WAVE3_CANONICAL_DISPATCH_REQUESTED"
