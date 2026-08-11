@@ -1,0 +1,157 @@
+name: KIRA one-shot FCM proof backend deploy
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/fcm-proof-backend-deploy-once.yml'
+
+concurrency:
+  group: healthia-fcm-proof-backend-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-fcm-proof-backend:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    permissions:
+      contents: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE: healthia-one-fcm
+      RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Bind exact source head
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "${{ github.event.pull_request.head.sha }}"
+          echo "SOURCE_SHA=$source_sha" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify required APIs are already enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(gcloud services list --enabled --project "$PROJECT_ID" --format='value(config.name)')"
+          for api in run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com secretmanager.googleapis.com; do
+            grep -Fxq "$api" <<<"$enabled" || { echo "Required pre-enabled API missing: $api" >&2; exit 1; }
+          done
+          echo 'Required APIs already enabled; no service enablement mutation will occur.'
+
+      - name: Deploy isolated zero-AI FCM proof backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE" \
+            --source . \
+            --build-service-account "$BUILD_SA" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --service-account "$RUNTIME_SA" \
+            --min 0 \
+            --max 1 \
+            --concurrency 10 \
+            --cpu 1 \
+            --memory 512Mi \
+            --timeout 300 \
+            --set-env-vars 'HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=local,HEALTHIA_AI_REQUEST_LIMIT=0,HEALTHIA_COST_GUARD_START_ENABLED=false,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_PROACTIVE_ENABLED=false,GOOGLE_CLOUD_PROJECT=healthia-6088a' \
+            --set-secrets 'HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest' \
+            --allow-unauthenticated \
+            --quiet >/tmp/fcm-cloud-run-deploy.txt
+          rm -f /tmp/fcm-cloud-run-deploy.txt
+
+      - name: Prove deployed FCM surface without patient data
+        id: proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/fcm-proof-backend
+          url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$url"
+          test -n "$revision"
+
+          readiness_code="$(curl -sS -o /tmp/readiness.json -w '%{http_code}' "$url/api/readiness" || true)"
+          [[ "$readiness_code" == '200' ]] || { rm -f /tmp/readiness.json; echo "Readiness HTTP $readiness_code" >&2; exit 1; }
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/readiness.json').read_text(encoding='utf-8'))
+          text=json.dumps(payload,sort_keys=True)
+          if 'fcm_private_notifications' not in text:
+              raise SystemExit('Deployed readiness does not expose fcm_private_notifications')
+          PY
+          rm -f /tmp/readiness.json
+
+          fcm_status_code="$(curl -sS -o /tmp/fcm-status.json -w '%{http_code}' "$url/api/devices/fcm/status/kira-proof-device" || true)"
+          rm -f /tmp/fcm-status.json
+          [[ "$fcm_status_code" == '401' ]] || { echo "Expected FCM route auth boundary HTTP 401, got $fcm_status_code" >&2; exit 1; }
+
+          export SERVICE_URL="$url" REVISION="$revision" READINESS_CODE="$readiness_code" FCM_STATUS_CODE="$fcm_status_code"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          out={
+              'status':'LIVE_PASS',
+              'source_sha':os.environ['SOURCE_SHA'],
+              'project_id':os.environ['PROJECT_ID'],
+              'region':os.environ['REGION'],
+              'service':os.environ['SERVICE'],
+              'service_url':os.environ['SERVICE_URL'],
+              'revision':os.environ['REVISION'],
+              'readiness_http_status':int(os.environ['READINESS_CODE']),
+              'fcm_status_without_device_bearer_http_status':int(os.environ['FCM_STATUS_CODE']),
+              'firestore_backend':True,
+              'healthia_auth_required':True,
+              'cloud_run_allow_unauthenticated':True,
+              'llm_backend':'mock',
+              'ai_request_limit':0,
+              'min_instances':0,
+              'max_instances':1,
+              'provider_write':True,
+              'api_enable_mutation':False,
+              'iam_mutation':False,
+              'secret_material_exposed':False,
+          }
+          Path('dist/fcm-proof-backend/result.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+      - name: Refuse secret-like evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|client_secret|access_token|refresh_token|ya29\.|AIza[0-9A-Za-z_-]{20,}|iam\.gserviceaccount\.com)' dist/fcm-proof-backend; then
+            rm -rf dist/fcm-proof-backend
+            echo 'Sensitive-looking material detected; refusing upload.' >&2
+            exit 1
+          fi
+
+      - name: Upload sanitized FCM proof backend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-FCM-Proof-Backend
+          path: dist/fcm-proof-backend/result.json
+          if-no-files-found: error
+          retention-days: 30
