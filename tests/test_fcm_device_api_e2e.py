@@ -15,10 +15,11 @@ class FakeService:
         self.connection = connection
 
     async def snapshot(self):
-        return SimpleNamespace(device_connections=[self.connection])
+        connections = [] if self.connection is None else [self.connection]
+        return SimpleNamespace(device_connections=connections)
 
 
-def build_client(*, connection_status: str = "connected"):
+def build_client(*, connection_status: str = "connected", connection_present: bool = True):
     pairing = DevicePairingManager(token_secret=b"k" * 32)
     session = pairing.create(patient_id="patient_test")
     claim = pairing.claim(session["code"], "android-test-device", "Controlled Android")
@@ -26,7 +27,7 @@ def build_client(*, connection_status: str = "connected"):
         id=claim["connection_id"],
         status=connection_status,
         device_id=claim["device_id"],
-    )
+    ) if connection_present else None
     store = MemoryFCMRegistrationStore()
     app = FastAPI()
     app.include_router(
@@ -142,6 +143,26 @@ def test_signed_device_api_enforces_sticky_opt_out_and_explicit_reenable() -> No
     visible_status = client.get(f"/api/devices/fcm/status/{device_id}", headers=headers)
     assert visible_status.status_code == 200
     assert visible_status.json()["last_delivery_notification_shown"] is True
+
+
+def test_fresh_signed_device_can_explicitly_opt_in_before_first_health_connect_sync() -> None:
+    client, headers, store, claim, _ = build_client(connection_present=False)
+    device_id = claim["device_id"]
+
+    response = client.post(
+        "/api/devices/fcm/register/enable",
+        headers=headers,
+        json={
+            "device_id": device_id,
+            "registration_token": "fresh-pairing-fcm-token-1234567890",
+            "notifications_opt_in": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["registered"] is True
+    current = store.load("patient_test", claim["connection_id"])
+    assert current is not None and current.usable()
 
 
 def test_signed_bearer_cannot_use_fcm_api_after_device_connection_revocation() -> None:
