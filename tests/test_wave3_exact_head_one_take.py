@@ -29,8 +29,26 @@ def test_wave3_one_take_fails_locally_before_cloud_and_deploys_exact_sha() -> No
     assert "python scripts/judge_omega.py" in workflow
     assert "deploy-cloud-demo.ps1" in workflow
     assert "-RequestLimit 20" in workflow
+    assert "-SkipStrictProof" in workflow
     assert "-Confirmed" in workflow
-    assert "python deployment/verify_cloud_demo.py" in workflow
+    assert "python deployment/verify_cloud_demo.py" not in workflow
+
+
+def test_wave3_recorder_gets_fresh_same_image_process_and_provider_guards() -> None:
+    workflow = (ROOT / ".github/workflows/wave3-exact-head-one-take.yml").read_text(encoding="utf-8")
+    assert "HEALTHIA_WAVE3_RECORDING_NONCE" in workflow
+    assert "Fresh recorder revision changed the exact deployed image" in workflow
+    assert "HEALTHIA_AI_REQUEST_LIMIT" in workflow
+    assert "RequestLimit is not 20" in workflow
+    assert "HEALTHIA_LLM_TIMEOUT_SECONDS" in workflow
+    assert "Recorder LLM timeout is not 60 seconds" in workflow
+    assert "GOOGLE_MAPS_API_KEY" in workflow
+    assert "healthia-google-maps-api-key" in workflow
+    assert "Maps key must never be mounted as a plaintext env value" in workflow
+    assert "HEALTHIA_WAVE3_FRESH_RECORDER_RUNTIME_PASS" in workflow
+    assert "fresh_process_same_image" in workflow
+    assert "fresh_process_request_limit" in workflow
+    assert "maps_secret_manager_binding" in workflow
 
 
 def test_wave3_recorder_is_bound_to_exact_candidate_and_winner_scenes() -> None:
@@ -59,7 +77,7 @@ def test_wave3_recording_never_auto_publishes_or_claims_submission_replacement()
     workflow = (ROOT / ".github/workflows/wave3-exact-head-one-take.yml").read_text(encoding="utf-8")
     assert "releases/" not in workflow
     assert "gh release" not in workflow.lower()
-    assert "public_release_performed\": False" in workflow
+    assert "public_release_performed': False" in workflow
     assert "does not replace or publish the preserved judge video automatically" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "HealthIA-Wave3-exact-head-one-take" in workflow
