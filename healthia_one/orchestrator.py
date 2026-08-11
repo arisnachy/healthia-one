@@ -241,8 +241,12 @@ def _attach_conversation_frame(response: ChatResponse, frame) -> ChatResponse:
     response.message.metadata["conversation_context"] = {
         "ambiguous_reference": frame.ambiguous_reference,
         "correction": frame.correction,
+        "current_topic": frame.current_topic,
         "last_action_target": frame.last_action_target,
         "last_mission_type": frame.last_mission_type,
+        "reference_status": frame.reference_status,
+        "resolved_reference": frame.resolved_reference,
+        "needs_clarification": frame.needs_clarification,
     }
     return response
 
@@ -252,6 +256,28 @@ def _attach_ui_action(response: ChatResponse, ui_action: dict[str, str] | None) 
         response.message.metadata["ui_action"] = ui_action
         response.message.metadata["health_os_control"] = True
     return response
+
+
+def _clarification_response(frame, patient_text: str) -> ChatResponse:
+    english = bool(re.search(r"\b(that|this|it|which|one|previous|second|first)\b", patient_text.lower()))
+    content = (
+        "I don't have enough evidence in this conversation to know exactly what you're referring to. Tell me the result, measurement, appointment, document, or task you mean and I'll continue from there."
+        if english else
+        "No tengo evidencia suficiente en esta conversación para saber con certeza a qué te refieres. Dime si hablas de un resultado, medición, cita, documento o tarea y continúo desde ahí."
+    )
+    response = ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=content,
+            metadata={
+                "intent": "reference_clarification",
+                "reference_clarification_required": True,
+                "external_action_executed": False,
+            },
+        )
+    )
+    return _attach_conversation_frame(response, frame)
 
 
 def _human_clinical_conversation(state: PatientState, patient_text: str) -> ChatResponse:
@@ -309,9 +335,9 @@ def _google_mission_candidate_response(state: PatientState, patient_text: str) -
     frame = build_frame(state, patient_text)
     english = bool(re.search(r"\b(find|get me|where can i|contact|book)\b", patient_text.lower()))
     content = (
-        "I can handle this as a real-world health navigation mission. I will use only location and account access you explicitly provide, and any external write action will still require the exact authorization boundary."
+        "I can handle this as a real-world health navigation mission. I will keep advancing every safe step I can verify, and I will stop only when I need your authorization, your choice, or a real external reply."
         if english else
-        "Puedo manejar esto como una misión real de navegación sanitaria. Usaré sólo la ubicación y los accesos que autorices explícitamente, y cualquier acción externa seguirá detenida por la autorización exacta correspondiente."
+        "Puedo manejar esto como una misión real de navegación sanitaria. Avanzaré todos los pasos seguros que pueda verificar y sólo me detendré cuando necesite tu autorización, tu elección o una respuesta externa real."
     )
     response = ChatResponse(
         message=ChatMessage(
@@ -321,6 +347,7 @@ def _google_mission_candidate_response(state: PatientState, patient_text: str) -
             metadata={
                 "google_mission_candidate": True,
                 "google_mission_routing_order": "after_deterministic_safety_before_opportunity",
+                "autonomy_policy": "advance_until_human_or_external_event_boundary",
                 "health_os_control": True,
             },
         )
@@ -363,6 +390,9 @@ def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
         clinical_response = respond_to_clinical_intake(state, patient_text)
         if clinical_response is not None:
             return _attach_conversation_frame(clinical_response, frame)
+
+    if frame.needs_clarification:
+        return _clarification_response(frame, patient_text)
 
     if ui_action is not None:
         response = deterministic_respond(state, _router_text(routed_text))
