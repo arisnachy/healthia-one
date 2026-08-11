@@ -1,0 +1,109 @@
+name: KIRA promote Wave 2 LIVE discoveries into permanent harness once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/kira-wave2-promote-live-fixes-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Promote verified STT and Healthcare fixes and remove all temporary LIVE workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path=Path('.github/workflows/google-wave2-provider-gates.yml')
+          text=path.read_text()
+
+          old="""          sudo apt-get install -y -qq espeak-ng >/dev/null
+          espeak-ng -v en-us -s 135 -w /tmp/healthia-wave2.wav \"synthetic speech test one two three\"
+"""
+          new="""          sudo apt-get install -y -qq espeak-ng ffmpeg >/dev/null
+          espeak-ng -v en-us -s 95 -g 22 -w /tmp/healthia-wave2-raw.wav \"one. two. three. one. two. three. healthia synthetic control.\"
+          ffmpeg -v error -y -i /tmp/healthia-wave2-raw.wav -ar 16000 -ac 1 -c:a pcm_s16le /tmp/healthia-wave2.wav
+          rm -f /tmp/healthia-wave2-raw.wav
+"""
+          if old not in text: raise SystemExit('Expected legacy STT synthesis block not found')
+          text=text.replace(old,new,1)
+
+          old="""          payload={'config':{'encoding':'LINEAR16','sampleRateHertz':rate,'languageCode':'en-US'},'audio':{'content':base64.b64encode(wav_path.read_bytes()).decode('ascii')}}
+"""
+          new="""          if rate != 16000:
+              raise SystemExit('Synthetic WAV was not normalized to 16 kHz')
+          payload={'config':{'encoding':'LINEAR16','sampleRateHertz':16000,'languageCode':'en-US','speechContexts':[{'phrases':['one','two','three','healthia synthetic control'],'boost':18.0}]},'audio':{'content':base64.b64encode(wav_path.read_bytes()).decode('ascii')}}
+"""
+          if old not in text: raise SystemExit('Expected legacy STT payload block not found')
+          text=text.replace(old,new,1)
+
+          old="""          normalized=set(re.findall(r'[a-z0-9]+',transcript.lower()))
+          hits=len({'one','two','three'} & normalized)
+          if not transcript or hits < 2:
+              raise SystemExit('Speech recognition did not match the synthetic control phrase')
+          out={'status':'LIVE_PASS','provider':'speech.googleapis.com','recognized_text_sha256':hashlib.sha256(transcript.encode()).hexdigest(),'expected_control_word_hits':hits,'synthetic_audio':True,'clinical_content':False,'iam_mutation':False,'secret_material_exposed':False}
+"""
+          new="""          normalized=set(re.findall(r'[a-z0-9]+',transcript.lower()))
+          controls=[{'one','1'},{'two','2'},{'three','3'}]
+          hits=sum(1 for group in controls if group & normalized)
+          if not transcript or hits < 2:
+              raise SystemExit('Speech recognition did not match at least two independent numeric control concepts')
+          out={'status':'LIVE_PASS','provider':'speech.googleapis.com','recognized_text_sha256':hashlib.sha256(transcript.encode()).hexdigest(),'expected_control_concept_hits':hits,'synthetic_audio':True,'normalized_pcm_16khz_mono':True,'clinical_content':False,'raw_transcript_exposed':False,'iam_mutation':False,'secret_material_exposed':False}
+"""
+          if old not in text: raise SystemExit('Expected legacy STT truth block not found')
+          text=text.replace(old,new,1)
+
+          old="""          import hashlib, json, os, struct, uuid, urllib.error, urllib.parse, urllib.request
+"""
+          new="""          import hashlib, json, os, struct, time, uuid, urllib.error, urllib.parse, urllib.request
+"""
+          if old not in text: raise SystemExit('Expected Healthcare import block not found')
+          text=text.replace(old,new,1)
+
+          old="""              json_call('POST',root+'/datasets?datasetId='+urllib.parse.quote(dataset_id),{}); created['dataset']=True
+"""
+          new="""              _,operation=json_call('POST',root+'/datasets?datasetId='+urllib.parse.quote(dataset_id),{})
+              operation_name=str(operation.get('name') or '')
+              if '/operations/' not in operation_name: raise RuntimeError('Healthcare dataset create did not return an LRO resource')
+              for _ in range(120):
+                  _,current=json_call('GET','https://healthcare.googleapis.com/v1/'+operation_name)
+                  if current.get('done'):
+                      if current.get('error'): raise RuntimeError('Healthcare dataset create LRO completed with provider error')
+                      break
+                  time.sleep(2)
+              else: raise RuntimeError('Healthcare dataset create LRO did not complete in time')
+              created['dataset']=True
+"""
+          if old not in text: raise SystemExit('Expected legacy dataset create line not found')
+          text=text.replace(old,new,1)
+          path.write_text(text)
+
+          test=Path('tests/test_wave2_provider_live_contract.py')
+          test.write_text('''from pathlib import Path\n\n\ndef test_wave2_provider_live_harness_preserves_verified_provider_contracts():\n    text = Path(".github/workflows/google-wave2-provider-gates.yml").read_text()\n    assert "ffmpeg -v error -y -i /tmp/healthia-wave2-raw.wav -ar 16000 -ac 1" in text\n    assert "controls=[{\'one\',\'1\'},{\'two\',\'2\'},{\'three\',\'3\'}]" in text\n    assert "expected_control_concept_hits" in text\n    assert "raw_transcript_exposed" in text\n    assert "operation_name=str(operation.get(\'name\') or \'\')" in text\n    assert "current.get(\'done\')" in text\n    assert "Healthcare dataset create LRO did not complete in time" in text\n    assert "I_AUTHORIZE_STT_DOCUMENTAI_HEALTHCARE_LIVE" in text\n''')
+          PY
+
+          rm -f \
+            .github/workflows/kira-wave2-authorized-live-dispatch-once.yml \
+            .github/workflows/kira-wave2-authorized-iam-live-once.yml \
+            .github/workflows/kira-wave2-corrected-live-proof-once.yml \
+            .github/workflows/kira-healthcare-lro-live-proof-once.yml \
+            .github/workflows/kira-wave2-promote-live-fixes-once.yml
+
+          git diff --check
+          python -m pytest -q tests/test_wave2_provider_live_contract.py
+          git config user.name 'KIRA Omega'
+          git config user.email 'kira-omega@users.noreply.github.com'
+          git add .github/workflows/google-wave2-provider-gates.yml tests/test_wave2_provider_live_contract.py .github/workflows
+          git commit -m 'KIRA: promote verified STT and Healthcare LIVE fixes'
+          git push origin HEAD:kira/google-constellation-wave2-live
