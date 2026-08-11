@@ -6,6 +6,7 @@ import unicodedata
 
 from healthia_one.control import audit
 from healthia_one.conversation_brain import build_frame, explicit_topic, semantic_packet
+from healthia_one.google_constellation import GrantBundle
 from healthia_one.google_constellation_singleton import get_google_constellation_service
 from healthia_one.google_mission_adk import AdkGoogleMissionRuntime
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
@@ -51,6 +52,15 @@ _CONTINUATION_PATTERNS = (
     r"\bcontinue (?:that|the mission)\b",
 )
 
+_LOCATION_CONSENT_PATTERNS = (
+    r"\bautorizo (?:usar )?(?:mi )?ubicacion para (?:esta|la) mision\b",
+    r"\bautorizo (?:la )?ubicacion (?:solo )?para (?:esta|la) mision\b",
+    r"\bpuedes usar (?:mi )?ubicacion para (?:esta|la) mision\b",
+    r"\bauthorize (?:my )?location for this mission\b",
+    r"\bi authorize (?:my )?location for this mission\b",
+    r"\byou may use (?:my )?location for this mission\b",
+)
+
 _STRONG_GENERIC_CONTINUATIONS = {
     "dale con eso",
     "continua con eso",
@@ -81,6 +91,11 @@ def latest_google_mission_id(state: PatientState) -> str:
     return ""
 
 
+def _is_location_consent(patient_text: str) -> bool:
+    normalized = _normalize(patient_text)
+    return any(re.search(pattern, normalized) for pattern in _LOCATION_CONSENT_PATTERNS)
+
+
 def should_consider_google_mission(state: PatientState, patient_text: str) -> bool:
     normalized = _normalize(patient_text)
     if not normalized or any(item in normalized for item in _NEGATIVE_CONTEXTS):
@@ -91,6 +106,8 @@ def should_consider_google_mission(state: PatientState, patient_text: str) -> bo
     mission_id = latest_google_mission_id(state)
     if not mission_id:
         return False
+    if _is_location_consent(patient_text):
+        return True
 
     topic = explicit_topic(patient_text)
     if topic in _NON_GOOGLE_EXPLICIT_TOPICS:
@@ -140,6 +157,7 @@ def _receipt_markdown(receipt: dict) -> str:
     if receipt.get("requires_human_authorization"):
         if receipt.get("authorization_kind") == "maps_location_for_mission":
             lines.append("- ⏸ Necesito tu permiso para usar la ubicación de esta misión en Google Places. Todavía no hice la búsqueda.")
+            lines.append("- Para continuar puedes decir: **Autorizo ubicación para esta misión.**")
         else:
             lines.append("- ⏸ Detenido en autorización humana; HealthIA no ejecutó ese paso por su cuenta.")
     elif receipt.get("outcome") == "waiting_external_event":
@@ -172,11 +190,74 @@ class GoogleMissionConversationRouter:
         self.constellation = get_google_constellation_service(settings)
         self.adk = AdkGoogleMissionRuntime(settings, constellation=self.constellation)
 
+    def _grant_explicit_location_consent(self, state: PatientState, patient_text: str) -> tuple[bool, str]:
+        if not _is_location_consent(patient_text):
+            return False, ""
+        mission_id = latest_google_mission_id(state)
+        if not mission_id:
+            return False, ""
+        boundary = _durable_boundary(self.constellation, state.profile.id, mission_id)
+        if str(boundary.get("kind") or "") != "maps_location_for_mission":
+            return False, mission_id
+        grant = self.constellation.grant(
+            state.profile.id,
+            GrantBundle.MAPS_LOCATION,
+            mission_id=mission_id,
+            ttl_minutes=30,
+        )
+        audit(
+            state,
+            actor="patient",
+            action="authorize_google_location_for_mission",
+            resource_type="google_health_mission",
+            resource_id=mission_id,
+            details={
+                "grant_bundle": str(GrantBundle.MAPS_LOCATION),
+                "grant_id": grant.id,
+                "mission_scoped": True,
+                "expires_at": grant.expires_at.isoformat() if grant.expires_at else "",
+                "external_action_performed": False,
+            },
+        )
+        return True, mission_id
+
     async def respond(self, state: PatientState, patient_text: str) -> ChatResponse | None:
         if not should_consider_google_mission(state, patient_text):
             return None
+
+        location_consent_granted, consent_mission_id = self._grant_explicit_location_consent(state, patient_text)
         if not self.adk.ready:
-            return None
+            if not location_consent_granted:
+                return None
+            receipt = {
+                "mission_id": consent_mission_id,
+                "state": "authorized_location",
+                "outcome": "advanced",
+                "next_action": "continue_mission_when_agent_runtime_is_available",
+                "requires_human_authorization": False,
+                "authorization_kind": "",
+                "executed_steps": ["Registró consentimiento temporal de ubicación para esta misión"],
+                "tool_count": 0,
+                "durable_mission": True,
+            }
+            return ChatResponse(
+                message=ChatMessage(
+                    patient_id=state.profile.id,
+                    role="assistant",
+                    author="HealthIA",
+                    content=(
+                        "Tu permiso de ubicación quedó limitado a esta misión y por tiempo limitado. "
+                        "No ejecuté una búsqueda porque el runtime de misión no está disponible ahora.\n\n"
+                        + _receipt_markdown(receipt)
+                    ),
+                    metadata={
+                        "google_constellation": True,
+                        "google_mission_id": consent_mission_id,
+                        "public_action_receipt": receipt,
+                        "external_action_executed": False,
+                    },
+                )
+            )
 
         plan = await self.adk.run(
             patient_id=state.profile.id,
@@ -185,9 +266,38 @@ class GoogleMissionConversationRouter:
             authorized_location=None,
         )
         if not plan or str(plan.get("intent") or "") == "not_applicable":
-            return None
+            if not location_consent_granted:
+                return None
+            receipt = {
+                "mission_id": consent_mission_id,
+                "state": "authorized_location",
+                "outcome": "advanced",
+                "next_action": "continue_google_mission",
+                "requires_human_authorization": False,
+                "authorization_kind": "",
+                "executed_steps": ["Registró consentimiento temporal de ubicación para esta misión"],
+                "tool_count": 0,
+                "durable_mission": True,
+            }
+            return ChatResponse(
+                message=ChatMessage(
+                    patient_id=state.profile.id,
+                    role="assistant",
+                    author="HealthIA",
+                    content=(
+                        "Tu permiso quedó registrado sólo para esta misión. La búsqueda todavía no se ejecutó; puedes pedirme que continúe.\n\n"
+                        + _receipt_markdown(receipt)
+                    ),
+                    metadata={
+                        "google_constellation": True,
+                        "google_mission_id": consent_mission_id,
+                        "public_action_receipt": receipt,
+                        "external_action_executed": False,
+                    },
+                )
+            )
 
-        mission_id = str(plan.get("mission_id") or latest_google_mission_id(state))
+        mission_id = str(plan.get("mission_id") or consent_mission_id or latest_google_mission_id(state))
         state_name = str(plan.get("state") or "")
         next_action = str(plan.get("next_action") or "")
         requires_auth = bool(plan.get("requires_human_authorization"))
@@ -196,9 +306,6 @@ class GoogleMissionConversationRouter:
         if not content:
             content = "Organicé esta tarea como una misión de navegación sanitaria y conservaré cada acción verificable."
 
-        # Human boundaries are projected from durable deterministic mission state,
-        # not trusted from the model's JSON. In particular, Google Places consent
-        # is mission-scoped and cannot be manufactured by ADK.
         boundary = _durable_boundary(self.constellation, state.profile.id, mission_id)
         boundary_kind = str(boundary.get("kind") or "")
         if boundary_kind == "maps_location_for_mission":
@@ -209,6 +316,9 @@ class GoogleMissionConversationRouter:
 
         execution = plan.get("_execution") if isinstance(plan.get("_execution"), dict) else {}
         executed_tools = [str(item) for item in execution.get("executed_tools", []) if str(item)]
+        executed_steps = _public_step_labels(executed_tools, authorization_kind=auth_kind)
+        if location_consent_granted:
+            executed_steps.insert(0, "Registró consentimiento temporal de ubicación para esta misión")
         outcome = (
             "waiting_authorization" if requires_auth else
             "waiting_external_event" if state_name == "awaiting_external_event" else
@@ -222,7 +332,7 @@ class GoogleMissionConversationRouter:
             "next_action": next_action,
             "requires_human_authorization": requires_auth,
             "authorization_kind": auth_kind,
-            "executed_steps": _public_step_labels(executed_tools, authorization_kind=auth_kind),
+            "executed_steps": executed_steps,
             "tool_count": len(executed_tools),
             "durable_mission": bool(mission_id),
         }
@@ -265,6 +375,7 @@ class GoogleMissionConversationRouter:
                 "authorization_kind": auth_kind,
                 "executed_tools": executed_tools,
                 "tool_count": len(executed_tools),
+                "location_consent_granted_this_turn": location_consent_granted,
             },
         )
 
