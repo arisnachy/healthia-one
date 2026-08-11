@@ -9,6 +9,7 @@ def test_fcm_workflow_tracks_production_wiring_and_consent_contracts() -> None:
 
     for path in (
         "app/main.py",
+        "healthia_one/auth_web.py",
         "healthia_one/fcm_registration.py",
         "healthia_one/fcm_device_api.py",
         "tests/test_fcm_delivery_ack.py",
