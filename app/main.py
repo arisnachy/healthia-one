@@ -19,6 +19,8 @@ from healthia_one.devices import device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
 from healthia_one.evidence_store import evidence_backend, load_evidence, local_evidence_path, persist_evidence
 from healthia_one.family import family_summary
+from healthia_one.fcm_device_api import build_fcm_device_router
+from healthia_one.fcm_registration import build_fcm_registration_store
 from healthia_one.profile import normalize_medication_text, profile_summary
 from healthia_one.models import (
     ActivityRecord,
@@ -47,6 +49,7 @@ from healthia_one.twin import clinical_twin_summary
 
 service = HealthIAService(settings)
 pairing_manager = DevicePairingManager()
+fcm_registration_store = build_fcm_registration_store(settings)
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
 UPLOAD_ROOT = ROOT / "uploads" / "patient_demo"
@@ -65,6 +68,14 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="HealthIA ONE", version="0.8.0", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="assets")
 account_manager = install_patient_auth(app, service=service, settings=settings, web_root=WEB_ROOT)
+app.include_router(
+    build_fcm_device_router(
+        service,
+        settings,
+        pairing_manager=pairing_manager,
+        store=fcm_registration_store,
+    )
+)
 
 
 @app.get("/")
@@ -127,6 +138,7 @@ async def readiness() -> dict:
             "pregnancy_and_postpartum",
             "bmi_and_nutrition_context",
             "health_connect_sync",
+            "fcm_private_notifications",
             "device_medication_cross_check",
             "cloud_cost_guard",
         ],
@@ -218,9 +230,15 @@ async def devices() -> dict:
 
 @app.delete("/api/devices/{connection_id}")
 async def disconnect_device(connection_id: str) -> dict:
+    patient_id = (await service.snapshot()).profile.id
     if not await service.disconnect_device(connection_id):
         raise HTTPException(status_code=404, detail="Conexión no encontrada.")
-    return {"disconnected": True, "connection_id": connection_id}
+    fcm_tombstoned = fcm_registration_store.disable_connection(patient_id, connection_id)
+    return {
+        "disconnected": True,
+        "connection_id": connection_id,
+        "fcm_tombstoned": bool(fcm_tombstoned),
+    }
 
 
 @app.post("/api/devices/pairing")
