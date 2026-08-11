@@ -65,7 +65,7 @@ jobs:
           python -m pip install -e ".[test]"
       - name: Fail before Cloud spend if exact-head product gates are not green
         run: |
-          pytest -q
+          python -m pytest -q
           python scripts/full_system_check.py
           python scripts/dialogbench.py
           python scripts/judge_omega.py
@@ -78,6 +78,7 @@ jobs:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       SERVICE_NAME: healthia-one-demo
+      GCS_BUCKET: healthia-6088a-healthia-evidence
       CANDIDATE_SHA: ${{ needs.exact-head-preflight.outputs.candidate_sha }}
     steps:
       - uses: actions/checkout@v4
@@ -129,6 +130,7 @@ jobs:
         env:
           HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
           HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+          HEALTHIA_GCS_BUCKET: ${{ env.GCS_BUCKET }}
         run: python deployment/verify_cloud_demo.py
       - name: Install isolated Chromium recorder
         run: |
@@ -143,6 +145,7 @@ jobs:
           HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
           HEALTHIA_CANDIDATE_SHA: ${{ env.CANDIDATE_SHA }}
+          HEALTHIA_GCS_BUCKET: ${{ env.GCS_BUCKET }}
           HEALTHIA_DEMO_TARGET_SECONDS: "285"
         run: python scripts/record_submission_demo.py
       - name: Verify report is bound to the exact candidate and Wave 3 gates passed
