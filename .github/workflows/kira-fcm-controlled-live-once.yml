@@ -1,0 +1,213 @@
+name: KIRA one-shot controlled FCM LIVE proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/kira-fcm-controlled-live-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kira-fcm-controlled-live-once-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  controlled-fcm-live-once:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    env:
+      PROJECT_ID: healthia-6088a
+      DEVICE_AUTHORIZATION: I_AUTHORIZE_CONTROLLED_FCM_PROOF
+    steps:
+      - name: Refuse retries and bind exact authorized head
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_RUN_ATTEMPT}" != "1" ]]; then
+            echo "Refusing FCM send on workflow retry; authorization is one-shot." >&2
+            exit 1
+          fi
+          if [[ "$DEVICE_AUTHORIZATION" != "I_AUTHORIZE_CONTROLLED_FCM_PROOF" ]]; then
+            echo "Exact controlled-device authorization missing." >&2
+            exit 1
+          fi
+
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bind source SHA
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Install Firestore client
+        shell: bash
+        run: python -m pip install --quiet "google-cloud-firestore>=2.21,<3"
+
+      - name: Require exactly one controlled FCM registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/fcm-controlled-live-once
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from google.cloud import firestore
+
+          client=firestore.Client(project=os.environ['PROJECT_ID'])
+          candidates=[]; total=0; tombstones=0; token_bearing=0; valid_hashes=0
+          for snapshot in client.collection_group('devices').stream():
+              path=snapshot.reference.path
+              if not path.startswith('healthia_fcm_registrations/'):
+                  continue
+              fields=snapshot.to_dict() or {}
+              if not {'patient_id','connection_id','device_id','enabled'} <= set(fields):
+                  continue
+              total += 1
+              raw=str(fields.get('registration_token') or '')
+              digest=str(fields.get('token_sha256') or '')
+              enabled=bool(fields.get('enabled', True))
+              if not enabled and not raw and not digest: tombstones += 1
+              if raw or digest: token_bearing += 1
+              valid_digest=len(digest)==64 and all(c in '0123456789abcdefABCDEF' for c in digest)
+              if valid_digest: valid_hashes += 1
+              if enabled and len(raw)>=16 and valid_digest:
+                  candidates.append({'path':path,'token':raw,'digest':digest})
+
+          out={
+            'status':'READY_DEVICE_PRESENT' if len(candidates)==1 else ('BLOCKED_DEVICE' if not candidates else 'BLOCKED_AMBIGUOUS_DEVICES'),
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+            'fcm_registration_documents':total,
+            'fcm_privacy_tombstones':tombstones,
+            'fcm_token_bearing_documents':token_bearing,
+            'active_fcm_registration_count':len(candidates),
+            'registrations_with_valid_sha256':valid_hashes,
+            'registration_hash_count':len({x['digest'] for x in candidates}),
+            'raw_token_exposed':False,
+            'provider_write':False,
+            'iam_mutation':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/fcm-controlled-live-once/preflight.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          if len(candidates)!=1:
+              raise SystemExit('Exactly one active controlled-device FCM registration is required')
+          Path('/tmp/fcm-token').write_text(candidates[0]['token'])
+          Path('/tmp/fcm-path').write_text(candidates[0]['path'])
+          Path('/tmp/fcm-digest').write_text(candidates[0]['digest'])
+          PY
+
+      - name: Send exactly one PHI-neutral FCM message and require visible durable ACK
+        shell: bash
+        run: |
+          set -euo pipefail
+          registration_token="$(cat /tmp/fcm-token)"
+          document_path="$(cat /tmp/fcm-path)"
+          token_digest="$(cat /tmp/fcm-digest)"
+          echo "::add-mask::$registration_token"
+          access_token="$(gcloud auth print-access-token)"
+          echo "::add-mask::$access_token"
+          proof_id="fcmproof_$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          export REGISTRATION_TOKEN="$registration_token" DOCUMENT_PATH="$document_path" TOKEN_DIGEST="$token_digest" ACCESS_TOKEN="$access_token" PROOF_ID="$proof_id"
+          python - <<'PY'
+          import hashlib, json, os, time, urllib.error, urllib.request
+          from pathlib import Path
+          from google.cloud import firestore
+
+          project=os.environ['PROJECT_ID']
+          payload={'message':{'token':os.environ['REGISTRATION_TOKEN'],'data':{'kind':'healthia_update','proof_id':os.environ['PROOF_ID']},'android':{'priority':'HIGH'}}}
+          req=urllib.request.Request(
+              f'https://fcm.googleapis.com/v1/projects/{project}/messages:send',
+              data=json.dumps(payload,separators=(',',':')).encode(),
+              headers={'Authorization':'Bearer '+os.environ['ACCESS_TOKEN'],'Content-Type':'application/json'},
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(req,timeout=60) as response:
+                  result=json.loads(response.read().decode() or '{}')
+          except urllib.error.HTTPError as exc:
+              raise RuntimeError(f'FCM provider send failed with HTTP {exc.code}') from None
+          message_name=str(result.get('name') or '')
+          if not message_name:
+              raise RuntimeError('FCM provider did not return a message resource')
+
+          reference=firestore.Client(project=project).document(os.environ['DOCUMENT_PATH'])
+          acknowledged=False; shown=False; acknowledged_at=None
+          for _ in range(60):
+              fields=(reference.get().to_dict() or {})
+              if str(fields.get('last_delivery_proof_id') or '') == os.environ['PROOF_ID']:
+                  acknowledged=True
+                  shown=fields.get('last_delivery_notification_shown') is True
+                  acknowledged_at=fields.get('last_delivery_ack_at')
+                  break
+              time.sleep(4)
+          if not acknowledged:
+              raise RuntimeError('Provider accepted the single FCM message but no matching durable ACK arrived')
+          if not shown:
+              raise RuntimeError('Matching ACK arrived but Android did not confirm a visible notification')
+
+          out={
+            'status':'LIVE_PASS',
+            'source_sha':os.environ.get('SOURCE_SHA',''),
+            'provider':'fcm.googleapis.com',
+            'provider_message_name_sha256':hashlib.sha256(message_name.encode()).hexdigest(),
+            'registration_token_sha256':os.environ['TOKEN_DIGEST'],
+            'proof_id_sha256':hashlib.sha256(os.environ['PROOF_ID'].encode()).hexdigest(),
+            'controlled_device_ack':True,
+            'controlled_device_notification_shown':True,
+            'acknowledged_at_present':acknowledged_at is not None,
+            'data_message_kind':'healthia_update',
+            'clinical_content':False,
+            'notification_copy_server_supplied':False,
+            'exactly_one_provider_send':True,
+            'raw_token_exposed':False,
+            'raw_proof_id_exposed':False,
+            'iam_mutation':False,
+            'api_enable_mutation':False,
+            'secret_material_exposed':False,
+          }
+          Path('dist/fcm-controlled-live-once/live.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          PY
+          rm -f /tmp/fcm-token /tmp/fcm-path /tmp/fcm-digest
+
+      - name: Refuse unsanitized evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d dist/fcm-controlled-live-once ]] && grep -R -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|registration_token["=: ]|proof_id["=: ]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' dist/fcm-controlled-live-once; then
+            rm -rf dist/fcm-controlled-live-once
+            echo "Sensitive-looking material detected; refusing evidence upload." >&2
+            exit 1
+          fi
+          rm -f /tmp/fcm-token /tmp/fcm-path /tmp/fcm-digest
+
+      - name: Upload sanitized LIVE evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-FCM-Controlled-LIVE-One-Shot
+          path: dist/fcm-controlled-live-once
+          if-no-files-found: warn
+          retention-days: 30
