@@ -7,6 +7,7 @@ on:
       - ".github/workflows/wave4-live-resource-proof.yml"
       - "healthia_one/google_maps_connector.py"
       - "healthia_one/google_navigation_coordinator.py"
+      - "tests/test_wave4_resource_provenance.py"
   workflow_dispatch:
 
 permissions:
