@@ -55,6 +55,22 @@ def _coordinator(transport):
     return HealthIAGoogleMissionCoordinator(executor, store=MemoryMissionStore())
 
 
+def test_maps_secret_bom_and_whitespace_are_removed_before_http_header():
+    transport = Transport()
+    connector = HealthIAMapsConnector("\ufeff  maps-key\r\n", transport=transport)
+    connector.execute(
+        GoogleAction.MAPS_TEXT_SEARCH,
+        {
+            "provider_query": "autism support center",
+            "location_text": "Santiago, Dominican Republic",
+            "page_size": 1,
+        },
+        idempotency_key="0" * 64,
+    )
+    assert connector.api_key == "maps-key"
+    assert transport.calls[0]["headers"]["X-Goog-Api-Key"] == "maps-key"
+
+
 def test_places_text_search_uses_current_page_size_and_explicit_field_mask():
     transport = Transport()
     connector = HealthIAMapsConnector("maps-key", transport=transport)
