@@ -13,6 +13,12 @@ from healthia_one.opportunity_autopilot import sync_watch_topics
 from healthia_one.opportunity_chat import OpportunityChatController
 from healthia_one.opportunity_permissions import build_radar_permission_store
 from healthia_one.opportunity_store import build_opportunity_store
+from healthia_one.program_source_verifier import (
+    GeminiProgramSourceExtractor,
+    OfficialProgramVerifier,
+    ProgramSourceLoader,
+    build_program_verification_store,
+)
 from healthia_one.research_radar import GroundedResourceRadar, ScientificRadar, SourceFetchError
 
 
@@ -26,17 +32,30 @@ _CLAIMS = build_event_claim_store(settings)
 _RECEIPTS = build_autopilot_receipt_store(settings)
 _OUTBOX = build_event_outbox_store(settings)
 _PERMISSIONS = build_radar_permission_store(settings)
+_VERIFICATIONS = build_program_verification_store(settings)
 _SCIENTIFIC = ScientificRadar()
-_RESOURCE = GroundedResourceRadar(
-    settings,
-    enabled=bool(
+
+
+def _paid_resource_ai_enabled() -> bool:
+    return bool(
         settings.adk_ready
         and settings.ai_request_limit > 0
         and settings.cost_mode != "local"
         and settings.cost_guard_start_enabled
-    ),
-    max_calls=1,
-)
+    )
+
+
+def _new_resource_radar() -> GroundedResourceRadar:
+    # One explicit request gets one bounded grounded-search call. The budget is
+    # deliberately per request, not a singleton lifetime counter.
+    return GroundedResourceRadar(
+        settings,
+        enabled=_paid_resource_ai_enabled(),
+        max_calls=1,
+    )
+
+
+_RESOURCE = _new_resource_radar()
 _AUTOPILOT = OpportunityAutopilot(
     _STORE,
     scientific_radar=_SCIENTIFIC,
@@ -115,9 +134,6 @@ def _permission_response(state: PatientState, patient_text: str) -> ChatResponse
         "disable assistance radar",
     )
 
-    # Negative intents must win before positive substring matches. In Spanish,
-    # "desactiva" contains "activa", so checking enable first would silently
-    # turn an explicit opt-out into an opt-in.
     if any(phrase in normalized for phrase in disable_science):
         permissions.scientific_enabled = False
         action = "scientific_radar_disabled"
@@ -134,20 +150,31 @@ def _permission_response(state: PatientState, patient_text: str) -> ChatResponse
         return None
 
     _PERMISSIONS.save(permissions)
+    english = any(token in normalized for token in ("enable", "disable", "radar"))
     if action == "scientific_radar_enabled":
         content = (
-            "Activé el radar científico autónomo. Revisará sólo tus temas de salud/familia autorizados y guardará "
-            "las novedades relevantes sin convertir cada publicación en una alerta. Puedes desactivarlo desde este chat."
+            "I enabled the autonomous scientific radar. It will watch only authorized patient/family topics and keep relevant findings in Discoveries."
+            if english else
+            "Activé el radar científico autónomo. Revisará sólo tus temas de salud/familia autorizados y guardará las novedades relevantes sin convertir cada publicación en una alerta. Puedes desactivarlo desde este chat."
         )
     elif action == "scientific_radar_disabled":
-        content = "Desactivé el radar científico autónomo. Las búsquedas que tú pidas manualmente seguirán disponibles."
+        content = (
+            "I disabled the autonomous scientific radar. Manual searches you explicitly request remain available."
+            if english else
+            "Desactivé el radar científico autónomo. Las búsquedas que tú pidas manualmente seguirán disponibles."
+        )
     elif action == "resource_radar_enabled":
         content = (
-            "Activé el radar autónomo de ayudas y recursos. La búsqueda web seguirá limitada por el guard de costos y "
-            "ningún programa se tratará como elegible hasta verificar requisitos oficiales. Puedes desactivarlo aquí."
+            "I enabled the autonomous assistance radar. Grounded web search remains cost-bounded, and no program is treated as eligible until official requirements are verified."
+            if english else
+            "Activé el radar autónomo de ayudas y recursos. La búsqueda web seguirá limitada por el guard de costos y ningún programa se tratará como elegible hasta verificar requisitos oficiales. Puedes desactivarlo aquí."
         )
     else:
-        content = "Desactivé el radar autónomo de ayudas y recursos. Puedes seguir pidiéndome búsquedas manuales cuando quieras."
+        content = (
+            "I disabled the autonomous assistance radar. You can still request a manual assistance search whenever you want."
+            if english else
+            "Desactivé el radar autónomo de ayudas y recursos. Puedes seguir pidiéndome búsquedas manuales cuando quieras."
+        )
 
     return ChatResponse(
         message=ChatMessage(
@@ -166,12 +193,7 @@ def _permission_response(state: PatientState, patient_text: str) -> ChatResponse
 
 
 def _resource_location(state: PatientState) -> dict[str, str]:
-    """Return only patient-entered location evidence.
-
-    Locale controls language/formatting and must never be treated as residence.
-    Until HealthIA has a structured, patient-confirmed country field, the address
-    remains a free-text search hint and country/region stay explicitly unknown.
-    """
+    """Return only patient-entered location evidence; locale is never residence."""
     return {
         "country": "",
         "region": "",
@@ -188,12 +210,7 @@ def enqueue_event(
     condition: str = "",
     payload: dict | None = None,
 ) -> AutopilotEvent:
-    """Persist one patient event without performing network/model work.
-
-    Firestore mode writes a top-level outbox document shaped for a private
-    Eventarc document-created trigger. Local Memory/JSON modes remain inert until
-    an explicit worker/test consumes the record.
-    """
+    """Persist one patient event without performing network/model work."""
     normalized_payload = payload or {}
     key_material = json.dumps(normalized_payload, sort_keys=True, ensure_ascii=False, default=str)
     event = AutopilotEvent(
@@ -228,6 +245,122 @@ def _related_to_notice(text: str, condition: str, subject_label: str) -> bool:
     return any(needle and needle in normalized for needle in needles)
 
 
+def _explicit_resource_topic(state: PatientState, patient_text: str) -> tuple[str, str]:
+    """Narrow an explicit assistance search to a known patient/family topic when possible."""
+    normalized = _normalize(patient_text)
+    vault = _STORE.load(state.profile.id)
+    aliases = {
+        "autismo": ("autismo", "autism"),
+        "autism": ("autism", "autismo"),
+        "vih": ("vih", "hiv"),
+        "hiv": ("hiv", "vih"),
+        "cancer": ("cancer", "cáncer"),
+    }
+    scored: list[tuple[int, str, str]] = []
+    for topic in vault.watch_topics:
+        condition = _normalize(topic.condition)
+        terms = {condition}
+        for key, values in aliases.items():
+            if key in condition:
+                terms.update(_normalize(item) for item in values)
+        score = max((len(term) for term in terms if term and term in normalized), default=0)
+        if score:
+            scored.append((score, topic.subject_id, topic.condition))
+    if not scored:
+        return "", ""
+    scored.sort(reverse=True)
+    return scored[0][1], scored[0][2]
+
+
+def _application_request(text: str) -> bool:
+    normalized = _normalize(text)
+    return any(
+        phrase in normalized
+        for phrase in (
+            "completa el formulario",
+            "completar formulario",
+            "prepara la solicitud",
+            "aplica a esa ayuda",
+            "aplicar a esa ayuda",
+            "fill the form",
+            "prepare the application",
+            "apply for that program",
+        )
+    )
+
+
+def _program_for_text(state: PatientState, text: str):
+    vault = _STORE.load(state.profile.id)
+    normalized = _normalize(text)
+    candidates = []
+    for program in vault.programs:
+        title = _normalize(program.title)
+        provider = _normalize(program.provider)
+        score = 0
+        if title and title in normalized:
+            score += 4
+        if provider and provider in normalized:
+            score += 2
+        score += sum(1 for token in set(title.split()) if len(token) >= 4 and token in normalized)
+        if score:
+            candidates.append((score, program))
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+    return vault.programs[-1] if len(vault.programs) == 1 else None
+
+
+def _program_needs_verification(program) -> bool:
+    requirements = list(getattr(program, "requirements", []) or [])
+    if not requirements:
+        return True
+    return any(bool((item.rule or {}).get("source_verification_required")) for item in requirements)
+
+
+def _verify_program_before_prefill(state: PatientState, patient_text: str) -> dict:
+    if not _application_request(patient_text):
+        return {}
+    program = _program_for_text(state, patient_text)
+    if program is None or not _program_needs_verification(program):
+        return {}
+    if not _paid_resource_ai_enabled():
+        return {
+            "program_source_verification": "blocked_cost_guard",
+            "program_id": getattr(program, "id", ""),
+        }
+
+    verifier = OfficialProgramVerifier(
+        loader=ProgramSourceLoader(),
+        extractor=GeminiProgramSourceExtractor(settings, enabled=True, max_calls=1),
+        store=_VERIFICATIONS,
+    )
+    try:
+        verification = verifier.verify(state.profile.id, program)
+    except Exception as exc:
+        # Fail closed. The application engine will keep unknown requirements as
+        # missing instead of converting a source problem into eligibility.
+        return {
+            "program_source_verification": "failed_closed",
+            "program_id": getattr(program, "id", ""),
+            "error_type": type(exc).__name__,
+        }
+
+    vault = _STORE.load(state.profile.id)
+    for index, item in enumerate(vault.programs):
+        if item.id == program.id:
+            vault.programs[index] = verification.apply(item)
+            _STORE.save(vault)
+            break
+    return {
+        "program_source_verification": "completed",
+        "program_id": program.id,
+        "source_url": verification.final_url,
+        "source_sha256": verification.source_sha256,
+        "verified_requirements": len(verification.requirements),
+        "verified_documents": len(verification.required_documents),
+    }
+
+
 def respond(state: PatientState, patient_text: str) -> ChatResponse | None:
     """Handle Opportunity Autopilot intents before generic clinical routing."""
     _sync_topics(state)
@@ -236,6 +369,7 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse | None:
     if permission_response is not None:
         return permission_response
 
+    verification_meta = _verify_program_before_prefill(state, patient_text)
     result = _CONTROLLER.handle(state, patient_text)
     if result is not None:
         if result.action == "show_discoveries" and result.metadata.get("new_discoveries", 0) == 0 and _explicit_science_refresh(patient_text):
@@ -267,31 +401,45 @@ def respond(state: PatientState, patient_text: str) -> ChatResponse | None:
                 return _chat_response(result, metadata={"scientific_refresh_failed_closed": True})
 
         if result.action == "request_resource_refresh":
+            subject_id, condition = _explicit_resource_topic(state, patient_text)
             event = AutopilotEvent(
                 patient_id=state.profile.id,
                 event_type="manual.resource_refresh",
+                subject_id=subject_id,
+                condition=condition,
                 payload=_resource_location(state),
             )
-            if not _RESOURCE.enabled:
+            radar = _new_resource_radar()
+            if not radar.enabled:
                 result.content += (
-                    " En este entorno la búsqueda web pagada está desactivada por el guard de costos; "
-                    "no haré llamadas ocultas."
+                    " Grounded web search is disabled by the current cost guard, so I did not make a hidden paid call."
+                    if "find " in _normalize(patient_text) else
+                    " En este entorno la búsqueda web pagada está desactivada por el guard de costos; no haré llamadas ocultas."
                 )
                 return _chat_response(result, metadata={"paid_search_enabled": False})
+            _AUTOPILOT.resource_radar = radar
             report = _AUTOPILOT.process(
                 state,
                 event,
                 allow_scientific_network=False,
                 allow_paid_resource_search=True,
             )
-            refreshed = _CONTROLLER.handle(state, "ayuda económica")
+            refreshed = _CONTROLLER.handle(
+                state,
+                "financial assistance" if "find " in _normalize(patient_text) else "ayuda económica",
+            )
             if refreshed is not None:
                 return _chat_response(
                     refreshed,
-                    metadata={"resource_refresh": report.model_dump(mode="json")},
+                    metadata={
+                        "resource_refresh": report.model_dump(mode="json"),
+                        "resource_topic_subject_id": subject_id,
+                        "resource_topic_condition": condition,
+                        "grounded_search_calls": radar.calls,
+                    },
                 )
 
-        return _chat_response(result)
+        return _chat_response(result, metadata=verification_meta)
 
     notice = _AUTOPILOT.next_notice(state.profile.id)
     if notice and _related_to_notice(patient_text, notice.condition, notice.subject_label):
