@@ -19,6 +19,13 @@ class HealthIAMapsConnector(MapsConnector):
         "places.googleMapsUri,places.websiteUri,places.nationalPhoneNumber,places.primaryType"
     )
 
+    def __init__(self, api_key: str, transport=None) -> None:
+        # Secret Manager values can inherit a UTF-8 BOM/newline from the original
+        # secret file. HTTP header values must be Latin-1 encodable, and neither
+        # BOM nor surrounding whitespace is part of a Google API key.
+        normalized_key = str(api_key or "").lstrip("\ufeff").strip()
+        super().__init__(normalized_key, transport=transport)
+
     def execute(
         self,
         action: GoogleAction,
