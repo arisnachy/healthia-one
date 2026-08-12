@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
@@ -14,7 +13,7 @@ OUT = Path("dist/wave4-final-ui")
 def wait_new_assistant(page: Page, prior: int, timeout_ms: int = 120000) -> None:
     page.wait_for_function(
         "prior => document.querySelectorAll('#messageList .message.assistant').length > prior",
-        prior,
+        arg=prior,
         timeout=timeout_ms,
     )
     page.wait_for_timeout(700)
@@ -55,12 +54,7 @@ def run() -> None:
         checks.append("english_patient_os")
         page.wait_for_timeout(3500)
 
-        # Real Wave 4 natural-language resource mission. The exact product router
-        # must stop before location access, then resume the same durable mission.
-        send(
-            page,
-            "Find autism support groups, family support resources, and government assistance near Santiago de los Caballeros, Dominican Republic.",
-        )
+        send(page, "Find autism support groups, family support resources, and government assistance near Santiago de los Caballeros, Dominican Republic.")
         page.wait_for_selector("text=Mission receipt", timeout=30000)
         page.wait_for_selector("text=I need your permission to use location for this mission in Google Places", timeout=30000)
         checks.append("mission_stops_for_location_consent")
@@ -79,9 +73,6 @@ def run() -> None:
         panel = page.locator(".wave4-resource-panel").last
         panel.scroll_into_view_if_needed()
         page.wait_for_timeout(8000)
-
-        # Let the viewer read the candidates; scroll within the real application,
-        # never place a covering demo card over the chat.
         page.mouse.wheel(0, 430)
         page.wait_for_timeout(4500)
         page.mouse.wheel(0, -260)
@@ -94,9 +85,6 @@ def run() -> None:
         page.locator(".wave4-resource-card.is-selected").scroll_into_view_if_needed()
         page.wait_for_timeout(6500)
 
-        # Actual Opportunity Autopilot / Discoveries UI. Data is seeded from
-        # official-source demo candidates before the app starts; the UI itself is
-        # the production Wave 4 component, not a video overlay.
         page.locator('[data-open="discoveries"]').click()
         page.wait_for_selector("#view-discoveries.active", timeout=30000)
         page.wait_for_selector(".opportunity-program-card", timeout=30000)
@@ -106,7 +94,6 @@ def run() -> None:
         page.mouse.wheel(0, 420)
         page.wait_for_timeout(5000)
 
-        # Return to chat and show the durable selected-resource conversation.
         page.locator('[data-open="chat"]').click()
         page.wait_for_selector("#view-chat.active", timeout=30000)
         page.locator(".wave4-resource-card.is-selected").scroll_into_view_if_needed()
