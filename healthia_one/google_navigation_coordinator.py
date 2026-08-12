@@ -25,6 +25,32 @@ def _clean_queries(values: list[str] | None, fallback: str) -> list[str]:
     return output or [fallback]
 
 
+def _broad_support_intent(condition_or_need: str, provider_query: str) -> bool:
+    value = f"{condition_or_need} {provider_query}".lower()
+    signals = (
+        "support", "help", "assistance", "resource", "community", "foundation", "benefit", "social service",
+        "apoyo", "ayuda", "recurso", "comunidad", "fundacion", "fundación", "beneficio", "servicio social",
+        "autism", "autismo", "disability", "discapacidad",
+    )
+    return any(token in value for token in signals)
+
+
+def _default_resource_queries(condition_or_need: str, provider_query: str) -> list[str]:
+    """Expand only broad support intent; a simple clinic request stays simple."""
+    if not _broad_support_intent(condition_or_need, provider_query):
+        return [provider_query]
+    subject = " ".join(str(condition_or_need or provider_query).split()).strip()[:110]
+    return _clean_queries(
+        [
+            provider_query,
+            f"{subject} care clinic therapy specialist",
+            f"{subject} community support group foundation nonprofit",
+            f"{subject} government disability benefits social services financial assistance",
+        ],
+        provider_query,
+    )
+
+
 def _resource_category(query: str) -> str:
     value = str(query or "").lower()
     if any(token in value for token in ("government", "benefit", "social service", "estatal", "gobierno", "ayuda econom", "financial")):
@@ -84,7 +110,11 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
             provider_query=provider_query,
             location=location,
         )
-        mission.tool_outputs["resource_queries"] = _clean_queries(resource_queries, provider_query)
+        mission.tool_outputs["resource_queries"] = (
+            _clean_queries(resource_queries, provider_query)
+            if resource_queries is not None
+            else _default_resource_queries(condition_or_need, provider_query)
+        )
         mission.record(
             "mission.created",
             "HealthIA created a patient-scoped resource-navigation mission without inferring residence from locale/language.",
@@ -154,10 +184,8 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
                     "lng": mission.location["lng"],
                     "radius_m": radius_m,
                 }
-                location_mode = "authorized_coordinates"
             else:
                 payload["location_text"] = str(mission.location["text"])
-                location_mode = "explicit_text"
 
             receipt, outcome = self._execute(mission, grants, GoogleAction.MAPS_TEXT_SEARCH, payload)
             receipts.append(receipt.id)
