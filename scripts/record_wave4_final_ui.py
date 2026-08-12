@@ -94,7 +94,7 @@ def run() -> None:
         page.mouse.wheel(0, 420)
         page.wait_for_timeout(5000)
 
-        page.locator('[data-open="chat"]').click()
+        page.locator('.main-nav [data-open="chat"]').click()
         page.wait_for_selector("#view-chat.is-active", timeout=30000)
         page.locator(".wave4-resource-card.is-selected").scroll_into_view_if_needed()
         page.wait_for_timeout(5000)
