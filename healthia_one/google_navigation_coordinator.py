@@ -57,7 +57,7 @@ def _resource_category(query: str) -> str:
     value = str(query or "").lower()
     if any(token in value for token in ("government", "benefit", "social service", "estatal", "gobierno", "ayuda econom", "financial")):
         return "government_or_financial_support"
-    if any(token in value for token in ("support group", "community", "foundation", "fundacion", "fundación", "grupo", "nonprofit", "ngo")):
+    if any(token in value for token in ("support group", "community", "foundation", "fundacion", "fundación", "grupo", "nonprofit", "ngo", "support organization")):
         return "community_support"
     if any(token in value for token in ("clinic", "hospital", "therapy", "therap", "care", "specialist", "centro", "clinica", "clínica")):
         return "care"
@@ -173,7 +173,7 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
             mission.provider_query,
         )
         candidates: list[dict] = []
-        seen_ids: set[str] = set()
+        candidate_index: dict[str, int] = {}
         executed_queries: list[str] = []
         receipts: list[str] = []
         simple_coordinate_nearby = has_coordinates and len(queries) == 1
@@ -207,6 +207,7 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
             if receipt.status != "completed" or outcome is None:
                 continue
             executed_queries.append(query)
+            category = _resource_category(query)
             for raw in outcome.data.get("places") or []:
                 if not isinstance(raw, dict):
                     continue
@@ -217,12 +218,31 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
                         str(raw.get("formattedAddress") or "").strip().lower(),
                     )
                 )
-                if not dedupe_key or dedupe_key in seen_ids:
+                if not dedupe_key:
                     continue
-                seen_ids.add(dedupe_key)
+
+                if dedupe_key in candidate_index:
+                    # A real place can satisfy more than one semantic search. Keep
+                    # one visible candidate, but preserve every verified query and
+                    # resource family that returned it instead of discarding that
+                    # provenance during deduplication.
+                    existing = candidates[candidate_index[dedupe_key]]
+                    resource_queries = list(existing.get("healthiaResourceQueries") or [])
+                    resource_categories = list(existing.get("healthiaResourceCategories") or [])
+                    if query not in resource_queries:
+                        resource_queries.append(query)
+                    if category not in resource_categories:
+                        resource_categories.append(category)
+                    existing["healthiaResourceQueries"] = resource_queries
+                    existing["healthiaResourceCategories"] = resource_categories
+                    continue
+
                 item = dict(raw)
                 item["healthiaResourceQuery"] = query
-                item["healthiaResourceCategory"] = _resource_category(query)
+                item["healthiaResourceCategory"] = category
+                item["healthiaResourceQueries"] = [query]
+                item["healthiaResourceCategories"] = [category]
+                candidate_index[dedupe_key] = len(candidates)
                 candidates.append(item)
                 if len(candidates) >= 12:
                     break
