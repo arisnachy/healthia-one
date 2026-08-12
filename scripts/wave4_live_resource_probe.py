@@ -89,14 +89,10 @@ def run() -> dict:
             title="Find verified support resources",
         )
         planned_queries = list(mission.tool_outputs.get("resource_queries") or [])
-        # create_navigation_mission intentionally appends the base provider query
-        # when it is not already present. That fourth query is part of the product
-        # plan and must remain bounded, not silently ignored by the proof.
         require(planned_queries[: len(RESOURCE_QUERIES)] == RESOURCE_QUERIES, "target resource-query order changed")
         require(1 <= len(planned_queries) <= 4, "resource-query plan exceeded the bounded mission contract")
         report["planned_query_count"] = len(planned_queries)
 
-        # Gate 1: no mission-scoped location consent means no Places request at all.
         blocked = coordinator.discover(mission, [])
         report["preconsent_external_search_calls"] = maps.external_search_calls
         require(blocked.state == MissionState.BLOCKED, "mission did not stop at the location-consent boundary")
@@ -105,7 +101,6 @@ def run() -> dict:
         require(boundary.get("external_action_performed") is False, "boundary falsely claims an external action")
         require(maps.external_search_calls == 0, "Places search ran before mission-scoped consent")
 
-        # Gate 2: an expiring grant for exactly this mission resumes the same durable mission.
         grant = GoogleGrant.mission_scoped(
             patient_id=PATIENT_ID,
             bundle=GrantBundle.MAPS_LOCATION,
@@ -140,16 +135,20 @@ def run() -> dict:
         report["google_maps_uri_count"] = maps_uri_count
         require(maps_uri_count > 0, "real candidates did not include a Google Maps URI")
 
-        categories = sorted(
-            {
-                str(item.get("healthiaResourceCategory") or "")
-                for item in candidates
-                if item.get("healthiaResourceCategory")
-            }
-        )
-        # If all three targeted semantic searches executed, the resulting durable
-        # candidates must preserve all three categories. If the cap stopped the
-        # plan earlier, only categories from the executed prefix are required.
+        categories: set[str] = set()
+        for item in candidates:
+            primary = str(item.get("healthiaResourceCategory") or "").strip()
+            if primary:
+                categories.add(primary)
+            for category in item.get("healthiaResourceCategories") or []:
+                value = str(category or "").strip()
+                if value:
+                    categories.add(value)
+        category_list = sorted(categories)
+
+        # Every completed semantic search must remain represented in durable
+        # candidate provenance, even when the same real place matched more than
+        # one query and was deduplicated into a single card.
         expected_categories = []
         for query in executed_queries:
             lower = query.lower()
@@ -159,14 +158,14 @@ def run() -> dict:
                 expected_categories.append("community_support")
             elif "social services" in lower or "government" in lower or "financial" in lower:
                 expected_categories.append("government_or_financial_support")
-        require(set(expected_categories).issubset(set(categories)), "durable candidates lost their semantic resource categories")
+        require(set(expected_categories).issubset(categories), "durable candidates lost their semantic resource provenance")
 
         report.update(
             {
                 "status": "PASS",
                 "website_uri_count": sum(bool(str(item.get("websiteUri") or "").strip()) for item in candidates),
                 "phone_count": sum(bool(str(item.get("nationalPhoneNumber") or "").strip()) for item in candidates),
-                "resource_categories": categories,
+                "resource_categories": category_list,
                 "resource_search_queries": executed_queries,
                 "candidate_fingerprints": [safe_candidate_fingerprint(item) for item in candidates[:8]],
             }
