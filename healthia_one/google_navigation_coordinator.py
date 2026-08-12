@@ -26,17 +26,19 @@ def _clean_queries(values: list[str] | None, fallback: str) -> list[str]:
 
 
 def _broad_support_intent(condition_or_need: str, provider_query: str) -> bool:
+    """Expand only explicit umbrella-resource intent, not every ordinary support-center lookup."""
     value = f"{condition_or_need} {provider_query}".lower()
     signals = (
-        "support", "help", "assistance", "resource", "community", "foundation", "benefit", "social service",
-        "apoyo", "ayuda", "recurso", "comunidad", "fundacion", "fundación", "beneficio", "servicio social",
-        "autism", "autismo", "disability", "discapacidad",
+        "resources", "resource options", "assistance", "community", "foundation", "benefit", "social service",
+        "government help", "government support", "financial aid", "financial assistance", "nonprofit", "ngo",
+        "recursos", "opciones de ayuda", "ayudas", "comunidad", "fundacion", "fundación", "beneficio",
+        "servicio social", "ayuda estatal", "ayuda econom", "ayuda económ", "gobierno",
     )
     return any(token in value for token in signals)
 
 
 def _default_resource_queries(condition_or_need: str, provider_query: str) -> list[str]:
-    """Expand only broad support intent; a simple clinic request stays simple."""
+    """Expand a broad support mission; keep a simple clinic/center lookup as one query."""
     if not _broad_support_intent(condition_or_need, provider_query):
         return [provider_query]
     subject = " ".join(str(condition_or_need or provider_query).split()).strip()[:110]
@@ -65,9 +67,11 @@ def _resource_category(query: str) -> str:
 class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
     """Navigation coordinator that never invents location or resource evidence.
 
-    Authorized coordinates and explicit patient-entered location text are search
-    evidence only. Resource discovery stays semantic: the requested provider or
-    support-program query is preserved even when coordinates are available.
+    A simple coordinate-based provider lookup keeps the established Places Nearby
+    path. Broad support missions use semantic Places Text Search with the same
+    authorized coordinates as a bounded location bias so category meaning is not
+    lost. Explicit patient-entered location text always remains search context,
+    never residence/demographic truth.
     """
 
     def create_navigation_mission(
@@ -172,22 +176,33 @@ class HealthIAGoogleMissionCoordinator(GoogleHealthMissionCoordinator):
         seen_ids: set[str] = set()
         executed_queries: list[str] = []
         receipts: list[str] = []
+        simple_coordinate_nearby = has_coordinates and len(queries) == 1
 
         for query in queries:
-            payload: dict = {
-                "provider_query": query,
-                "page_size": 8 if len(queries) == 1 else 4,
-            }
-            if has_coordinates:
-                payload["location_bias"] = {
+            if simple_coordinate_nearby:
+                action = GoogleAction.MAPS_SEARCH_NEARBY
+                payload = {
                     "lat": mission.location["lat"],
                     "lng": mission.location["lng"],
-                    "radius_m": radius_m,
+                    "radius_m": min(max(int(radius_m), 100), 50000),
+                    "max_results": 8,
                 }
             else:
-                payload["location_text"] = str(mission.location["text"])
+                action = GoogleAction.MAPS_TEXT_SEARCH
+                payload = {
+                    "provider_query": query,
+                    "page_size": 8 if len(queries) == 1 else 4,
+                }
+                if has_coordinates:
+                    payload["location_bias"] = {
+                        "lat": mission.location["lat"],
+                        "lng": mission.location["lng"],
+                        "radius_m": radius_m,
+                    }
+                else:
+                    payload["location_text"] = str(mission.location["text"])
 
-            receipt, outcome = self._execute(mission, grants, GoogleAction.MAPS_TEXT_SEARCH, payload)
+            receipt, outcome = self._execute(mission, grants, action, payload)
             receipts.append(receipt.id)
             if receipt.status != "completed" or outcome is None:
                 continue
