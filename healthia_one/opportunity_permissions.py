@@ -8,6 +8,12 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
+# Opportunity integration is imported by the central orchestrator after the core
+# Google mission module is loaded. Installing the Wave 4 vocabulary here widens
+# only the deterministic mission entry phrases; the existing Google mission
+# consent/policy/runtime continues to own every actual external action.
+from healthia_one import wave4_resource_routing as _wave4_resource_routing  # noqa: F401
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
