@@ -105,7 +105,7 @@ jobs:
           print('HEALTHIA_WAVE4_ASSISTANCE_SEED_PASS')
           PY
 
-      - name: Start exact Wave 4 Patient OS
+      - name: Start exact Wave 4 Patient OS with bounded Vertex AI + ADK
         shell: bash
         run: |
           set -euo pipefail
@@ -115,8 +115,19 @@ jobs:
           export GOOGLE_MAPS_API_KEY="$maps_key"
           export HEALTHIA_STORE_BACKEND=json
           export HEALTHIA_DATA_PATH=.healthia-one/state.json
-          export HEALTHIA_LLM_BACKEND=mock
+          export HEALTHIA_LLM_BACKEND=gemini_api
+          export HEALTHIA_MODEL=gemini-3.5-flash
+          export HEALTHIA_COST_MODE=cloud_demo
+          export HEALTHIA_AI_REQUEST_LIMIT=6
+          export HEALTHIA_COST_GUARD_START_ENABLED=true
+          export HEALTHIA_COST_CONTROL_UI=false
+          export HEALTHIA_AI_MAX_OUTPUT_TOKENS=1200
+          export HEALTHIA_LLM_TIMEOUT_SECONDS=60
           export HEALTHIA_AUTH_REQUIRED=false
+          export HEALTHIA_PROACTIVE_ENABLED=false
+          export GOOGLE_GENAI_USE_VERTEXAI=true
+          export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+          export GOOGLE_CLOUD_LOCATION=global
           nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8765 > /tmp/healthia-wave4-recorder.log 2>&1 &
           echo $! > /tmp/healthia-wave4-recorder.pid
           for i in {1..40}; do
@@ -131,6 +142,11 @@ jobs:
         env:
           HEALTHIA_LOCAL_DEMO_URL: http://127.0.0.1:8765
         run: python scripts/record_wave4_final_ui.py
+
+      - name: Dump sanitized server tail on recorder failure
+        if: failure()
+        run: |
+          tail -n 120 /tmp/healthia-wave4-recorder.log | sed -E 's/(AIza[[:alnum:]_-]+)/[REDACTED]/g' || true
 
       - name: Sanitize secret from environment
         if: always()
