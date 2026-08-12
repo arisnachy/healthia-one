@@ -87,8 +87,7 @@ def run() -> None:
 
         page.locator('[data-open="discoveries"]').click()
         page.wait_for_selector("#view-discoveries.is-active", timeout=30000)
-        page.wait_for_selector(".opportunity-program-card", timeout=30000)
-        page.locator(".opportunity-program-card").first.scroll_into_view_if_needed()
+        page.wait_for_function("document.querySelectorAll('.opportunity-program-card').length >= 1", timeout=30000)
         checks.append("opportunity_autopilot_assistance_ui")
         page.wait_for_timeout(8500)
         page.mouse.wheel(0, 420)
@@ -96,6 +95,7 @@ def run() -> None:
 
         page.locator('.main-nav [data-open="chat"]').click()
         page.wait_for_selector("#view-chat.is-active", timeout=30000)
+        page.wait_for_selector(".wave4-resource-card.is-selected", timeout=30000)
         page.locator(".wave4-resource-card.is-selected").scroll_into_view_if_needed()
         page.wait_for_timeout(5000)
 
