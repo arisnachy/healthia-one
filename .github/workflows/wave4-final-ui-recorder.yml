@@ -1,0 +1,146 @@
+name: HealthIA Wave4 final UI recorder
+
+on:
+  push:
+    branches:
+      - kira/wave4-final-video-recorder
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: healthia-6088a
+  MAPS_SECRET_NAME: healthia-google-maps-api-key
+
+jobs:
+  record-wave4-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install exact Wave 4 runtime and Chromium
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+          python -m playwright install --with-deps chromium
+
+      - name: Seed synthetic patient assistance view from official-source candidates
+        run: |
+          rm -rf .healthia-one
+          mkdir -p .healthia-one
+          python - <<'PY'
+          from pathlib import Path
+          from healthia_one.models import DocumentCategory
+          from healthia_one.opportunity_autopilot import (
+              ApplicationField, ApplicationPacket, ApplicationStatus,
+              AssistanceProgram, DiscoveryKind, OpportunityVault,
+              ProgramRequirement, RequiredDocument,
+          )
+          from healthia_one.opportunity_store import JsonOpportunityStore
+
+          caid = AssistanceProgram(
+              id='program_caid_social_work_demo',
+              title='CAID Social Work Service — Santiago',
+              provider='Centro de Atención Integral para la Discapacidad (CAID)',
+              kind=DiscoveryKind.FAMILY_SUPPORT,
+              official_source=True,
+              url='https://caid.gob.do/caid/inicio/servicios/servicios-presenciales/servicio-social/',
+              country='Dominican Republic', locality='Santiago de los Caballeros',
+              benefit_summary='Family social-work support and practical navigation for children with autism and other developmental disabilities.',
+              requirements=[
+                  ProgramRequirement(key='service_population', label='Child/family meets the service population', rule={'status':'official_source_verified'}),
+                  ProgramRequirement(key='initial_process', label='Initial interview completed or active CAID user', rule={'status':'official_source_verified'}),
+              ],
+              required_documents=[
+                  RequiredDocument(key='birth_certificate', label='Child birth certificate copy', accepted_categories=[DocumentCategory.IDENTITY]),
+                  RequiredDocument(key='guardian_ids', label='Parent or tutor ID copies', accepted_categories=[DocumentCategory.IDENTITY]),
+              ],
+              submission_method='in_person',
+              submission_destination='CAID Santiago de los Caballeros',
+          )
+          conadis = AssistanceProgram(
+              id='program_conadis_devices_demo',
+              title='CONADIS Assistive Devices & Support Products',
+              provider='Consejo Nacional de Discapacidad (CONADIS)',
+              kind=DiscoveryKind.GOVERNMENT_BENEFIT,
+              official_source=True,
+              url='https://conadis.gob.do/servicios/dispositivos-de-apoyo/',
+              country='Dominican Republic',
+              benefit_summary='Official support pathway for eligible people who require assistive devices or support products.',
+              requirements=[ProgramRequirement(key='disability_certificate', label='Disability certification or supporting evidence', rule={'status':'official_source_verified'})],
+              required_documents=[RequiredDocument(key='identity', label='Identity documentation', accepted_categories=[DocumentCategory.IDENTITY])],
+              submission_method='in_person',
+              submission_destination='CONADIS',
+          )
+          packet = ApplicationPacket(
+              id='application_caid_demo',
+              program_id=caid.id,
+              status=ApplicationStatus.FORM_PREFILLED,
+              fields=[
+                  ApplicationField(key='applicant', label='Applicant', value='Ana Martínez', source='patient profile', confidence=.99, requires_confirmation=False),
+                  ApplicationField(key='locality', label='Preferred locality', value='Santiago de los Caballeros', source='patient-provided location', confidence=.95, requires_confirmation=True),
+              ],
+              missing_fields=['Child/dependent name', 'Referral or initial-interview status'],
+              missing_documents=['Child birth certificate copy', 'Parent or tutor ID copies'],
+              submission_method='in_person',
+              submission_destination='CAID Santiago de los Caballeros',
+          )
+          vault = OpportunityVault(patient_id='patient_demo', programs=[caid, conadis], applications=[packet])
+          JsonOpportunityStore(Path('.healthia-one/opportunity-vaults.json')).save(vault)
+          print('HEALTHIA_WAVE4_ASSISTANCE_SEED_PASS')
+          PY
+
+      - name: Start exact Wave 4 Patient OS
+        shell: bash
+        run: |
+          set -euo pipefail
+          maps_key="$(gcloud secrets versions access latest --secret "$MAPS_SECRET_NAME" --project "$PROJECT_ID")"
+          test -n "$maps_key"
+          echo "::add-mask::$maps_key"
+          export GOOGLE_MAPS_API_KEY="$maps_key"
+          export HEALTHIA_STORE_BACKEND=json
+          export HEALTHIA_DATA_PATH=.healthia-one/state.json
+          export HEALTHIA_LLM_BACKEND=mock
+          export HEALTHIA_AUTH_REQUIRED=false
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8765 > /tmp/healthia-wave4-recorder.log 2>&1 &
+          echo $! > /tmp/healthia-wave4-recorder.pid
+          for i in {1..40}; do
+            curl -fsS http://127.0.0.1:8765/api/bootstrap >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8765/api/bootstrap >/dev/null
+          echo "GOOGLE_MAPS_API_KEY=$maps_key" >> "$GITHUB_ENV"
+          unset maps_key
+
+      - name: Record actual Wave 4 UI — no covering overlays
+        env:
+          HEALTHIA_LOCAL_DEMO_URL: http://127.0.0.1:8765
+        run: python scripts/record_wave4_final_ui.py
+
+      - name: Sanitize secret from environment
+        if: always()
+        run: echo 'GOOGLE_MAPS_API_KEY=' >> "$GITHUB_ENV"
+
+      - name: Upload Wave 4 UI recorder
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave4-Final-UI-Recorder
+          path: dist/wave4-final-ui
+          if-no-files-found: error
+          retention-days: 30
