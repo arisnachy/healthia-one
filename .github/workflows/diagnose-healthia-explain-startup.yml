@@ -22,16 +22,24 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: healthia-6088a
-      - name: Read exact failed revision logs
+      - name: Read exact failed revision container logs
         shell: bash
         run: |
           set -euo pipefail
-          gcloud logging read \
-            'resource.type="cloud_run_revision" AND resource.labels.service_name="healthia-one-explain-final" AND resource.labels.revision_name="healthia-one-explain-final-00001-mpg"' \
+          filter='resource.type="cloud_run_revision" AND resource.labels.service_name="healthia-one-explain-final" AND resource.labels.revision_name="healthia-one-explain-final-00001-mpg" AND (logName:"run.googleapis.com%2Fstderr" OR logName:"run.googleapis.com%2Fstdout")'
+          gcloud logging read "$filter" \
             --project healthia-6088a \
             --freshness=2h \
-            --limit=100 \
+            --limit=200 \
             --order=asc \
-            --format='value(timestamp,severity,textPayload,jsonPayload.message)' \
-            | tee /tmp/healthia-startup.log
-          test -s /tmp/healthia-startup.log
+            --format=json > /tmp/healthia-container.json
+          python - <<'PY'
+          import json
+          entries=json.load(open('/tmp/healthia-container.json', encoding='utf-8'))
+          print(f'CONTAINER_LOG_ENTRIES {len(entries)}')
+          for item in entries:
+              payload=item.get('textPayload') or (item.get('jsonPayload') or {}).get('message') or (item.get('jsonPayload') or {}).get('msg') or ''
+              print(item.get('timestamp',''), item.get('severity',''), item.get('logName','').rsplit('/',1)[-1], payload)
+          if not entries:
+              raise SystemExit('No container stdout/stderr entries found for failed revision')
+          PY
