@@ -1,0 +1,117 @@
+name: Diagnose Explain planner through HealthIA adapter
+
+on:
+  push:
+    branches:
+      - diag/explain-planner-schema-20260814
+    paths:
+      - .github/workflows/diagnose-explain-planner-adapter.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-22.04
+    env:
+      PROJECT_ID: healthia-6088a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: diag/explain-planner-schema-20260814
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project
+        run: python -m pip install -e "."
+      - name: Run one synthetic planner call through HealthIA Vertex adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/explain-planner-adapter
+          GOOGLE_CLOUD_PROJECT="$PROJECT_ID" GOOGLE_CLOUD_LOCATION=global GOOGLE_GENAI_USE_VERTEXAI=true python - <<'PY'
+          import asyncio
+          import json
+          from pathlib import Path
+          from types import SimpleNamespace
+
+          from healthia_one.education_video import PatientEducationVideoRouter
+          from healthia_one.education_video_models import EducationFact, validate_plan
+          from healthia_one.google_ai_transport import build_google_ai_client
+          from healthia_one.models import PatientState
+
+          class Guard:
+              max_output_tokens = 1400
+              def __init__(self): self.actions = []
+              def authorize(self, action): self.actions.append(action)
+
+          class DummyMedia:
+              async def synthesize(self, **kwargs): raise AssertionError('planner-only probe')
+              async def maybe_generate_veo_clip(self, **kwargs): raise AssertionError('planner-only probe')
+
+          class DummyRenderer:
+              def render(self, **kwargs): raise AssertionError('planner-only probe')
+
+          class DummyStore:
+              async def persist(self, **kwargs): raise AssertionError('planner-only probe')
+
+          async def main():
+              out = Path('dist/explain-planner-adapter')
+              report = {'status': 'running', 'synthetic_only': True, 'model': 'gemini-3.5-flash'}
+              try:
+                  client = build_google_ai_client(SimpleNamespace(vertex_ai_enabled=True))
+                  guard = Guard()
+                  settings = SimpleNamespace(llm_backend='gemini_api', adk_ready=True, model='gemini-3.5-flash')
+                  router = PatientEducationVideoRouter(
+                      settings,
+                      client_provider=lambda: client,
+                      cost_guard=guard,
+                      media_provider=DummyMedia(),
+                      renderer=DummyRenderer(),
+                      media_store=DummyStore(),
+                  )
+                  facts = [EducationFact(
+                      key='result_synthetic_glucose',
+                      label='Glucose',
+                      value='103 mg/dL',
+                      source_id='result_synthetic_glucose',
+                      source_type='health_result',
+                      certainty='recorded',
+                  )]
+                  plan = await router._gemini_plan(PatientState(), 'my glucose result', 'en', 60, facts)
+                  validate_plan(plan, facts, '')
+                  payload = plan.model_dump()
+                  report.update({
+                      'status': 'PASS',
+                      'scene_count': len(plan.scenes),
+                      'visual_kinds': [scene.visual_kind for scene in plan.scenes],
+                      'selected_fact_keys': plan.patient_fact_keys,
+                      'guard_actions': guard.actions,
+                      'veo_prompt_has_digits': any(any(ch.isdigit() for ch in scene.veo_prompt) for scene in plan.scenes if scene.visual_kind == 'veo'),
+                  })
+                  (out / 'validated-plan.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+              except Exception as exc:
+                  report.update({
+                      'status': 'FAIL',
+                      'error_type': type(exc).__name__,
+                      'error': str(exc)[:1600],
+                      'validation_errors': getattr(exc, 'validation_errors', []),
+                  })
+              (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+              print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+              if report['status'] != 'PASS':
+                  raise SystemExit(1)
+
+          asyncio.run(main())
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: healthia-explain-planner-adapter-diagnostic
+          path: dist/explain-planner-adapter
+          if-no-files-found: error
+          retention-days: 7
