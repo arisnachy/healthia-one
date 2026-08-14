@@ -60,3 +60,5 @@ def test_model_language_instruction_is_explicit() -> None:
     assert "English" in language_instruction("en")
     assert "español" in language_instruction("es")
     assert "French" in language_instruction("fr")
+    assert "Brazilian Portuguese" in language_instruction("pt")
+    assert "German" in language_instruction("de")
