@@ -234,7 +234,7 @@ jobs:
               raise SystemExit('demo is not certified as live-app-only')
           required={
               'exact_candidate_live_google_runtime',
-              'human_first_conversation_before_structured_intake',
+              'adaptive_clinical_workflow_started',
               'one_question_at_a_time_five_question_contract',
               'chat_health_os_open_results',
               'multimodal_original_result_and_provenance',
