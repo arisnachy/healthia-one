@@ -249,9 +249,6 @@ def run() -> dict:
         report["checks"].append("one_question_at_a_time_five_question_contract")
         checkpoint(report)
 
-        # Let the submitted five-answer payload settle, but do not spend judge
-        # time completing optional extra interview blocks. Full orientation is
-        # covered by CI; the video now moves to the Taskmaster track core.
         post_block = wait_for_assistant_after(page, assistant_id, timeout_s=70.0)
         require(str((post_block.get("metadata") or {}).get("response_locale") or "") == "en", "post-block response was not English")
 
@@ -321,6 +318,44 @@ def run() -> dict:
         page.wait_for_timeout(500)
         overlay(page, "Taskmaster closure", "This mission is complete because the persisted result and original evidence exist and remain linked — not merely because the model produced an answer.", 4)
         clear_overlay(page)
+
+        page.locator('.main-nav [data-open="chat"]').click()
+        before_video = latest_assistant_message(page)
+        send_chat(page, "Create a short private video in English about my glucose result.")
+        video_reply = wait_for_assistant_after(page, str(before_video.get("id") or ""), timeout_s=190.0)
+        video_meta = video_reply.get("metadata") or {}
+        video_record = video_meta.get("education_video") or {}
+        require(video_record.get("status") == "completed", f"HealthIA Explain did not complete: {video_record}")
+        require(video_record.get("private") is True, "HealthIA Explain media is not private")
+        require(video_record.get("locale") == "en", f"HealthIA Explain locale mismatch: {video_record}")
+        require(video_record.get("narration_status") == "gemini_tts", f"HealthIA Explain did not use Gemini TTS: {video_record}")
+        video_id = str(video_record.get("video_id") or "")
+        require(video_id.startswith("video_"), f"HealthIA Explain video id missing: {video_record}")
+        manifest = api_json(page, f"/api/education/videos/{video_id}/manifest")
+        require(manifest.get("private") is True, f"HealthIA Explain manifest is not private: {manifest}")
+        require(manifest.get("narration_status") == "gemini_tts", f"HealthIA Explain manifest did not preserve Gemini TTS: {manifest}")
+        report["education_video"] = {
+            "video_id": video_id,
+            "title": video_record.get("title"),
+            "locale": video_record.get("locale"),
+            "private": video_record.get("private"),
+            "narration_status": video_record.get("narration_status"),
+            "veo_enhanced": bool(video_record.get("veo_enhanced")),
+        }
+        report["checks"].extend([
+            "healthia_explain_private_video_completed",
+            "healthia_explain_gemini_tts_narration",
+        ])
+        checkpoint(report)
+        page.wait_for_selector(".education-video-card video", timeout=15_000)
+        overlay(page, "HealthIA Explain", "The patient asks for a private visual explanation. Gemini plans the education flow, Gemini TTS narrates it, and patient facts remain on controlled HealthIA cards. Veo is limited to generic PHI-free visual enrichment.", 5)
+        clear_overlay(page)
+        media = page.locator(".education-video-card video").last
+        media.evaluate("el => { el.muted = true; el.currentTime = 0; return el.play(); }")
+        page.wait_for_timeout(7000)
+        require(media.evaluate("el => !el.error"), "HealthIA Explain video element reported a playback error")
+        report["checks"].append("healthia_explain_video_playback")
+        checkpoint(report)
 
         page.locator("#accountPill").click()
         page.locator("#logoutButton").click()
