@@ -62,13 +62,26 @@ def latest_assistant_message(page: Page) -> dict:
     return assistants[-1] if assistants else {}
 
 
-def wait_for_assistant_after(page: Page, previous_id: str = "", timeout_s: float = 30.0) -> dict:
+def wait_for_assistant_after(
+    page: Page,
+    previous_id: str = "",
+    timeout_s: float = 30.0,
+    *,
+    poll_ms: int = 750,
+    rate_limit_backoff_ms: int = 3000,
+) -> dict:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        message = latest_assistant_message(page)
+        try:
+            message = latest_assistant_message(page)
+        except Exception as exc:
+            if "HTTP 429" not in str(exc):
+                raise
+            page.wait_for_timeout(max(rate_limit_backoff_ms, poll_ms))
+            continue
         if message.get("id") and message.get("id") != previous_id:
             return message
-        page.wait_for_timeout(250)
+        page.wait_for_timeout(max(250, poll_ms))
     raise RuntimeError("assistant did not produce a new response in time")
 
 
@@ -316,7 +329,13 @@ def run() -> dict:
         page.locator('.main-nav [data-open="chat"]').click()
         before_video = latest_assistant_message(page)
         send_chat(page, "Create a short private video in English about my glucose result.")
-        video_reply = wait_for_assistant_after(page, str(before_video.get("id") or ""), timeout_s=190.0)
+        video_reply = wait_for_assistant_after(
+            page,
+            str(before_video.get("id") or ""),
+            timeout_s=210.0,
+            poll_ms=2000,
+            rate_limit_backoff_ms=5000,
+        )
         video_meta = video_reply.get("metadata") or {}
         video_record = video_meta.get("education_video") or {}
         require(video_record.get("status") == "completed", f"HealthIA Explain did not complete: {video_record}")
