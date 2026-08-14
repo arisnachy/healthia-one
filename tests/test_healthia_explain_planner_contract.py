@@ -114,7 +114,8 @@ def test_google_response_schema_keeps_supported_structure_and_drops_unsupported_
     assert "default" not in encoded
     assert "minLength" not in encoded
     assert "maxLength" not in encoded
-
+    assert "pattern" not in encoded
+    assert "examples" not in encoded
 
 
 @pytest.mark.asyncio
