@@ -1,0 +1,42 @@
+name: Patch recorder transient bootstrap once
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/workflows/patch-recorder-transient-bootstrap-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+          fetch-depth: 0
+      - name: Retry transient bootstrap reads while long media work is running
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/record_final_live_english_demo.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        except Exception as exc:\n            if "HTTP 429" not in str(exc):\n                raise\n            page.wait_for_timeout(max(rate_limit_backoff_ms, poll_ms))\n            continue\n'''
+          new = '''        except Exception as exc:\n            error_text = str(exc)\n            if "HTTP 429" not in error_text and "HTTP 500" not in error_text:\n                raise\n            # HealthIA Explain can hold a long media request while Firestore or\n            # the single Cloud Run instance briefly returns a transient read error.\n            # Keep polling with backoff; a persistent fault still fails at timeout.\n            page.wait_for_timeout(max(rate_limit_backoff_ms, poll_ms))\n            continue\n'''
+          if old not in text:
+              raise SystemExit('expected recorder retry block not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git config user.name "healthia-one-maintenance"
+          git config user.email "127772990+arisnachy@users.noreply.github.com"
+          git add scripts/record_final_live_english_demo.py
+          git commit -m "Retry transient bootstrap errors during media generation"
+          git push origin HEAD:feature/patient-education-video-20260813
