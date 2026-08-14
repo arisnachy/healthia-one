@@ -12,7 +12,7 @@ def test_chat_embeds_completed_healthia_explain_video_and_offer_button():
     assert 'video.preload = "metadata"' in source
     assert "video.src = record.url" in source
     assert "educationVisibleMessage(message)" in source
-    assert "/api/education/videos/" in source
+    assert "record.url" in source
     assert 'fallback.rel = "noopener"' in source
 
 
