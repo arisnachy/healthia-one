@@ -81,18 +81,48 @@ class JsonStore(StateStore):
 class FirestoreStore(StateStore):
     """Patient-scoped Firestore adapter selected from the authenticated principal."""
 
+    _RETRY_DELAYS = (0.0, 0.25, 0.5, 1.0)
+
     def __init__(self, project: str | None = None) -> None:
+        from google.api_core.exceptions import (
+            Aborted,
+            DeadlineExceeded,
+            InternalServerError,
+            ServiceUnavailable,
+            TooManyRequests,
+        )
         from google.cloud import firestore
 
         self.client = firestore.AsyncClient(project=project)
+        self._transient_errors = (
+            Aborted,
+            DeadlineExceeded,
+            InternalServerError,
+            ServiceUnavailable,
+            TooManyRequests,
+        )
 
     def _ref(self):
         patient_id = current_patient_id()
         return self.client.collection("healthia_one_patients").document(patient_id)
 
+    async def _with_transient_retry(self, operation):
+        """Retry only transient Google API failures; validation/auth errors still fail closed."""
+        last_error = None
+        for delay in self._RETRY_DELAYS:
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                return await operation()
+            except self._transient_errors as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
     async def load(self) -> PatientState:
         patient_id = current_patient_id()
-        snapshot = await self._ref().get()
+        ref = self._ref()
+        snapshot = await self._with_transient_retry(ref.get)
         if not snapshot.exists:
             return PatientState()
         state = PatientState.model_validate(snapshot.to_dict())
@@ -104,4 +134,10 @@ class FirestoreStore(StateStore):
         patient_id = current_patient_id()
         state.profile.id = patient_id
         state.updated_at = utc_now()
-        await self._ref().set(state.model_dump(mode="json"))
+        ref = self._ref()
+        payload = state.model_dump(mode="json")
+
+        async def write():
+            return await ref.set(payload)
+
+        await self._with_transient_retry(write)
