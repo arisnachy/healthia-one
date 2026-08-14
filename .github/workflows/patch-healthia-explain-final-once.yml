@@ -1,5 +1,6 @@
 name: One-shot final HealthIA Explain hardening
 
+# Retry after correcting the frontend player contract.
 on:
   push:
     branches:
