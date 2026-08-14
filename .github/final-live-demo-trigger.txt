@@ -1,4 +1,4 @@
-final-devpost-demo-2026-08-14-attempt-2
+final-devpost-demo-2026-08-14-attempt-3
 gemini-2.5-pro-tts-charon
 healthia-explain-veo-3.1-fast
-adaptive-clinical-entry
+sufficient-detail-first-turn
