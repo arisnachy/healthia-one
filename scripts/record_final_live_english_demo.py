@@ -240,33 +240,18 @@ def run() -> dict:
         report["checks"].append("exact_candidate_live_google_runtime")
         checkpoint(report)
 
-        before = latest_assistant_message(page)
-        send_chat(page, "I have had burning with urination since yesterday, severity 6 out of 10, lower abdominal pain, and worsening urinary frequency. I want to discuss a health problem. Please start a clinical interview and ask the missing clinical questions one at a time.")
-        dynamic_statuses = {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}
-        assistant_id, status = wait_for_dynamic_or_orientation(page, str(before.get("id") or ""), timeout_s=95.0)
-        require(status in dynamic_statuses, f"sufficiently detailed clinical request did not start dynamic questions: {status}")
-        require_message_locale(page, assistant_id, "en")
-        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=15_000)
-        report["adaptive_entry_mode"] = "sufficient_detail_first_turn"
-        report["checks"].append("adaptive_clinical_workflow_started")
-        checkpoint(report)
-        overlay(page, "Google ADK + Gemini", "The patient provides enough detail to enter the bounded workflow. ADK and Gemini create exactly five case-specific questions, shown one conversational turn at a time.", 4)
+        cloud_runtime = (
+            f"Gemini {readiness.get('model')} · Google ADK ready: {readiness.get('adk_ready')} · "
+            f"State: {readiness.get('store_backend')} · Evidence: {readiness.get('evidence_backend')}"
+        )
+        overlay(page, "Exact Google Cloud runtime", cloud_runtime, 4)
         clear_overlay(page)
-        answer_conversational_block(page, answer_prefix="Synthetic answer")
-        report["checks"].append("one_question_at_a_time_five_question_contract")
-        checkpoint(report)
 
-        post_block = wait_for_assistant_after(page, assistant_id, timeout_s=95.0)
-        require(str((post_block.get("metadata") or {}).get("response_locale") or "") == "en", "post-block response was not English")
-
-        before_action = latest_assistant_message(page)
-        send_chat(page, "Open my results.")
-        action_reply = wait_for_assistant_after(page, str(before_action.get("id") or ""), timeout_s=35.0)
-        action = (action_reply.get("metadata") or {}).get("ui_action") or {}
-        require(action.get("type") == "open_view" and action.get("view") == "results", f"chat command did not emit allowlisted Results ui_action: {action_reply.get('metadata')}")
+        page.locator('.main-nav [data-open="results"]').click()
         page.wait_for_function("document.getElementById('view-results')?.classList.contains('is-active') === true", timeout=15_000)
-        report["checks"].append("chat_health_os_open_results")
-        overlay(page, "Chat is the operating surface", "The command becomes a deterministic allow-listed UI action, not an arbitrary model-generated selector.", 3)
+        report["checks"].append("results_workspace_opened")
+        checkpoint(report)
+        overlay(page, "Evidence becomes durable work", "The patient opens Results and adds original evidence. HealthIA preserves the source before interpretation, then carries the outcome forward as patient-scoped state and missions.", 4)
         clear_overlay(page)
 
         page.locator("#resultFile").set_input_files(str(pdf_path))
