@@ -76,6 +76,7 @@ async def test_direct_request_creates_private_completed_video_mission():
     assert record["url"].startswith("/api/education/videos/video_")
     assert record["narration_status"] == "visual_only_fallback"
     assert store.saved and renderer.calls and media.veo_prompts
+    assert renderer.calls[0]["locale"] == "es"
     prompt = media.veo_prompts[0].lower()
     assert "ana" not in prompt and "148" not in prompt and "92" not in prompt
 
@@ -103,6 +104,7 @@ def test_direct_spanish_video_request_extracts_clinical_topic_not_duration():
     assert "presión arterial" in topic.lower() or "presion arterial" in topic.lower()
     assert "un minuto" not in topic.lower()
     assert "corto" not in topic.lower()
+    assert "quiero entenderlo" not in topic.lower()
     assert requested_duration_seconds(request) == 60
 
 
