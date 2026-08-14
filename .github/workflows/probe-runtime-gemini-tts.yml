@@ -1,0 +1,69 @@
+name: Probe HealthIA runtime Gemini TTS
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - ".github/workflows/probe-runtime-gemini-tts.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+      - name: Call Gemini TTS as HealthIA runtime service account
+        shell: bash
+        run: |
+          set -euo pipefail
+          sa="healthia-one-demo@healthia-6088a.iam.gserviceaccount.com"
+          token="$(gcloud auth print-access-token --impersonate-service-account="$sa")"
+          test -n "$token"
+          cat > /tmp/tts.json <<'JSON'
+          {
+            "input": {
+              "prompt": "Warm adult male voice. Calm, natural, grounded and conversational.",
+              "text": "HealthIA explains health information clearly."
+            },
+            "voice": {
+              "languageCode": "en-US",
+              "name": "Charon",
+              "modelName": "gemini-2.5-pro-tts"
+            },
+            "audioConfig": {
+              "audioEncoding": "LINEAR16",
+              "sampleRateHertz": 24000
+            }
+          }
+          JSON
+          code="$(curl -sS -o /tmp/tts-response.json -w '%{http_code}' \
+            -X POST 'https://texttospeech.googleapis.com/v1/text:synthesize' \
+            -H "Authorization: Bearer $token" \
+            -H 'x-goog-user-project: healthia-6088a' \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/tts.json)"
+          echo "TTS_HTTP_CODE=$code"
+          python - "$code" <<'PY'
+          import json, sys
+          code=int(sys.argv[1])
+          payload=json.load(open('/tmp/tts-response.json', encoding='utf-8'))
+          if code != 200:
+              err=payload.get('error') or {}
+              print('TTS_ERROR_STATUS=' + str(err.get('status') or ''))
+              print('TTS_ERROR_CODE=' + str(err.get('code') or code))
+              print('TTS_ERROR_MESSAGE=' + str(err.get('message') or '')[:800].replace('\n',' '))
+              raise SystemExit(1)
+          audio=str(payload.get('audioContent') or '')
+          if not audio:
+              raise SystemExit('TTS returned no audioContent')
+          print('RUNTIME_GEMINI_TTS_PASS audio_base64_chars=' + str(len(audio)))
+          PY
