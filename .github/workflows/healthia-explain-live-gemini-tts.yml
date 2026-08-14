@@ -96,14 +96,18 @@ jobs:
           fi
           jq -r '.audioContent // empty' /tmp/tts-response.json | base64 -d > dist/healthia-explain-gemini-tts/healthia-explain-narration.wav
           test -s dist/healthia-explain-gemini-tts/healthia-explain-narration.wav
-          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels,duration -of json dist/healthia-explain-gemini-tts/healthia-explain-narration.wav > dist/healthia-explain-gemini-tts/audio-info.json
           python - <<'PY'
-          import hashlib, json
+          import hashlib, json, wave
           from pathlib import Path
           p=Path('dist/healthia-explain-gemini-tts/healthia-explain-narration.wav')
           data=p.read_bytes()
           if len(data) < 10000 or data[:4] != b'RIFF':
               raise SystemExit('Gemini TTS output is not a valid-looking WAV file')
+          with wave.open(str(p), 'rb') as wf:
+              frames=wf.getnframes(); rate=wf.getframerate(); channels=wf.getnchannels(); width=wf.getsampwidth()
+          duration=frames/rate if rate else 0
+          info={'sample_rate_hz':rate,'channels':channels,'sample_width_bytes':width,'duration_seconds':round(duration,3)}
+          Path('dist/healthia-explain-gemini-tts/audio-info.json').write_text(json.dumps(info,indent=2)+'\n')
           manifest={
               'status':'LIVE_PASS',
               'provider':'Google Cloud Gemini TTS',
@@ -113,6 +117,7 @@ jobs:
               'synthetic_patient_only':True,
               'audio_bytes':len(data),
               'audio_sha256':hashlib.sha256(data).hexdigest(),
+              **info,
           }
           Path('dist/healthia-explain-gemini-tts/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
           print(json.dumps(manifest, sort_keys=True))
