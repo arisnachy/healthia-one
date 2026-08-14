@@ -39,7 +39,8 @@ def test_final_demo_uses_one_sufficiently_detailed_adaptive_clinical_entry():
     assert "human_first_conversation_before_structured_intake" not in workflow
     assert "human_first_conversation_before_structured_intake" not in recorder
     assert 'report["adaptive_entry_mode"] = "sufficient_detail_first_turn"' in recorder
-    assert "Please ask me the missing clinical questions one at a time." in recorder
+    assert "Please start a clinical interview and ask the missing clinical questions one at a time." in recorder
+    assert "I want to discuss this health problem" not in recorder
     assert "timeout_s=95.0" in recorder
     assert "dynamic_clinical_questions" in recorder
     assert "dynamic_clinical_followup_questions" in recorder
