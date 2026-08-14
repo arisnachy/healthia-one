@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 from healthia_one.google_clinical_cloud_connectors import AdcConnectorBase
-from healthia_one.google_connector_runtime import ConnectorResult, GoogleConnectorError
+from healthia_one.google_connector_runtime import ConnectorResult, GoogleConnectorError, JsonTransport
 from healthia_one.google_constellation import GoogleAction, GoogleService
 
 
@@ -18,6 +18,17 @@ class GeminiTextToSpeechConnector(AdcConnectorBase):
     """
 
     service = GoogleService.TEXT_TO_SPEECH
+
+    def __init__(self, token_provider=None, transport: JsonTransport | None = None) -> None:
+        # Patient education narration can be substantially longer than ordinary
+        # connector requests. The proven standalone Gemini TTS path uses a 90 s
+        # HTTP window; keep the same bound here instead of the generic 20 s
+        # transport timeout so a valid long-form synthesis is not mistaken for
+        # a media failure and silently downgraded to visual-only output.
+        super().__init__(
+            token_provider=token_provider,
+            transport=transport or JsonTransport(timeout_seconds=90),
+        )
 
     def execute(self, action: GoogleAction, payload: dict[str, Any], *, idempotency_key: str) -> ConnectorResult:
         if action != GoogleAction.TEXT_TO_SPEECH_SYNTHESIZE:
