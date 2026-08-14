@@ -133,16 +133,7 @@ Safety and truth rules:
 - Use at most ONE scene with visual_kind="veo"; all other scenes are controlled cards. For a physiological topic where motion materially improves understanding (for example blood flow, breathing, digestion, joint motion, or cardiac function), use exactly ONE generic Veo scene.
 - Do not use a talking doctor avatar or person generation.
 - Keep narration within the requested duration.
-
-JSON shape:
-{{
-  "title": "...",
-  "summary": "...",
-  "patient_fact_keys": ["only keys from allowed_patient_facts that truly help"],
-  "scenes": [
-    {{"heading":"...","body":"...","narration":"...","visual_kind":"card|veo","veo_prompt":"generic English prompt only for veo"}}
-  ]
-}}
+- Return only the structured object required by the response schema; do not add markdown, commentary, or extra keys.
 """.strip()
 
 

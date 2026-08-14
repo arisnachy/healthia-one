@@ -91,6 +91,8 @@ def test_system_prompt_explicitly_locks_scene_count_and_kind():
     prompt = _education_system_instruction("en")
     assert "between THREE and SIX education scenes" in prompt
     assert 'exactly lowercase "card" or "veo"' in prompt
+    assert "JSON shape:" not in prompt
+    assert "structured object required by the response schema" in prompt
 
 
 def test_plan_normalizer_only_repairs_harmless_shape_variance():
