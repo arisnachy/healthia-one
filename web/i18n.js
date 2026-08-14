@@ -147,8 +147,8 @@
       "field.barrier": "Barrier or context",
       "auth.title": "HealthIA ONE · Sign in",
       "auth.eyebrow": "HEALTHIA ONE · PATIENT CONTINUITY",
-      "auth.hero": "Your health should remember you.",
-      "auth.hero.body": "One private patient space for your conversations, results, devices, health missions and longitudinal evidence.",
+      "auth.hero": "Your health continues.",
+      "auth.hero.body": "Results, evidence and follow-up in one place.",
       "auth.point.private": "Patient-scoped data",
       "auth.point.signed": "Signed session",
       "auth.point.ondemand": "AI on demand",
@@ -314,8 +314,8 @@
       "field.barrier": "Barrera o contexto",
       "auth.title": "HealthIA ONE · Iniciar sesión",
       "auth.eyebrow": "HEALTHIA ONE · CONTINUIDAD DEL PACIENTE",
-      "auth.hero": "Tu salud debería recordarte.",
-      "auth.hero.body": "Un espacio privado para tus conversaciones, resultados, dispositivos, misiones de salud y evidencia longitudinal.",
+      "auth.hero": "Tu salud continúa.",
+      "auth.hero.body": "Resultados, evidencia y seguimiento en un solo lugar.",
       "auth.point.private": "Datos por paciente",
       "auth.point.signed": "Sesión firmada",
       "auth.point.ondemand": "IA bajo demanda",
@@ -337,6 +337,8 @@
       "auth.checking": "Comprobando…"
     }
   };
+
+  Object.assign(dictionaries, window.HealthIAExtraDictionaries || {});
 
   const supported = new Set(Object.keys(dictionaries));
   const canonical = value => {
@@ -403,7 +405,8 @@
   }
 
   function browserLocaleTag() {
-    return locale === "es" ? "es-DO" : "en-US";
+    const tags = {ar:"ar-EG",de:"de-DE",en:"en-US",es:"es-DO",fr:"fr-FR",hi:"hi-IN",id:"id-ID",it:"it-IT",ja:"ja-JP",ko:"ko-KR",nl:"nl-NL",pl:"pl-PL",pt:"pt-BR",ro:"ro-RO",ru:"ru-RU",tr:"tr-TR",uk:"uk-UA",vi:"vi-VN",zh:"zh-CN"};
+    return tags[locale] || "en-US";
   }
 
   window.HealthIAI18n = {

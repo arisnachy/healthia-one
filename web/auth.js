@@ -52,18 +52,33 @@
   };
 
   function locale() {
-    return i18n?.locale === "es" ? "es" : "en";
+    return i18n?.locale || "en";
+  }
+
+  function translatedLoginCopy() {
+    const lang = locale();
+    if (loginCopy[lang]) return loginCopy[lang];
+    return {
+      kicker: t("auth.login.kicker"), hero: t("auth.hero"), heroBody: t("auth.login.hero_body"),
+      previewHello: t("auth.login.preview_hello"), previewSub: t("auth.login.preview_sub"),
+      missionLabel: t("auth.login.mission_label"), missionValue: t("auth.login.mission_value"),
+      evidenceLabel: t("auth.login.evidence_label"), evidenceValue: t("auth.login.evidence_value"),
+      consentLabel: t("auth.login.consent_label"), consentValue: t("auth.login.consent_value"),
+      continuityLabel: t("auth.login.continuity_label"), continuityValue: t("auth.login.continuity_value"),
+      security: t("auth.login.security"), showPassword: t("auth.login.show_password"),
+      hidePassword: t("auth.login.hide_password"), switchLanguage: "Use English",
+    };
   }
 
   function applyLoginCopy() {
     const lang = locale();
-    const copy = loginCopy[lang];
+    const copy = translatedLoginCopy();
     $$("[data-auth-copy]").forEach(node => {
       const value = copy[node.dataset.authCopy];
       if (value) node.textContent = value;
     });
     if (localeToggle) {
-      localeToggle.textContent = lang === "es" ? "EN" : "ES";
+      localeToggle.textContent = lang === "en" ? "ES" : "EN";
       localeToggle.setAttribute("aria-label", copy.switchLanguage);
       localeToggle.title = copy.switchLanguage;
     }
@@ -149,7 +164,7 @@
 
   localeToggle?.addEventListener("click", () => {
     if (!i18n) return;
-    i18n.setLocale(i18n.locale === "es" ? "en" : "es");
+    i18n.setLocale(i18n.locale === "en" ? "es" : "en");
     applyLoginCopy();
   });
 

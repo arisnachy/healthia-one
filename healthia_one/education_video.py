@@ -361,6 +361,7 @@ class PatientEducationVideoRouter:
                 narration=narration,
                 target_duration_seconds=duration_seconds,
                 veo_clip=veo_clip,
+                locale=locale,
             )
             video_id = new_id("video")
             storage_path = await self.media_store.persist(

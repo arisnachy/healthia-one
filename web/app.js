@@ -338,7 +338,11 @@ refs.chatInput.addEventListener("keydown", event => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); refs.chatForm.requestSubmit(); }
 });
-$$('[data-prompt-en]').forEach(button => button.addEventListener("click", () => sendMessage(button.dataset[i18n?.locale === "es" ? "promptEs" : "promptEn"] || button.dataset.promptEn)));
+$$('[data-prompt-en]').forEach(button => button.addEventListener("click", () => {
+  const key = button.dataset.promptKey;
+  const translated = key && !["en","es"].includes(i18n?.locale) ? tr(key) : "";
+  sendMessage(translated || button.dataset[i18n?.locale === "es" ? "promptEs" : "promptEn"] || button.dataset.promptEn);
+}));
 $$('[data-open]').forEach(button => button.addEventListener("click", () => setView(button.dataset.open)));
 $$('[data-dialog]').forEach(button => button.addEventListener("click", () => openDialog(button.dataset.dialog)));
 refs.dataForm.addEventListener("submit", event => { if (event.submitter?.value === "cancel") return; event.preventDefault(); saveDialog(); });
