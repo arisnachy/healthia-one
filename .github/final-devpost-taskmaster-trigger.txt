@@ -1,4 +1,4 @@
-final-devpost-taskmaster-resilient-2026-08-14-attempt-5
+final-devpost-taskmaster-resilient-2026-08-14-attempt-6
 runner=streamlined-playwright
 cloud-memory=1Gi
 voice=gemini-2.5-pro-tts-charon
@@ -7,3 +7,4 @@ veo=3.1-fast
 firestore=transient-retry
 runtime-service-usage=granted
 gemini-tts-http-timeout=90s
+bootstrap-500-recovery=bounded-scoped
