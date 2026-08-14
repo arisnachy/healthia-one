@@ -1,0 +1,232 @@
+name: One-shot multilingual UI pack builder
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/build-multilingual-ui-trigger.txt
+
+permissions:
+  contents: write
+
+concurrency:
+  group: healthia-one-shot-multilingual-ui
+  cancel-in-progress: false
+
+jobs:
+  build-packs:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      EXPECTED_MARKER: BUILD_MULTILINGUAL_UI_PACKS_20260813
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+          fetch-depth: 0
+
+      - name: Enforce one-shot marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < .github/build-multilingual-ui-trigger.txt)" = "$EXPECTED_MARKER"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install translation SDK
+        shell: bash
+        run: python -m pip install --quiet 'google-genai>=1.0.0'
+
+      - name: Generate validated static UI packs with Gemini 3.5 Flash
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+          import json, os, re, time
+          from pathlib import Path
+          from google import genai
+          from google.genai.types import GenerateContentConfig, HttpOptions
+
+          root = Path('.')
+          i18n_path = root / 'web/i18n.js'
+          source = i18n_path.read_text(encoding='utf-8')
+          en_start = source.index('    en: {') + len('    en: ')
+          es_marker = source.index('\n    es: {', en_start)
+          en_block = source[en_start:es_marker].rstrip()
+          if en_block.endswith(','):
+              en_block = en_block[:-1]
+          base = json.loads(en_block)
+          base.update({
+              'auth.login.kicker': 'SECURE ACCESS',
+              'auth.login.hero_body': 'Results, evidence and follow-up in one place.',
+              'auth.login.preview_hello': 'Hello, Ana',
+              'auth.login.preview_sub': 'Your health continues.',
+              'auth.login.mission_label': 'ACTIVE MISSION',
+              'auth.login.mission_value': 'Lab result',
+              'auth.login.evidence_label': 'EVIDENCE',
+              'auth.login.evidence_value': 'Lipid profile',
+              'auth.login.consent_label': 'CONSENT',
+              'auth.login.consent_value': 'Nearby resources',
+              'auth.login.continuity_label': 'CONTINUITY',
+              'auth.login.continuity_value': 'Follow-up restored',
+              'auth.login.security': 'Protected session and patient-scoped data.',
+              'auth.login.show_password': 'Show password',
+              'auth.login.hide_password': 'Hide password',
+              'chat.prompt.bp.request': 'I want to record my blood pressure',
+              'chat.prompt.results.request': 'Explain my recent results',
+              'chat.prompt.weight.request': 'I have gained weight and want to understand the trend',
+              'chat.prompt.visit.request': 'Prepare my next clinical visit',
+          })
+
+          targets = {
+              'pt':'Brazilian Portuguese', 'fr':'French', 'de':'German', 'it':'Italian',
+              'nl':'Dutch', 'pl':'Polish', 'ro':'Romanian', 'tr':'Turkish',
+              'id':'Indonesian', 'vi':'Vietnamese', 'ru':'Russian', 'uk':'Ukrainian',
+              'ar':'Arabic', 'hi':'Hindi', 'ja':'Japanese', 'ko':'Korean', 'zh':'Simplified Chinese',
+          }
+          client = genai.Client(
+              vertexai=True,
+              project=os.environ['PROJECT_ID'],
+              location='global',
+              http_options=HttpOptions(api_version='v1'),
+          )
+          config = GenerateContentConfig(
+              temperature=0,
+              response_mime_type='application/json',
+              max_output_tokens=16000,
+          )
+          expected = set(base)
+          packs = {}
+          payload = json.dumps(base, ensure_ascii=False, separators=(',', ':'))
+          for code, language in targets.items():
+              prompt = f'''Translate every VALUE in this JSON object into {language} for a calm, modern patient-facing healthcare application.\nRules:\n- Preserve every JSON key EXACTLY and return every key exactly once.\n- Return one JSON object only; no markdown or commentary.\n- Keep HealthIA, HealthIA ONE, Gemini, Google, JSON, CSV, TXT, PDF, kg, mg/dL, bpm and rpm recognizable.\n- Preserve symbols, arrows, punctuation, placeholders in braces, ellipses, and units.\n- Use natural patient-friendly language, not literal machine translation.\n- Do not add medical advice. These are fixed UI labels only.\n\nSOURCE JSON:\n{payload}'''
+              last_error = None
+              for attempt in range(3):
+                  try:
+                      response = client.models.generate_content(model='gemini-3.5-flash', contents=prompt, config=config)
+                      translated = json.loads(response.text)
+                      if set(translated) != expected:
+                          missing = sorted(expected - set(translated))[:10]
+                          extra = sorted(set(translated) - expected)[:10]
+                          raise ValueError(f'key mismatch missing={missing} extra={extra}')
+                      if not all(isinstance(translated[key], str) and translated[key].strip() for key in expected):
+                          raise ValueError('empty/non-string translation value')
+                      packs[code] = translated
+                      print(f'PACK_PASS {code} keys={len(translated)}')
+                      break
+                  except Exception as exc:
+                      last_error = exc
+                      if attempt == 2:
+                          raise
+                      time.sleep(2 * (attempt + 1))
+              if code not in packs:
+                  raise SystemExit(f'failed to translate {code}: {last_error}')
+
+          pack_path = root / 'web/i18n-packs.js'
+          pack_path.write_text(
+              'window.HealthIAExtraDictionaries = Object.freeze(' +
+              json.dumps(packs, ensure_ascii=False, separators=(',', ':')) +
+              ');\n',
+              encoding='utf-8',
+          )
+
+          # Teach the existing i18n runtime about static extra packs.
+          marker = '  const supported = new Set(Object.keys(dictionaries));'
+          if 'HealthIAExtraDictionaries' not in source:
+              source = source.replace(marker, '  Object.assign(dictionaries, window.HealthIAExtraDictionaries || {});\n\n' + marker, 1)
+          source = source.replace('"auth.hero": "Your health should remember you."', '"auth.hero": "Your health continues."')
+          source = source.replace('"auth.hero.body": "One private patient space for your conversations, results, devices, health missions and longitudinal evidence."', '"auth.hero.body": "Results, evidence and follow-up in one place."')
+          source = source.replace('"auth.hero": "Tu salud debería recordarte."', '"auth.hero": "Tu salud continúa."')
+          source = source.replace('"auth.hero.body": "Un espacio privado para tus conversaciones, resultados, dispositivos, misiones de salud y evidencia longitudinal."', '"auth.hero.body": "Resultados, evidencia y seguimiento en un solo lugar."')
+          old_browser = '''  function browserLocaleTag() {\n    return locale === "es" ? "es-DO" : "en-US";\n  }'''
+          new_browser = '''  function browserLocaleTag() {\n    const tags = {ar:"ar-EG",de:"de-DE",en:"en-US",es:"es-DO",fr:"fr-FR",hi:"hi-IN",id:"id-ID",it:"it-IT",ja:"ja-JP",ko:"ko-KR",nl:"nl-NL",pl:"pl-PL",pt:"pt-BR",ro:"ro-RO",ru:"ru-RU",tr:"tr-TR",uk:"uk-UA",vi:"vi-VN",zh:"zh-CN"};\n    return tags[locale] || "en-US";\n  }'''
+          if old_browser not in source:
+              raise SystemExit('browserLocaleTag contract changed')
+          source = source.replace(old_browser, new_browser)
+          i18n_path.write_text(source, encoding='utf-8')
+
+          # Load packs before the shared runtime on both patient entry points.
+          for relative in ('web/login.html', 'web/index.html'):
+              path = root / relative
+              html = path.read_text(encoding='utf-8')
+              needle = '<script src="/assets/i18n.js"'
+              if '/assets/i18n-packs.js' not in html:
+                  html = html.replace(needle, '<script src="/assets/i18n-packs.js" defer></script>\n  ' + needle, 1)
+              path.write_text(html, encoding='utf-8')
+
+          # Make the login microcopy use generated packs outside EN/ES.
+          auth_path = root / 'web/auth.js'
+          auth = auth_path.read_text(encoding='utf-8')
+          auth = auth.replace('''  function locale() {\n    return i18n?.locale === "es" ? "es" : "en";\n  }\n\n  function applyLoginCopy() {\n    const lang = locale();\n    const copy = loginCopy[lang];''', '''  function locale() {\n    return i18n?.locale || "en";\n  }\n\n  function translatedLoginCopy() {\n    const lang = locale();\n    if (loginCopy[lang]) return loginCopy[lang];\n    return {\n      kicker: t("auth.login.kicker"), hero: t("auth.hero"), heroBody: t("auth.login.hero_body"),\n      previewHello: t("auth.login.preview_hello"), previewSub: t("auth.login.preview_sub"),\n      missionLabel: t("auth.login.mission_label"), missionValue: t("auth.login.mission_value"),\n      evidenceLabel: t("auth.login.evidence_label"), evidenceValue: t("auth.login.evidence_value"),\n      consentLabel: t("auth.login.consent_label"), consentValue: t("auth.login.consent_value"),\n      continuityLabel: t("auth.login.continuity_label"), continuityValue: t("auth.login.continuity_value"),\n      security: t("auth.login.security"), showPassword: t("auth.login.show_password"),\n      hidePassword: t("auth.login.hide_password"), switchLanguage: "Use English",\n    };\n  }\n\n  function applyLoginCopy() {\n    const lang = locale();\n    const copy = translatedLoginCopy();''')
+          auth = auth.replace('localeToggle.textContent = lang === "es" ? "EN" : "ES";', 'localeToggle.textContent = lang === "en" ? "ES" : "EN";')
+          auth = auth.replace('i18n.setLocale(i18n.locale === "es" ? "en" : "es");', 'i18n.setLocale(i18n.locale === "en" ? "es" : "en");')
+          auth_path.write_text(auth, encoding='utf-8')
+
+          # Suggestions follow the translated UI instead of inserting an English prompt on non-EN/ES systems.
+          index_path = root / 'web/index.html'
+          index = index_path.read_text(encoding='utf-8')
+          prompt_keys = [
+              ('data-prompt-en="I want to record my blood pressure"', 'data-prompt-key="chat.prompt.bp.request"'),
+              ('data-prompt-en="Explain my recent results"', 'data-prompt-key="chat.prompt.results.request"'),
+              ('data-prompt-en="I have gained weight and want to understand the trend"', 'data-prompt-key="chat.prompt.weight.request"'),
+              ('data-prompt-en="Prepare my next clinical visit"', 'data-prompt-key="chat.prompt.visit.request"'),
+          ]
+          for needle, addition in prompt_keys:
+              if addition not in index:
+                  index = index.replace(needle, needle + ' ' + addition, 1)
+          index_path.write_text(index, encoding='utf-8')
+
+          app_path = root / 'web/app.js'
+          app = app_path.read_text(encoding='utf-8')
+          old_handler = '''$$('[data-prompt-en]').forEach(button => button.addEventListener("click", () => sendMessage(button.dataset[i18n?.locale === "es" ? "promptEs" : "promptEn"] || button.dataset.promptEn)));'''
+          new_handler = '''$$('[data-prompt-en]').forEach(button => button.addEventListener("click", () => {\n  const key = button.dataset.promptKey;\n  const translated = key && !["en","es"].includes(i18n?.locale) ? tr(key) : "";\n  sendMessage(translated || button.dataset[i18n?.locale === "es" ? "promptEs" : "promptEn"] || button.dataset.promptEn);\n}));'''
+          if old_handler not in app:
+              raise SystemExit('suggestion handler contract changed')
+          app_path.write_text(app.replace(old_handler, new_handler), encoding='utf-8')
+
+          # Ensure the video renderer receives the same locale used for planning/narration.
+          education_path = root / 'healthia_one/education_video.py'
+          education = education_path.read_text(encoding='utf-8')
+          old_render = '''                target_duration_seconds=duration_seconds,\n                veo_clip=veo_clip,\n            )'''
+          new_render = '''                target_duration_seconds=duration_seconds,\n                veo_clip=veo_clip,\n                locale=locale,\n            )'''
+          if old_render not in education:
+              raise SystemExit('education render call contract changed')
+          education_path.write_text(education.replace(old_render, new_render, 1), encoding='utf-8')
+
+          # Validate browser pack contract without needing a model at runtime.
+          test_path = root / 'tests/test_ui_locale_packs.py'
+          test_path.write_text('''import json\nimport re\nfrom pathlib import Path\n\n\ndef _packs():\n    text = Path("web/i18n-packs.js").read_text(encoding="utf-8")\n    payload = text.removeprefix("window.HealthIAExtraDictionaries = Object.freeze(").removesuffix(");\\n")\n    return json.loads(payload)\n\n\ndef test_static_ui_packs_cover_supported_operating_system_locales():\n    packs = _packs()\n    assert set(packs) == {"pt","fr","de","it","nl","pl","ro","tr","id","vi","ru","uk","ar","hi","ja","ko","zh"}\n    english = re.search(r"en: (\\{.*?\\})\\s*,\\s*es:", Path("web/i18n.js").read_text(encoding="utf-8"), re.S)\n    assert english\n    base = json.loads(english.group(1))\n    for locale, pack in packs.items():\n        for key in base:\n            assert key in pack, f"{locale} missing {key}"\n        assert pack["auth.hero"].strip()\n        assert pack["chat.hero"].strip()\n\n\ndef test_patient_entry_loads_locale_packs_before_i18n_runtime():\n    for filename in ("web/login.html", "web/index.html"):\n        html = Path(filename).read_text(encoding="utf-8")\n        assert html.index("/assets/i18n-packs.js") < html.index("/assets/i18n.js")\n\n\ndef test_healthia_explain_renderer_receives_resolved_content_locale():\n    source = Path("healthia_one/education_video.py").read_text(encoding="utf-8")\n    assert "locale=locale" in source\n''', encoding='utf-8')
+          PY
+
+      - name: Validate generated JavaScript and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check web/i18n-packs.js
+          node --check web/i18n.js
+          node --check web/auth.js
+          node --check web/app.js
+          python -m pip install --quiet -e '.[test]'
+          pytest -q tests/test_ui_locale_packs.py tests/test_healthia_multilingual.py tests/test_language_contract.py tests/test_education_renderer_smoke.py tests/test_education_video_core.py
+
+      - name: Commit static packs and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/build-multilingual-ui-trigger.txt .github/workflows/build-multilingual-ui-packs-once.yml
+          git config user.name "HealthIA ONE CI"
+          git config user.email "127772990+arisnachy@users.noreply.github.com"
+          git add web healthia_one/education_video.py tests/test_ui_locale_packs.py .github
+          git commit -m "Ship automatic multilingual UI packs and locale-matched HealthIA Explain video"
+          git push origin HEAD:feature/patient-education-video-20260813
