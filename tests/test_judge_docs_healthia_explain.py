@@ -24,6 +24,6 @@ def test_judge_docs_describe_healthia_explain_without_overclaiming_replacement_p
 
 def test_architecture_keeps_phi_out_of_veo_and_patient_values_controlled() -> None:
     architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
-    assert "Veo receives only a generic visual prompt" in architecture
+    assert "Generic visual prompt only, no PHI/numbers" in architecture
     assert "Controlled HealthIA cards" in architecture
     assert "patient/mission Google grant + receipt boundary" in architecture
