@@ -120,22 +120,51 @@ def requested_duration_seconds(value: str, default: int = 90) -> int:
 
 def _clean_topic(raw: str) -> str:
     text = str(raw or "").strip(" \t\n\r.,;:!?")
+    # Duration and style describe the requested media, never the clinical topic.
     text = re.sub(
-        r"(?i)\b(?:por favor|please|por favor|s'il vous plait|bitte|per favore|un video|a video|en video|in a video|em video|explicando|que explique|sobre|acerca de|about|para entender|to explain)\b",
+        r"(?i)\b(?:de|for|durante|por)?\s*(?:un|una|one|um|uma)?\s*\d+(?:[.,]\d+)?\s*(?:min|minuto|minutos|minute|minutes|minuten|minuti|分钟|분|分)\b",
         " ", text,
     )
     text = re.sub(
-        r"(?i)\b(?:crea|creame|hazme|genera|preparame|quiero|necesito|create|make|generate|prepare|i want|i need|explicame|explain|crie|quero|explique|cree|genere|erstelle|spiega|voglio)\b",
+        r"(?i)\b(?:corto|corta|rapido|rápido|short|quick|curto|curta|rapide|court|kurz|breve)\b",
+        " ", text,
+    )
+    text = re.sub(
+        r"(?i)\b(?:por favor|please|s'il vous plait|bitte|per favore|un video|a video|en video|in a video|em video|explicando|explicándome|que explique|sobre|acerca de|about|para entender|to explain)\b",
+        " ", text,
+    )
+    text = re.sub(
+        r"(?i)\b(?:crea|creame|créame|hazme|genera|preparame|prepárame|quiero|necesito|create|make|generate|prepare|i want|i need|explicame|explícame|explain|crie|quero|explique|cree|genere|erstelle|spiega|voglio)\b",
         " ", text,
     )
     text = re.sub(r"(?:ビデオ|動画|비디오|영상|видео|فيديو|वीडियो|视频|影片)", " ", text)
+    text = re.sub(r"(?i)^(?:que|qué|what|o que|que|was|cosa)\s+(?:significa|means?|signifie|bedeutet)\s+", "", text)
     return re.sub(r"\s+", " ", text).strip(" -")[:180]
 
 
 def topic_from_text(value: str) -> str:
     text = str(value or "").strip()
+    # Prefer the semantic explanation clause over modifiers such as "short"
+    # or "one minute". This is deliberately deterministic because the
+    # extracted topic controls which patient evidence HealthIA is allowed to use.
+    semantic_patterns = (
+        r"(?i)\b(?:explicandome|explicándome|explicame|explícame)\s+(?:que|qué)\s+significa\s+([^.!?]{3,180})",
+        r"(?i)\b(?:que|qué)\s+significa\s+([^.!?]{3,180})",
+        r"(?i)\b(?:explain(?:ing)?(?:\s+to\s+me)?|tell\s+me)\s+(?:what\s+)?(?:does|is)?\s*([^.!?]{3,180}?)(?:\s+mean)?(?:[.!?]|$)",
+        r"(?i)\b(?:o que significa|explique(?:-me)?(?:\s+o que significa)?)\s+([^.!?]{3,180})",
+        r"(?i)\b(?:que signifie|expliquez?-moi)\s+([^.!?]{3,180})",
+        r"(?i)\b(?:was bedeutet|erkl[aä]r(?:e|en)?(?:\s+mir)?)\s+([^.!?]{3,180})",
+        r"(?i)\b(?:cosa significa|spiegami)\s+([^.!?]{3,180})",
+    )
+    for pattern in semantic_patterns:
+        match = re.search(pattern, text)
+        if match:
+            topic = _clean_topic(match.group(1))
+            if topic and normalize(topic) not in GENERIC_REFERENCE:
+                return topic
+
     patterns = (
-        r"(?i)\b(?:sobre|acerca de|about|sobre|sur|uber|über)\s+(.+)$",
+        r"(?i)\b(?:sobre|acerca de|about|sur|uber|über)\s+([^.!?]{3,180})",
         r"(?i)\b(?:mi|my|meu|minha|mon|ma|mein|meine|mio|mia)\s+([^,.!?]{3,140})$",
         r"(?i)\b(?:explicame|explícame|explain|explique|spiega)\s+(.+?)(?:\s+en video|\s+in a video|\s+em video|$)",
     )
@@ -145,7 +174,10 @@ def topic_from_text(value: str) -> str:
             topic = _clean_topic(match.group(1))
             if topic and normalize(topic) not in GENERIC_REFERENCE:
                 return topic
-    topic = _clean_topic(text)
+    # Last resort: first sentence only so follow-up intent such as "I want to
+    # understand it simply" cannot become part of the evidence-selection topic.
+    first_sentence = re.split(r"[.!?]+", text, maxsplit=1)[0]
+    topic = _clean_topic(first_sentence)
     return "" if normalize(topic) in GENERIC_REFERENCE else topic
 
 

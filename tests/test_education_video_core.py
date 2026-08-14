@@ -89,3 +89,25 @@ def test_exact_patient_value_is_rejected_from_veo_prompt():
         EducationScene(heading="Tres", body="Contenido seguro", narration="Contenido seguro"),
     ])
     with pytest.raises(ValueError): validate_plan(plan, facts, state.profile.display_name)
+
+
+def test_direct_spanish_video_request_extracts_clinical_topic_not_duration():
+    from healthia_one.education_video_models import requested_duration_seconds, topic_from_text
+
+    request = (
+        "Crea un video corto de un minuto explicándome qué significa la hipertensión "
+        "y mi presión arterial. Quiero entenderlo de forma sencilla."
+    )
+    topic = topic_from_text(request)
+    assert "hipertensión" in topic.lower() or "hipertension" in topic.lower()
+    assert "presión arterial" in topic.lower() or "presion arterial" in topic.lower()
+    assert "un minuto" not in topic.lower()
+    assert "corto" not in topic.lower()
+    assert requested_duration_seconds(request) == 60
+
+
+def test_video_topic_drops_duration_modifier_after_about_clause():
+    from healthia_one.education_video_models import topic_from_text
+
+    assert topic_from_text("Create a one minute video about hypertension and blood pressure") == "hypertension and blood pressure"
+    assert "pressão" in topic_from_text("Crie um vídeo curto sobre hipertensão e pressão arterial por 1 minuto").lower()

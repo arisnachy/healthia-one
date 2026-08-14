@@ -123,8 +123,9 @@ Safety and truth rules:
 - Do not copy patient-specific values into Veo prompts.
 - Veo prompts must be generic medical education imagery: no names, ages, locations, dates, medication names, laboratory values, measurements, identifiers, text overlays, or PHI.
 - The veo_prompt itself must be written in English for predictable visual generation, even though every patient-visible field is in {language}.
+- NEVER use digits or numeric tokens in veo_prompt, including labels such as 3D; spell generic visual concepts with words instead.
 - Prefer controlled cards for exact values, medication names, numbers, warning signs, and clinical labels.
-- Use at most ONE scene with visual_kind="veo"; all other scenes are controlled cards.
+- Use at most ONE scene with visual_kind="veo"; all other scenes are controlled cards. For a physiological topic where motion materially improves understanding (for example blood flow, breathing, digestion, joint motion, or cardiac function), use exactly ONE generic Veo scene.
 - Do not use a talking doctor avatar or person generation.
 - Keep narration within the requested duration.
 
