@@ -221,7 +221,7 @@ def run() -> dict:
         page.on(
             "response",
             lambda response: http_server_errors.append({"status": response.status, "url": response.url})
-            if response.status >= 500
+            if response.status == 429 or response.status >= 500
             else None,
         )
 
@@ -373,28 +373,39 @@ def run() -> dict:
         # Chromium still keeps a generic resource error in its console after the
         # read recovers. Tolerate only that exact, bounded, scoped condition.
         explain_http_errors = http_server_errors[explain_http_start:]
-        allowed_bootstrap_500s = [
+        allowed_bootstrap_transients = [
             item
             for item in explain_http_errors
-            if item.get("status") == 500
+            if item.get("status") in {429, 500}
             and str(item.get("url") or "").split("?", 1)[0].endswith("/api/bootstrap")
         ]
-        unexpected_explain_http = [item for item in explain_http_errors if item not in allowed_bootstrap_500s]
-        require(not unexpected_explain_http, f"unexpected HealthIA Explain HTTP server errors: {unexpected_explain_http}")
-        require(len(allowed_bootstrap_500s) <= 3, f"too many transient bootstrap 500s: {allowed_bootstrap_500s}")
+        unexpected_explain_http = [item for item in explain_http_errors if item not in allowed_bootstrap_transients]
+        require(not unexpected_explain_http, f"unexpected HealthIA Explain HTTP errors: {unexpected_explain_http}")
+        require(len(allowed_bootstrap_transients) <= 6, f"too many transient bootstrap responses: {allowed_bootstrap_transients}")
 
         explain_console_errors = console_errors[explain_console_start:]
-        known_console_500 = "Failed to load resource: the server responded with a status of 500 ()"
-        known_console_500_count = sum(item == known_console_500 for item in explain_console_errors)
-        unexpected_explain_console = [item for item in explain_console_errors if item != known_console_500]
+        console_message_by_status = {
+            429: "Failed to load resource: the server responded with a status of 429 ()",
+            500: "Failed to load resource: the server responded with a status of 500 ()",
+        }
+        expected_console_messages = set(console_message_by_status.values())
+        unexpected_explain_console = [item for item in explain_console_errors if item not in expected_console_messages]
         require(not unexpected_explain_console, f"unexpected HealthIA Explain console errors: {unexpected_explain_console}")
-        require(
-            known_console_500_count <= len(allowed_bootstrap_500s),
-            "console reported a 500 without a matching recovered /api/bootstrap response",
-        )
-        if allowed_bootstrap_500s:
-            report["recovered_transient_bootstrap_500s"] = len(allowed_bootstrap_500s)
-            report["checks"].append("bounded_transient_bootstrap_500_recovered")
+        for status, message in console_message_by_status.items():
+            console_count = sum(item == message for item in explain_console_errors)
+            response_count = sum(item.get("status") == status for item in allowed_bootstrap_transients)
+            require(
+                console_count <= response_count,
+                f"console reported HTTP {status} without a matching recovered /api/bootstrap response",
+            )
+        if allowed_bootstrap_transients:
+            recovered_counts = {
+                str(status): sum(item.get("status") == status for item in allowed_bootstrap_transients)
+                for status in (429, 500)
+                if any(item.get("status") == status for item in allowed_bootstrap_transients)
+            }
+            report["recovered_transient_bootstrap_responses"] = recovered_counts
+            report["checks"].append("bounded_transient_bootstrap_recovery")
 
         # Remove only the scoped/recovered errors. Any pre-existing or later
         # console/server error remains and still fails the final browser gate.

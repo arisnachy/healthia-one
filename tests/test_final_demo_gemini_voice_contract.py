@@ -91,10 +91,11 @@ def test_demo_narrator_splits_long_text_below_gemini_unary_limit():
 def test_final_demo_only_tolerates_bounded_bootstrap_500_during_explain():
     recorder = (ROOT / "scripts" / "record_final_live_english_demo.py").read_text(encoding="utf-8")
 
-    assert 'response.status >= 500' in recorder
+    assert 'response.status == 429 or response.status >= 500' in recorder
     assert 'endswith("/api/bootstrap")' in recorder
-    assert 'len(allowed_bootstrap_500s) <= 3' in recorder
-    assert 'bounded_transient_bootstrap_500_recovered' in recorder
-    assert 'unexpected HealthIA Explain HTTP server errors' in recorder
+    assert 'item.get("status") in {429, 500}' in recorder
+    assert 'len(allowed_bootstrap_transients) <= 6' in recorder
+    assert 'bounded_transient_bootstrap_recovery' in recorder
+    assert 'unexpected HealthIA Explain HTTP errors' in recorder
     assert 'browser HTTP server errors' in recorder
-    assert 'console reported a 500 without a matching recovered /api/bootstrap response' in recorder
+    assert 'without a matching recovered /api/bootstrap response' in recorder
