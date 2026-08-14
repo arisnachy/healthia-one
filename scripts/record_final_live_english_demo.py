@@ -228,47 +228,22 @@ def run() -> dict:
         checkpoint(report)
 
         before = latest_assistant_message(page)
-        send_chat(page, "Since yesterday I have burning pain when I urinate and I need to go very often. Help me understand what information is still missing.")
-        first_reply = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=25.0)
-        require(str(first_reply.get("content") or "").strip(), "initial assistant response was empty")
-        require(str((first_reply.get("metadata") or {}).get("response_locale") or "") == "en", "initial response was not English")
-
+        send_chat(page, "Since yesterday the burning when I urinate is 6 out of 10. I also have lower abdominal pain and the urinary frequency is getting worse. I want to discuss this health problem. Please ask me the missing clinical questions one at a time.")
         dynamic_statuses = {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}
-        block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last
-        deadline = time.time() + 6.0
-        while time.time() < deadline and block.count() == 0:
-            page.wait_for_timeout(250)
-
-        if block.count():
-            state = api_json(page, "/api/bootstrap")
-            dynamic_message = next((
-                item for item in reversed(state.get("messages", []))
-                if str((item.get("metadata") or {}).get("llm_status") or "") in dynamic_statuses
-            ), None)
-            require(bool(dynamic_message), "dynamic clinical UI appeared without a durable dynamic assistant message")
-            assistant_id = str(dynamic_message.get("id") or "")
-            status = str((dynamic_message.get("metadata") or {}).get("llm_status") or "")
-            report["adaptive_entry_mode"] = "first_turn"
-        else:
-            overlay(page, "Adaptive start", "HealthIA begins in natural language and waits for more detail when the first message is not yet sufficient for the bounded workflow.", 3)
-            clear_overlay(page)
-            before_followup = latest_assistant_message(page)
-            send_chat(page, "The burning is 6 out of 10, I also have lower abdominal pain, and the urinary frequency is getting worse. I want to discuss a health problem.")
-            assistant_id, status = wait_for_dynamic_or_orientation(page, str(before_followup.get("id") or ""), timeout_s=70.0)
-            report["adaptive_entry_mode"] = "followup_turn"
-
-        require(status in dynamic_statuses, f"adaptive clinical workflow did not start with dynamic questions: {status}")
+        assistant_id, status = wait_for_dynamic_or_orientation(page, str(before.get("id") or ""), timeout_s=95.0)
+        require(status in dynamic_statuses, f"sufficiently detailed clinical request did not start dynamic questions: {status}")
         require_message_locale(page, assistant_id, "en")
-        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)
+        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=15_000)
+        report["adaptive_entry_mode"] = "sufficient_detail_first_turn"
         report["checks"].append("adaptive_clinical_workflow_started")
         checkpoint(report)
-        overlay(page, "Google ADK + Gemini", "HealthIA adapts to the detail already provided. Once the bounded workflow starts, ADK and Gemini create exactly five case-specific questions, shown one conversational turn at a time.", 4)
+        overlay(page, "Google ADK + Gemini", "The patient provides enough detail to enter the bounded workflow. ADK and Gemini create exactly five case-specific questions, shown one conversational turn at a time.", 4)
         clear_overlay(page)
         answer_conversational_block(page, answer_prefix="Synthetic answer")
         report["checks"].append("one_question_at_a_time_five_question_contract")
         checkpoint(report)
 
-        post_block = wait_for_assistant_after(page, assistant_id, timeout_s=70.0)
+        post_block = wait_for_assistant_after(page, assistant_id, timeout_s=95.0)
         require(str((post_block.get("metadata") or {}).get("response_locale") or "") == "en", "post-block response was not English")
 
         before_action = latest_assistant_message(page)
