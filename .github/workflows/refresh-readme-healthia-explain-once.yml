@@ -1,0 +1,49 @@
+name: One-shot README HealthIA Explain refresh
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/refresh-readme-healthia-explain-trigger.txt
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+          fetch-depth: 0
+      - name: Refresh README and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < .github/refresh-readme-healthia-explain-trigger.txt)" = "REFRESH_README_HEALTHIA_EXPLAIN_20260813"
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('README.md')
+          text = path.read_text(encoding='utf-8')
+          old_stack = '''**Google AI:** Gemini 3.5 Flash on Vertex AI  \n**Agent framework:** Google ADK  \n**Cloud:** Cloud Run + Firestore + private Cloud Storage + Vertex AI + Secret Manager  \n**JUDGE Ω:** **100/100 evidence-backed on the merged Taskmaster candidate; subsequent changes require a fresh exact-head CI gate**'''
+          new_stack = '''**Google AI:** Gemini 3.5 Flash on Vertex AI + Gemini 2.5 Pro TTS + optional Veo 3.1 Fast  \n**Agent framework:** Google ADK  \n**Cloud:** Cloud Run + Firestore + private Cloud Storage + Vertex AI + Secret Manager + Places/Maps  \n**Preserved JUDGE Ω:** **100/100 evidence-backed on the merged Taskmaster candidate**  \n**Integrated HealthIA Explain branch:** full deterministic CI/E2E/LAB/JUDGE gate **PASS**; fresh Cloud/video proof required before replacing the preserved submission candidate'''
+          if text.count(old_stack) != 1:
+              raise SystemExit('README stack marker changed unexpectedly')
+          text = text.replace(old_stack, new_stack)
+
+          marker = '## Why this is not just a chatbot\n\n'
+          insert = '''## Why this is not just a chatbot\n\n### HealthIA Explain — understand your health visually\n\nWhen understanding becomes the task, HealthIA can offer a **private patient-education video** instead of forcing the patient through another wall of text. The same durable mission system resolves the language the patient is currently using, selects only topic-relevant authorized evidence, asks Gemini for a bounded storyboard, narrates it with **Gemini 2.5 Pro TTS**, and can enrich one generic scene with **Veo 3.1 Fast**.\n\nThe safety split is intentional:\n\n- exact patient values, medication names, measurements and warning labels stay on controlled HealthIA cards;\n- Veo receives only a generic PHI-free visual prompt — no name, age, medication, laboratory value, date, identifier or patient measurement;\n- Gemini TTS runs through HealthIA's existing patient/mission Google grant + receipt boundary;\n- the video cannot diagnose a new disease, prescribe, change a dose or tell the patient to stop medication;\n- if media generation fails, the mission remains retryable instead of claiming a fake success.\n\nA real one-shot Vertex proof generated an 8-second 720p `veo-3.1-fast-generate-001` clip in run **`31758267226`**. A separate real Google Cloud proof generated natural Spanish-Latin-America narration with `gemini-2.5-pro-tts` / `Charon` in run **`31764094573`**.\n\n### Language follows the patient\n\nHealthIA separates the interface locale from the language of the current clinical conversation. The shipped UI automatically selects the production English/Spanish pack from the browser/OS locale unless the patient saves an override. The clinical/content layer supports a broader explicit locale set: when the patient writes in another supported language, the response and HealthIA Explain narration follow that message first; short or ambiguous input falls back to the browser/profile locale. Exact record values are preserved rather than loosely translated.\n\nThe integrated login + multilingual + HealthIA Explain branch passed the complete deterministic release gate in GitHub Actions run **`31767221658`** on head **`0de5adad497b0a15defbedc1c0341394dc1680fd`** before the judge-facing documentation refresh. See [`docs/EVIDENCE.md`](docs/EVIDENCE.md) for the current proof boundary.\n\n'''
+          if text.count(marker) != 1:
+              raise SystemExit('README section marker changed unexpectedly')
+          text = text.replace(marker, insert, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -f .github/refresh-readme-healthia-explain-trigger.txt .github/workflows/refresh-readme-healthia-explain-once.yml
+          git config user.name "HealthIA ONE CI"
+          git config user.email "127772990+arisnachy@users.noreply.github.com"
+          git add README.md .github
+          git commit -m "Refresh README for HealthIA Explain and multilingual continuity"
+          git push origin HEAD:feature/patient-education-video-20260813
