@@ -2,7 +2,7 @@ HealthIA ONE starts from a simple idea: your health should not reset every time 
 
 This is the exact candidate running on Google Cloud. The patient signs in through the real HealthIA authentication flow. The interface follows the browser language, while the clinical conversation follows the language the patient is actually using.
 
-The patient begins naturally, describing urinary symptoms. HealthIA does not immediately turn one sentence into a rigid form. It responds as a person first. When enough detail is present, Google ADK activates the bounded clinical workflow and Gemini 3.5 Flash generates exactly five context-specific questions. The questions appear one at a time, preserving prior answers so the conversation moves forward instead of restarting.
+The patient begins naturally, describing urinary symptoms. HealthIA starts in natural language and adapts to how much clinical detail is already present. When the request contains enough information to enter the bounded workflow, Google ADK activates and Gemini 3.5 Flash generates exactly five context-specific questions. If more context is needed first, HealthIA continues the conversation before activating that same workflow. The questions appear one at a time, preserving prior answers so the conversation moves forward instead of restarting.
 
 Next, the patient asks HealthIA to open Results. The chat becomes an operating surface: the request is converted into a deterministic, allow-listed interface action rather than an arbitrary model-generated selector.
 
