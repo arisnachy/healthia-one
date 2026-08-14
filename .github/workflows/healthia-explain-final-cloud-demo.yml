@@ -1,4 +1,5 @@
 name: HealthIA Explain final exact-head Cloud demo
+# Authorized retry after full CI run 31770139328 passed on the product tree.
 
 on:
   push:
