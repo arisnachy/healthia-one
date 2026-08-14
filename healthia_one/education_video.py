@@ -7,6 +7,8 @@ import re
 import wave
 from typing import Any, Awaitable, Callable, Protocol
 
+from pydantic import ValidationError
+
 from healthia_one.control import audit
 from healthia_one.education_video_google import GoogleEducationMediaProvider
 from healthia_one.education_video_models import (
@@ -125,6 +127,9 @@ Safety and truth rules:
 - The veo_prompt itself must be written in English for predictable visual generation, even though every patient-visible field is in {language}.
 - NEVER use digits or numeric tokens in veo_prompt, including labels such as 3D; spell generic visual concepts with words instead.
 - Prefer controlled cards for exact values, medication names, numbers, warning signs, and clinical labels.
+- Return between THREE and SIX education scenes. Even a short video must contain at least THREE concise scenes; HealthIA adds intro, patient-fact and safety cards separately.
+- Every scene must include non-empty heading, body and narration strings. Keep them concise enough for the requested duration.
+- visual_kind must be exactly lowercase "card" or "veo".
 - Use at most ONE scene with visual_kind="veo"; all other scenes are controlled cards. For a physiological topic where motion materially improves understanding (for example blood flow, breathing, digestion, joint motion, or cardiac function), use exactly ONE generic Veo scene.
 - Do not use a talking doctor avatar or person generation.
 - Keep narration within the requested duration.
@@ -150,6 +155,56 @@ def _json_object(value: str) -> dict[str, Any]:
     if start < 0 or end < start:
         raise ValueError("Gemini did not return a JSON education video plan")
     return json.loads(text[start : end + 1])
+
+
+class EducationPlanValidationError(ValueError):
+    """Sanitized structured-output failure; never stores raw patient/model content."""
+
+    def __init__(self, validation_errors: list[dict[str, Any]]) -> None:
+        super().__init__("Gemini returned an education storyboard outside the structured HealthIA contract")
+        self.validation_errors = validation_errors
+
+
+def _normalize_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize harmless formatting variance without inventing clinical content."""
+    normalized = dict(payload)
+    if normalized.get("title") is not None:
+        normalized["title"] = str(normalized["title"]).strip()
+    if normalized.get("summary") is not None:
+        normalized["summary"] = str(normalized["summary"]).strip()
+    keys = normalized.get("patient_fact_keys")
+    if isinstance(keys, list):
+        normalized["patient_fact_keys"] = [str(key).strip() for key in keys if str(key).strip()]
+
+    raw_scenes = normalized.get("scenes")
+    if not isinstance(raw_scenes, list):
+        return normalized
+    scenes: list[dict[str, Any]] = []
+    for raw in raw_scenes[:8]:
+        if not isinstance(raw, dict):
+            continue
+        scene = dict(raw)
+        for field in ("heading", "body", "narration"):
+            if scene.get(field) is not None:
+                scene[field] = str(scene[field]).strip()
+        kind = str(scene.get("visual_kind") or "card").strip().lower()
+        scene["visual_kind"] = kind if kind in {"card", "veo"} else "card"
+        prompt = str(scene.get("veo_prompt") or "").strip()
+        scene["veo_prompt"] = prompt if scene["visual_kind"] == "veo" else ""
+        scenes.append(scene)
+    normalized["scenes"] = scenes
+    return normalized
+
+
+def _validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": str(item.get("type") or "validation_error"),
+            "loc": [str(part) for part in (item.get("loc") or ())],
+            "msg": str(item.get("msg") or "invalid structured field")[:240],
+        }
+        for item in exc.errors(include_url=False, include_input=False)[:12]
+    ]
 
 
 def _silent_narration(seconds: int) -> NarrationAudio:
@@ -233,10 +288,17 @@ class PatientEducationVideoRouter:
                 "max_output_tokens": min(int(self.cost_guard.max_output_tokens), 1400),
                 "thinking_level": "minimal",
                 "response_mime_type": "application/json",
+                "response_json_schema": EducationVideoPlan.model_json_schema(),
             },
             store=False,
         )
-        return EducationVideoPlan.model_validate(_json_object(str(getattr(interaction, "output_text", "") or "")))
+        payload = _normalize_plan_payload(
+            _json_object(str(getattr(interaction, "output_text", "") or ""))
+        )
+        try:
+            return EducationVideoPlan.model_validate(payload)
+        except ValidationError as exc:
+            raise EducationPlanValidationError(_validation_errors(exc)) from exc
 
     async def _plan(self, state: PatientState, topic: str, locale: str, duration_seconds: int, facts: list[EducationFact]) -> EducationVideoPlan:
         planner = self._planner or self._gemini_plan
@@ -380,7 +442,12 @@ class PatientEducationVideoRouter:
                 resource_type="health_mission",
                 resource_id=mission.id,
                 outcome="failed",
-                details={"error_type": type(exc).__name__, "locale": locale, "no_fake_video": True},
+                details={
+                    "error_type": type(exc).__name__,
+                    "locale": locale,
+                    "no_fake_video": True,
+                    "validation_errors": getattr(exc, "validation_errors", []),
+                },
             )
             return ChatResponse(
                 message=ChatMessage(
