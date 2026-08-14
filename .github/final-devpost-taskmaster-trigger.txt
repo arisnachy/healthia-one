@@ -1,6 +1,7 @@
-final-devpost-taskmaster-resilient-2026-08-14-attempt-2
+final-devpost-taskmaster-resilient-2026-08-14-attempt-3
 runner=streamlined-playwright
 cloud-memory=1Gi
 voice=gemini-2.5-pro-tts-charon
-healthia-explain=enabled
+healthia-explain=resilient-safe-recovery
 veo=3.1-fast
+firestore=transient-retry
