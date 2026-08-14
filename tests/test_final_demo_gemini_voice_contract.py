@@ -47,6 +47,17 @@ def test_final_demo_uses_one_sufficiently_detailed_adaptive_clinical_entry():
     assert "adapts to how much clinical detail is already present" in narration
 
 
+def test_healthia_explain_wait_is_rate_limit_safe():
+    recorder = (ROOT / "scripts" / "record_final_live_english_demo.py").read_text(encoding="utf-8")
+
+    assert 'if "HTTP 429" not in str(exc):' in recorder
+    assert "rate_limit_backoff_ms: int = 3000" in recorder
+    assert "page.wait_for_timeout(max(rate_limit_backoff_ms, poll_ms))" in recorder
+    assert "timeout_s=210.0" in recorder
+    assert "poll_ms=2000" in recorder
+    assert "rate_limit_backoff_ms=5000" in recorder
+
+
 def test_demo_narrator_splits_long_text_below_gemini_unary_limit():
     import importlib.util
 
