@@ -7,6 +7,7 @@ from healthia_one.education_video import (
     EducationPlanValidationError,
     PatientEducationVideoRouter,
     _education_system_instruction,
+    _google_response_schema,
     _normalize_plan_payload,
 )
 from healthia_one.education_video_models import EducationFact
@@ -102,6 +103,18 @@ def test_plan_normalizer_only_repairs_harmless_shape_variance():
     assert normalized["scenes"][0]["visual_kind"] == "card"
     assert normalized["scenes"][0]["veo_prompt"] == ""
     assert normalized["scenes"][2]["visual_kind"] == "veo"
+
+
+def test_google_response_schema_keeps_supported_structure_and_drops_unsupported_pydantic_keywords():
+    schema = _google_response_schema()
+    encoded = json.dumps(schema)
+    assert schema["properties"]["scenes"]["minItems"] == 3
+    assert schema["properties"]["scenes"]["maxItems"] == 8
+    assert "$defs" in schema
+    assert "default" not in encoded
+    assert "minLength" not in encoded
+    assert "maxLength" not in encoded
+
 
 
 @pytest.mark.asyncio

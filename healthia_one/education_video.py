@@ -198,6 +198,31 @@ def _validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
     ]
 
 
+_GOOGLE_JSON_SCHEMA_KEYS = {
+    "$id", "$defs", "$ref", "$anchor", "type", "format", "title", "description",
+    "enum", "items", "prefixItems", "minItems", "maxItems", "minimum", "maximum",
+    "anyOf", "oneOf", "properties", "additionalProperties", "required",
+}
+
+
+def _google_response_schema() -> dict[str, Any]:
+    """Return only JSON Schema keywords documented by Google Gen AI structured output."""
+    def clean(value: Any, parent_key: str = "") -> Any:
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if parent_key in {"properties", "$defs"}:
+            return {str(name): clean(schema) for name, schema in value.items()}
+        return {
+            key: clean(item, key)
+            for key, item in value.items()
+            if key in _GOOGLE_JSON_SCHEMA_KEYS
+        }
+
+    return clean(EducationVideoPlan.model_json_schema())
+
+
 def _silent_narration(seconds: int) -> NarrationAudio:
     """Safe visual-only fallback when private TTS is unavailable."""
     sample_rate = 8000
@@ -279,7 +304,7 @@ class PatientEducationVideoRouter:
                 "max_output_tokens": min(int(self.cost_guard.max_output_tokens), 1400),
                 "thinking_level": "minimal",
                 "response_mime_type": "application/json",
-                "response_json_schema": EducationVideoPlan.model_json_schema(),
+                "response_json_schema": _google_response_schema(),
             },
             store=False,
         )
