@@ -1,0 +1,64 @@
+name: One-shot LAB login contract refresh
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/lab-login-refresh-trigger.txt
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-lab-login-contract-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+          fetch-depth: 0
+
+      - name: Enforce one-shot marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="$(tr -d '\r\n' < .github/lab-login-refresh-trigger.txt)"
+          test "$marker" = "REFRESH_LAB_LOGIN_CONTRACT_20260813"
+
+      - name: Refresh semantic login probe and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/lab_omega.py')
+          text = path.read_text(encoding='utf-8')
+          old_probe = '''    require(page.locator("html").get_attribute("lang") == expected_lang, f"{locale} html lang mismatch")\n    require(fragment.lower() in page.locator(".auth-brand h1").inner_text().lower(), f"{locale} login copy mismatch")\n    report["checks"][f"login_locale_{expected_lang}"] = "pass"'''
+          new_probe = '''    require(page.locator("html").get_attribute("lang") == expected_lang, f"{locale} html lang mismatch")\n    brand = page.locator(".brand-wordmark").inner_text()\n    require("healthia one" in brand.lower(), f"{locale} HealthIA ONE brand mismatch")\n    hero = page.locator('[data-i18n="auth.hero"]').inner_text()\n    require(fragment.lower() in hero.lower(), f"{locale} login hero copy mismatch")\n    report["checks"][f"login_locale_{expected_lang}"] = "pass"\n    report["checks"][f"login_brand_{expected_lang}"] = "pass"'''
+          if text.count(old_probe) != 1:
+              raise SystemExit('Expected exactly one legacy login probe block')
+          text = text.replace(old_probe, new_probe)
+          replacements = {
+              'login_language_probe(browser, base_url, "en-US", "en", "Your health should remember you", report)':
+                  'login_language_probe(browser, base_url, "en-US", "en", "Your health continues", report)',
+              'login_language_probe(browser, base_url, "es-DO", "es", "Tu salud debería recordarte", report)':
+                  'login_language_probe(browser, base_url, "es-DO", "es", "Tu salud continúa", report)',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'Expected exactly one legacy call: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -f .github/lab-login-refresh-trigger.txt .github/workflows/refresh-lab-login-contract.yml
+          git config user.name "HealthIA ONE CI"
+          git config user.email "127772990+arisnachy@users.noreply.github.com"
+          git add scripts/lab_omega.py .github
+          git commit -m "Align LAB OMEGA with approved HealthIA ONE login"
+          git push origin HEAD:feature/patient-education-video-20260813
