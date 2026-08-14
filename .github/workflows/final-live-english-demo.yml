@@ -16,6 +16,11 @@ on:
       - "tests/test_human_chat_health_os.py"
       - "tests/test_conversation_brain.py"
       - "tests/test_result_ai_locale.py"
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - ".github/final-live-demo-trigger.txt"
   workflow_dispatch:
 
 permissions:
@@ -92,7 +97,7 @@ jobs:
             --cpu 1 \
             --memory 512Mi \
             --timeout 600 \
-            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=24,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_GCS_BUCKET=${BUCKET_NAME},HEALTHIA_EDUCATION_MEDIA_ENABLED=true,HEALTHIA_EDUCATION_TTS_MODEL=gemini-2.5-pro-tts,HEALTHIA_EDUCATION_TTS_VOICE=Charon,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=24,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_GCS_BUCKET=${BUCKET_NAME},HEALTHIA_EDUCATION_MEDIA_ENABLED=true,HEALTHIA_EDUCATION_TTS_MODEL=gemini-2.5-pro-tts,HEALTHIA_EDUCATION_TTS_VOICE=Charon,HEALTHIA_EDUCATION_VEO_ENABLED=true,HEALTHIA_EDUCATION_VEO_MODEL=veo-3.1-fast-generate-001,HEALTHIA_EDUCATION_VEO_WAIT_SECONDS=90,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
             --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" \
             --no-allow-unauthenticated \
             --quiet
@@ -237,6 +242,9 @@ jobs:
               'explicit_current_topic_overrides_stale_context',
               'assistant_mission_link_matches_persisted_taskmaster',
               'taskmaster_mission_completed_from_persisted_evidence',
+              'healthia_explain_private_video_completed',
+              'healthia_explain_gemini_tts_narration',
+              'healthia_explain_video_playback',
               'logout_login_durable_continuity',
               'visible_exact_candidate_cloud_proof',
               'zero_browser_console_or_page_errors',
