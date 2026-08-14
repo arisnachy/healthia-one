@@ -38,8 +38,40 @@ class FakeClient:
         self.interactions = FakeInteractions(payload)
 
 
+class DummyMedia:
+    async def synthesize(self, **_kwargs):
+        raise AssertionError("planner-only test must not synthesize media")
+
+    async def maybe_generate_veo_clip(self, **_kwargs):
+        raise AssertionError("planner-only test must not generate Veo")
+
+
+class DummyRenderer:
+    def render(self, **_kwargs):
+        raise AssertionError("planner-only test must not render media")
+
+
+class DummyStore:
+    async def persist(self, **_kwargs):
+        raise AssertionError("planner-only test must not persist media")
+
+
 def live_settings():
     return SimpleNamespace(llm_backend="gemini_api", adk_ready=True, model="gemini-3.5-flash")
+
+
+def planner_router(payload, guard=None):
+    client = FakeClient(payload)
+    guard = guard or FakeCostGuard()
+    router = PatientEducationVideoRouter(
+        live_settings(),
+        client_provider=lambda: client,
+        cost_guard=guard,
+        media_provider=DummyMedia(),
+        renderer=DummyRenderer(),
+        media_store=DummyStore(),
+    )
+    return router, client, guard
 
 
 def valid_payload():
@@ -72,9 +104,8 @@ def test_plan_normalizer_only_repairs_harmless_shape_variance():
 
 @pytest.mark.asyncio
 async def test_gemini_plan_uses_pydantic_json_schema_and_accepts_safe_normalization():
-    client = FakeClient(valid_payload())
     guard = FakeCostGuard()
-    router = PatientEducationVideoRouter(live_settings(), client_provider=lambda: client, cost_guard=guard)
+    router, client, guard = planner_router(valid_payload(), guard)
     state = PatientState()
     facts = [EducationFact(key="result_glucose", label="Glucose", value="103 mg/dL", source_id="result_glucose", source_type="health_result")]
     plan = await router._gemini_plan(state, "glucose", "en", 60, facts)
@@ -91,8 +122,7 @@ async def test_gemini_plan_uses_pydantic_json_schema_and_accepts_safe_normalizat
 async def test_invalid_short_storyboard_fails_with_sanitized_validation_metadata():
     payload = valid_payload()
     payload["scenes"] = payload["scenes"][:1]
-    client = FakeClient(payload)
-    router = PatientEducationVideoRouter(live_settings(), client_provider=lambda: client, cost_guard=FakeCostGuard())
+    router, _, _ = planner_router(payload)
     with pytest.raises(EducationPlanValidationError) as raised:
         await router._gemini_plan(PatientState(), "glucose", "en", 60, [])
     assert raised.value.validation_errors
