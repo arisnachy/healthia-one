@@ -1,0 +1,113 @@
+name: Repair HealthIA Explain ValueError
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - ".github/workflows/repair-healthia-explain-valueerror.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Patch safe recovery and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          models = Path('healthia_one/education_video_models.py')
+          text = models.read_text(encoding='utf-8')
+
+          old = '''def validate_plan(plan: EducationVideoPlan, facts: list[EducationFact], patient_name: str) -> EducationVideoPlan:\n    allowed = {item.key for item in facts}\n    if any(key not in allowed for key in plan.patient_fact_keys):\n        raise ValueError("Education plan referenced a patient fact outside the authorized evidence set")\n    private_tokens = {normalize(patient_name)} if patient_name else set()\n    private_tokens.update(normalize(item.value) for item in facts if item.value)\n    veo_count = 0\n    for scene in plan.scenes:\n        combined = normalize(f"{scene.heading} {scene.body} {scene.narration}")\n        if any(re.search(pattern, combined) for pattern in MEDICATION_CHANGE_PATTERNS):\n            raise ValueError("Education plan crossed the medication-change safety boundary")\n        if scene.visual_kind == "veo":\n            veo_count += 1\n            prompt = normalize(scene.veo_prompt)\n            if not prompt:\n                raise ValueError("Veo scene requires a generic prompt")\n            if any(token and token in prompt for token in private_tokens):\n                raise ValueError("Patient-specific information must never be sent to Veo")\n            if re.search(r"\\b\\d+(?:[./-]\\d+)*\\b", prompt):\n                raise ValueError("Exact numbers are not allowed in Veo education prompts")\n    if veo_count > 1:\n        raise ValueError("HealthIA Explain allows at most one Veo scene per video")\n    return plan\n'''
+
+          new = '''_SAFE_MEDICATION_CHANGE_CONTEXTS = (\n    r"\\b(?:do not|don't|should not|never)\\s+(?:stop taking|increase|decrease|double|change your dose)\\b",\n    r"\\b(?:no|nunca)\\s+(?:suspendas?|dejes de tomar|aumentes?|reduzcas?|dupliques?)\\b",\n    r"\\b(?:nao|não|nunca)\\s+(?:pare de tomar|aumente|reduza|duplique|mude a dose)\\b",\n    r"\\b(?:ne|jamais)\\s+(?:arretez|augmentez|reduisez|doublez)\\b",\n)\n\n\ndef _crosses_medication_change_boundary(value: str) -> bool:\n    \"\"\"Reject treatment-changing instructions while allowing explicit safety negations.\"\"\"\n    combined = normalize(value)\n    scrubbed = combined\n    for pattern in _SAFE_MEDICATION_CHANGE_CONTEXTS:\n        scrubbed = re.sub(pattern, " ", scrubbed)\n    return any(re.search(pattern, scrubbed) for pattern in MEDICATION_CHANGE_PATTERNS)\n\n\ndef harden_plan_for_delivery(\n    plan: EducationVideoPlan,\n    facts: list[EducationFact],\n    patient_name: str,\n) -> EducationVideoPlan:\n    \"\"\"Deterministically enforce privacy boundaries without inventing clinical content.\n\n    Recoverable model variance is converted to the safer representation:\n    unauthorized fact references are removed and unsafe/additional Veo scenes\n    become controlled cards. Treatment-changing language remains a hard stop.\n    \"\"\"\n    safe = plan.model_copy(deep=True)\n    allowed = {item.key for item in facts}\n    safe.patient_fact_keys = [key for key in safe.patient_fact_keys if key in allowed]\n\n    private_tokens = {normalize(patient_name)} if patient_name else set()\n    private_tokens.update(normalize(item.value) for item in facts if item.value)\n    veo_used = False\n    for scene in safe.scenes:\n        if scene.visual_kind != "veo":\n            scene.veo_prompt = ""\n            continue\n        prompt = normalize(scene.veo_prompt)\n        unsafe_prompt = (\n            not prompt\n            or veo_used\n            or any(token and token in prompt for token in private_tokens)\n            or bool(re.search(r"\\b\\d+(?:[./-]\\d+)*\\b", prompt))\n        )\n        if unsafe_prompt:\n            scene.visual_kind = "card"\n            scene.veo_prompt = ""\n            continue\n        veo_used = True\n    return safe\n\n\ndef validate_plan(plan: EducationVideoPlan, facts: list[EducationFact], patient_name: str) -> EducationVideoPlan:\n    allowed = {item.key for item in facts}\n    if any(key not in allowed for key in plan.patient_fact_keys):\n        raise ValueError("Education plan referenced a patient fact outside the authorized evidence set")\n    private_tokens = {normalize(patient_name)} if patient_name else set()\n    private_tokens.update(normalize(item.value) for item in facts if item.value)\n    veo_count = 0\n    for scene in plan.scenes:\n        combined = normalize(f"{scene.heading} {scene.body} {scene.narration}")\n        if _crosses_medication_change_boundary(combined):\n            raise ValueError("Education plan crossed the medication-change safety boundary")\n        if scene.visual_kind == "veo":\n            veo_count += 1\n            prompt = normalize(scene.veo_prompt)\n            if not prompt:\n                raise ValueError("Veo scene requires a generic prompt")\n            if any(token and token in prompt for token in private_tokens):\n                raise ValueError("Patient-specific information must never be sent to Veo")\n            if re.search(r"\\b\\d+(?:[./-]\\d+)*\\b", prompt):\n                raise ValueError("Exact numbers are not allowed in Veo education prompts")\n    if veo_count > 1:\n        raise ValueError("HealthIA Explain allows at most one Veo scene per video")\n    return plan\n'''
+          if old not in text:
+              raise SystemExit('validate_plan block not found')
+          models.write_text(text.replace(old, new), encoding='utf-8')
+
+          router = Path('healthia_one/education_video.py')
+          text = router.read_text(encoding='utf-8')
+          old_import = '''    compose_narration,\n    is_acceptance,'''
+          new_import = '''    compose_narration,\n    harden_plan_for_delivery,\n    is_acceptance,'''
+          if old_import not in text:
+              raise SystemExit('router import anchor not found')
+          text = text.replace(old_import, new_import, 1)
+
+          old_plan = '''    async def _plan(self, state: PatientState, topic: str, locale: str, duration_seconds: int, facts: list[EducationFact]) -> EducationVideoPlan:\n        planner = self._planner or self._gemini_plan\n        plan = await planner(state, topic, locale, duration_seconds, facts)\n        return validate_plan(plan, facts, state.profile.display_name)\n'''
+          new_plan = '''    async def _plan(self, state: PatientState, topic: str, locale: str, duration_seconds: int, facts: list[EducationFact]) -> EducationVideoPlan:\n        planner = self._planner or self._gemini_plan\n        attempts = 1 if self._planner is not None else 2\n        last_error: Exception | None = None\n        for attempt in range(attempts):\n            try:\n                plan = await planner(state, topic, locale, duration_seconds, facts)\n                plan = harden_plan_for_delivery(plan, facts, state.profile.display_name)\n                return validate_plan(plan, facts, state.profile.display_name)\n            except (ValueError, ValidationError) as exc:\n                last_error = exc\n                if attempt + 1 >= attempts:\n                    raise\n                audit(\n                    state,\n                    actor="healthia",\n                    action="retry_patient_education_video_plan",\n                    resource_type="patient_education_video",\n                    resource_id=state.profile.id,\n                    details={"attempt": attempt + 2, "error_type": type(exc).__name__, "safe_retry": True},\n                )\n        assert last_error is not None\n        raise last_error\n'''
+          if old_plan not in text:
+              raise SystemExit('router _plan block not found')
+          router.write_text(text.replace(old_plan, new_plan), encoding='utf-8')
+
+          tests = Path('tests/test_education_video_core.py')
+          text = tests.read_text(encoding='utf-8')
+          text = text.replace(
+              'from healthia_one.education_video_models import EducationScene, EducationVideoPlan, collect_topic_facts, validate_plan',
+              'from healthia_one.education_video_models import EducationScene, EducationVideoPlan, collect_topic_facts, harden_plan_for_delivery, validate_plan',
+              1,
+          )
+          addition = r'''
+
+
+def test_delivery_hardening_downgrades_unsafe_veo_and_filters_unknown_fact_keys():
+    state = patient_state()
+    facts = collect_topic_facts(state, "hipertensión")
+    plan = EducationVideoPlan(
+        title="Presión",
+        patient_fact_keys=[facts[0].key, "not_authorized"],
+        scenes=[
+            EducationScene(heading="Visual", body="General", narration="General", visual_kind="veo", veo_prompt="Show blood pressure 148/92 inside an artery"),
+            EducationScene(heading="Segundo visual", body="General", narration="General", visual_kind="veo", veo_prompt="Generic arterial blood flow with no labels"),
+            EducationScene(heading="Tres", body="Contenido seguro", narration="Contenido seguro"),
+        ],
+    )
+    hardened = harden_plan_for_delivery(plan, facts, state.profile.display_name)
+    assert hardened.patient_fact_keys == [facts[0].key]
+    assert hardened.scenes[0].visual_kind == "card"
+    assert hardened.scenes[0].veo_prompt == ""
+    assert sum(scene.visual_kind == "veo" for scene in hardened.scenes) <= 1
+    validate_plan(hardened, facts, state.profile.display_name)
+
+
+def test_medication_safety_negation_is_allowed_but_real_change_instruction_is_rejected():
+    state = patient_state()
+    facts = collect_topic_facts(state, "hipertensión")
+    safe = EducationVideoPlan(title="Safety", scenes=[
+        EducationScene(heading="One", body="Do not change your dose based on this video.", narration="Do not change your dose based on this video."),
+        EducationScene(heading="Two", body="Keep your follow-up.", narration="Keep your follow-up."),
+        EducationScene(heading="Three", body="Prepare questions.", narration="Prepare questions."),
+    ])
+    validate_plan(safe, facts, state.profile.display_name)
+
+    unsafe = safe.model_copy(deep=True)
+    unsafe.scenes[0].body = "Increase your dose today."
+    unsafe.scenes[0].narration = "Increase your dose today."
+    with pytest.raises(ValueError):
+        validate_plan(unsafe, facts, state.profile.display_name)
+'''
+          if 'test_delivery_hardening_downgrades_unsafe_veo' not in text:
+              text += addition
+          tests.write_text(text, encoding='utf-8')
+          PY
+
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+          pytest -q tests/test_education_video_core.py tests/test_education_renderer_smoke.py
+
+          git config user.name "healthia-repair-bot"
+          git config user.email "healthia-repair-bot@users.noreply.github.com"
+          git add healthia_one/education_video.py healthia_one/education_video_models.py tests/test_education_video_core.py
+          git commit -m "Harden HealthIA Explain plan recovery"
+          git push origin HEAD:feature/patient-education-video-20260813
