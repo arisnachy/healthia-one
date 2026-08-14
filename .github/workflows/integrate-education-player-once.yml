@@ -18,12 +18,15 @@ jobs:
         with:
           ref: feature/patient-education-video-20260813
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Enforce marker and patch player
         shell: bash
         run: |
           set -euo pipefail
-          test "$(tr -d '\r\n' < .github/integrate-education-player-trigger.txt)" = "INTEGRATE_HEALTHIA_EXPLAIN_PLAYER_20260813_V2"
+          test "$(tr -d '\r\n' < .github/integrate-education-player-trigger.txt)" = "INTEGRATE_HEALTHIA_EXPLAIN_PLAYER_20260813_V3"
           python scripts/patch_healthia_explain_player_once.py
 
       - name: Validate frontend player
@@ -32,7 +35,8 @@ jobs:
           set -euo pipefail
           node --check web/app.js
           node --check web/auth.js
-          python -m pip install --quiet -e '.[test]'
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
           pytest -q tests/test_education_video_frontend.py tests/test_ui_locale_packs.py tests/test_education_video_core.py tests/test_education_renderer_smoke.py
 
       - name: Self-clean and commit
