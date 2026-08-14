@@ -228,7 +228,7 @@ def run() -> dict:
         checkpoint(report)
 
         before = latest_assistant_message(page)
-        send_chat(page, "Since yesterday the burning when I urinate is 6 out of 10. I also have lower abdominal pain and the urinary frequency is getting worse. I want to discuss this health problem. Please ask me the missing clinical questions one at a time.")
+        send_chat(page, "I have had burning with urination since yesterday, severity 6 out of 10, lower abdominal pain, and worsening urinary frequency. I want to discuss a health problem. Please start a clinical interview and ask the missing clinical questions one at a time.")
         dynamic_statuses = {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}
         assistant_id, status = wait_for_dynamic_or_orientation(page, str(before.get("id") or ""), timeout_s=95.0)
         require(status in dynamic_statuses, f"sufficiently detailed clinical request did not start dynamic questions: {status}")
