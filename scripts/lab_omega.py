@@ -79,7 +79,7 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
     configure_page(page, report)
     page.goto(f"{base_url}/login", wait_until="networkidle")
     require(page.locator("html").get_attribute("lang") == expected_lang, f"{locale} html lang mismatch")
-    brand = page.locator(".brand-wordmark").inner_text()
+    brand = page.locator(".auth-wordmark").inner_text()
     require("healthia one" in brand.lower(), f"{locale} HealthIA ONE brand mismatch")
     hero = page.locator('[data-i18n="auth.hero"]').inner_text()
     require(fragment.lower() in hero.lower(), f"{locale} login hero copy mismatch")
