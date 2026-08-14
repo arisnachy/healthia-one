@@ -2,10 +2,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "final-devpost-taskmaster-demo.yml"
 
 
 def test_final_demo_uses_only_approved_gemini_male_voice():
-    workflow = (ROOT / ".github" / "workflows" / "final-live-english-demo.yml").read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
     narration = (ROOT / "docs" / "FINAL_DEMO_NARRATION_EN.txt").read_text(encoding="utf-8")
     narrator = (ROOT / "scripts" / "synthesize_gemini_demo_narration.py").read_text(encoding="utf-8")
 
@@ -29,22 +30,35 @@ def test_final_demo_uses_only_approved_gemini_male_voice():
     assert "warm adult male voice" in narrator
 
 
-def test_final_demo_uses_one_sufficiently_detailed_adaptive_clinical_entry():
-    workflow = (ROOT / ".github" / "workflows" / "final-live-english-demo.yml").read_text(encoding="utf-8")
+def test_final_demo_focuses_on_taskmaster_evidence_to_outcome_path():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
     recorder = (ROOT / "scripts" / "record_final_live_english_demo.py").read_text(encoding="utf-8")
     narration = (ROOT / "docs" / "FINAL_DEMO_NARRATION_EN.txt").read_text(encoding="utf-8")
 
-    assert "adaptive_clinical_workflow_started" in workflow
-    assert "adaptive_clinical_workflow_started" in recorder
-    assert "human_first_conversation_before_structured_intake" not in workflow
-    assert "human_first_conversation_before_structured_intake" not in recorder
-    assert 'report["adaptive_entry_mode"] = "sufficient_detail_first_turn"' in recorder
-    assert "Please start a clinical interview and ask the missing clinical questions one at a time." in recorder
-    assert "I want to discuss this health problem" not in recorder
-    assert "timeout_s=95.0" in recorder
-    assert "dynamic_clinical_questions" in recorder
-    assert "dynamic_clinical_followup_questions" in recorder
-    assert "adapts to how much clinical detail is already present" in narration
+    assert "results_workspace_opened" in workflow
+    assert "results_workspace_opened" in recorder
+    assert "adaptive_clinical_workflow_started" not in workflow
+    assert "one_question_at_a_time_five_question_contract" not in workflow
+    assert "Please start a clinical interview" not in recorder
+    assert ".main-nav [data-open=\"results\"]" in recorder
+    assert "original bytes first" in narration
+    assert "durable, evidence-backed outcome" in narration
+    assert "Google ADK available for bounded agent execution" in narration
+
+
+def test_final_demo_requires_private_healthia_explain_outcome():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    recorder = (ROOT / "scripts" / "record_final_live_english_demo.py").read_text(encoding="utf-8")
+
+    for marker in (
+        "healthia_explain_private_video_completed",
+        "healthia_explain_gemini_tts_narration",
+        "healthia_explain_video_playback",
+    ):
+        assert marker in workflow
+        assert marker in recorder
+    assert "video.get('private') is not True" in workflow
+    assert "video.get('narration_status') != 'gemini_tts'" in workflow
 
 
 def test_healthia_explain_wait_is_rate_limit_safe():
