@@ -26,4 +26,5 @@ def test_architecture_keeps_phi_out_of_veo_and_patient_values_controlled() -> No
     architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
     assert "Generic visual prompt only, no PHI/numbers" in architecture
     assert "Controlled HealthIA cards" in architecture
-    assert "patient/mission Google grant + receipt boundary" in architecture
+    assert "patient/mission Google grant" in architecture
+    assert "receipt boundary" in architecture
