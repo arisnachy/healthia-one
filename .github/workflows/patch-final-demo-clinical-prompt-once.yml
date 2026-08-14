@@ -1,0 +1,40 @@
+name: Patch final demo clinical prompt once
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/workflows/patch-final-demo-clinical-prompt-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+          fetch-depth: 0
+
+      - name: Remove ambiguous longitudinal pronouns from clinical demo prompt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/record_final_live_english_demo.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'Since yesterday the burning when I urinate is 6 out of 10. I also have lower abdominal pain and the urinary frequency is getting worse. I want to discuss this health problem. Please ask me the missing clinical questions one at a time.'
+          new = 'I have had burning with urination since yesterday, severity 6 out of 10, lower abdominal pain, and worsening urinary frequency. I want to discuss a health problem. Please start a clinical interview and ask the missing clinical questions one at a time.'
+          if old not in text:
+              raise SystemExit('expected clinical demo prompt not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git config user.name "healthia-one-maintenance"
+          git config user.email "127772990+arisnachy@users.noreply.github.com"
+          git add scripts/record_final_live_english_demo.py
+          git commit -m "Avoid ambiguous references in final clinical demo"
+          git push origin HEAD:feature/patient-education-video-20260813
