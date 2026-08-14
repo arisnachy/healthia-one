@@ -59,7 +59,7 @@
     const lang = locale();
     if (loginCopy[lang]) return loginCopy[lang];
     return {
-      kicker: t("auth.login.kicker"), hero: t("auth.hero"), heroBody: t("auth.login.hero_body"),
+      kicker: t("auth.login.kicker"), hero: t("auth.login.preview_sub"), heroBody: t("auth.login.hero_body"),
       previewHello: t("auth.login.preview_hello"), previewSub: t("auth.login.preview_sub"),
       missionLabel: t("auth.login.mission_label"), missionValue: t("auth.login.mission_value"),
       evidenceLabel: t("auth.login.evidence_label"), evidenceValue: t("auth.login.evidence_value"),

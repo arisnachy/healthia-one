@@ -89,6 +89,72 @@ function timeLabel(value) {
   return Number.isNaN(date.getTime()) ? tr("app.now") : new Intl.DateTimeFormat(localeTag(), {hour:"2-digit", minute:"2-digit"}).format(date);
 }
 
+function educationVideoRecord(message) {
+  const record = message?.metadata?.education_video;
+  return record && typeof record === "object" ? record : null;
+}
+
+function educationVisibleMessage(message) {
+  const record = educationVideoRecord(message);
+  if (!record || record.status !== "completed") return message.content;
+  return String(message.content || "")
+    .replace(/\n*\[▶[^\]]*\]\(\/api\/education\/videos\/[^)]+\)\n*/g, "\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function appendEducationControls(message, content) {
+  const metadata = message?.metadata || {};
+  const offer = metadata.education_video_offer;
+  const action = metadata.ui_action;
+  if (offer && action?.type === "offer_education_video") {
+    const offerCard = document.createElement("div");
+    offerCard.className = "education-video-offer";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "education-video-create";
+    button.textContent = action.label || action.label_en || "Create video";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try { await sendMessage("yes"); }
+      finally { button.disabled = false; }
+    });
+    offerCard.append(button);
+    content.append(offerCard);
+  }
+
+  const record = educationVideoRecord(message);
+  if (!record || record.status !== "completed" || !record.url) return;
+  const card = document.createElement("section");
+  card.className = "education-video-card";
+  const heading = document.createElement("div");
+  heading.className = "education-video-heading";
+  const eyebrow = document.createElement("span");
+  eyebrow.textContent = "HealthIA Explain";
+  const title = document.createElement("strong");
+  title.textContent = record.title || record.topic || "HealthIA Explain";
+  heading.append(eyebrow, title);
+
+  const video = document.createElement("video");
+  video.controls = true;
+  video.playsInline = true;
+  video.preload = "metadata";
+  video.src = record.url;
+  video.setAttribute("aria-label", title.textContent);
+
+  const fallback = document.createElement("a");
+  fallback.className = "education-video-open";
+  fallback.href = record.url;
+  fallback.target = "_blank";
+  fallback.rel = "noopener";
+  fallback.textContent = action?.label || action?.label_en || "Open video";
+  fallback.hidden = true;
+  video.addEventListener("error", () => { fallback.hidden = false; }, {once:true});
+
+  card.append(heading, video, fallback);
+  content.append(card);
+}
+
 function showToast(message) {
   refs.toast.textContent = message;
   refs.toast.hidden = false;
@@ -120,10 +186,11 @@ function renderMessage(message) {
   const content = document.createElement("div");
   content.className = "message-content";
   if (message.role !== "patient") {
-    content.innerHTML = `<div class="message-head"><strong>${escapeHtml(publicName(message.author))}</strong><span>${timeLabel(message.created_at)}</span></div><div class="message-body">${renderMarkdown(message.content)}</div>`;
+    content.innerHTML = `<div class="message-head"><strong>${escapeHtml(publicName(message.author))}</strong><span>${timeLabel(message.created_at)}</span></div><div class="message-body">${renderMarkdown(educationVisibleMessage(message))}</div>`;
   } else {
     content.innerHTML = `<div class="message-body">${renderMarkdown(message.content)}</div>`;
   }
+  appendEducationControls(message, content);
   if (message.agent_plan?.length) {
     const details = document.createElement("details");
     details.className = "agent-plan";
