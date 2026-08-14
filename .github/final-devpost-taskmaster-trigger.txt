@@ -1,0 +1,5 @@
+final-devpost-taskmaster-resilient-2026-08-14
+candidate=fe490c3e97d1b114cc426e790a9db6d46b03cdbe
+voice=gemini-2.5-pro-tts-charon
+healthia-explain=enabled
+veo=3.1-fast
