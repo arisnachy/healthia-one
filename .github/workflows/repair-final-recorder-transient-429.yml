@@ -1,0 +1,60 @@
+name: Repair final recorder transient bootstrap 429
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - ".github/workflows/repair-final-recorder-transient-429.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+      - name: Extend scoped bootstrap recovery to rate limits
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/record_final_live_english_demo.py')
+          text = path.read_text(encoding='utf-8')
+
+          text = text.replace(
+              '''            if response.status >= 500\n            else None,\n''',
+              '''            if response.status == 429 or response.status >= 500\n            else None,\n''',
+              1,
+          )
+          text = text.replace(
+              '''        allowed_bootstrap_500s = [\n            item\n            for item in explain_http_errors\n            if item.get("status") == 500\n            and str(item.get("url") or "").split("?", 1)[0].endswith("/api/bootstrap")\n        ]\n        unexpected_explain_http = [item for item in explain_http_errors if item not in allowed_bootstrap_500s]\n        require(not unexpected_explain_http, f"unexpected HealthIA Explain HTTP server errors: {unexpected_explain_http}")\n        require(len(allowed_bootstrap_500s) <= 3, f"too many transient bootstrap 500s: {allowed_bootstrap_500s}")\n\n        explain_console_errors = console_errors[explain_console_start:]\n        known_console_500 = "Failed to load resource: the server responded with a status of 500 ()"\n        known_console_500_count = sum(item == known_console_500 for item in explain_console_errors)\n        unexpected_explain_console = [item for item in explain_console_errors if item != known_console_500]\n        require(not unexpected_explain_console, f"unexpected HealthIA Explain console errors: {unexpected_explain_console}")\n        require(\n            known_console_500_count <= len(allowed_bootstrap_500s),\n            "console reported a 500 without a matching recovered /api/bootstrap response",\n        )\n        if allowed_bootstrap_500s:\n            report["recovered_transient_bootstrap_500s"] = len(allowed_bootstrap_500s)\n            report["checks"].append("bounded_transient_bootstrap_500_recovered")\n''',
+              '''        allowed_bootstrap_transients = [\n            item\n            for item in explain_http_errors\n            if item.get("status") in {429, 500}\n            and str(item.get("url") or "").split("?", 1)[0].endswith("/api/bootstrap")\n        ]\n        unexpected_explain_http = [item for item in explain_http_errors if item not in allowed_bootstrap_transients]\n        require(not unexpected_explain_http, f"unexpected HealthIA Explain HTTP errors: {unexpected_explain_http}")\n        require(len(allowed_bootstrap_transients) <= 6, f"too many transient bootstrap responses: {allowed_bootstrap_transients}")\n\n        explain_console_errors = console_errors[explain_console_start:]\n        console_message_by_status = {\n            429: "Failed to load resource: the server responded with a status of 429 ()",\n            500: "Failed to load resource: the server responded with a status of 500 ()",\n        }\n        expected_console_messages = set(console_message_by_status.values())\n        unexpected_explain_console = [item for item in explain_console_errors if item not in expected_console_messages]\n        require(not unexpected_explain_console, f"unexpected HealthIA Explain console errors: {unexpected_explain_console}")\n        for status, message in console_message_by_status.items():\n            console_count = sum(item == message for item in explain_console_errors)\n            response_count = sum(item.get("status") == status for item in allowed_bootstrap_transients)\n            require(\n                console_count <= response_count,\n                f"console reported HTTP {status} without a matching recovered /api/bootstrap response",\n            )\n        if allowed_bootstrap_transients:\n            recovered_counts = {\n                str(status): sum(item.get("status") == status for item in allowed_bootstrap_transients)\n                for status in (429, 500)\n                if any(item.get("status") == status for item in allowed_bootstrap_transients)\n            }\n            report["recovered_transient_bootstrap_responses"] = recovered_counts\n            report["checks"].append("bounded_transient_bootstrap_recovery")\n''',
+              1,
+          )
+
+          if 'allowed_bootstrap_500s' in text:
+              raise SystemExit('old 500-only recovery block still present')
+          if 'response.status == 429 or response.status >= 500' not in text:
+              raise SystemExit('429 response tracking not installed')
+          path.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_final_demo_gemini_voice_contract.py')
+          test_text = test.read_text(encoding='utf-8')
+          old = '''    assert 'response.status >= 500' in recorder\n    assert 'endswith("/api/bootstrap")' in recorder\n    assert 'len(allowed_bootstrap_500s) <= 3' in recorder\n    assert 'bounded_transient_bootstrap_500_recovered' in recorder\n    assert 'unexpected HealthIA Explain HTTP server errors' in recorder\n    assert 'browser HTTP server errors' in recorder\n    assert 'console reported a 500 without a matching recovered /api/bootstrap response' in recorder\n'''
+          new = '''    assert 'response.status == 429 or response.status >= 500' in recorder\n    assert 'endswith("/api/bootstrap")' in recorder\n    assert 'item.get("status") in {429, 500}' in recorder\n    assert 'len(allowed_bootstrap_transients) <= 6' in recorder\n    assert 'bounded_transient_bootstrap_recovery' in recorder\n    assert 'unexpected HealthIA Explain HTTP errors' in recorder\n    assert 'browser HTTP server errors' in recorder\n    assert 'without a matching recovered /api/bootstrap response' in recorder\n'''
+          if old not in test_text:
+              raise SystemExit('old transient recovery test contract missing')
+          test.write_text(test_text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          git config user.name "healthia-recorder-bot"
+          git config user.email "healthia-recorder-bot@users.noreply.github.com"
+          git add scripts/record_final_live_english_demo.py tests/test_final_demo_gemini_voice_contract.py
+          git commit -m "Scope recovered bootstrap rate limits in final recorder"
+          git push origin HEAD:feature/patient-education-video-20260813
