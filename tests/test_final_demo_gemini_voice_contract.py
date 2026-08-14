@@ -61,10 +61,11 @@ def test_final_demo_requires_private_healthia_explain_outcome():
     assert "video.get('narration_status') != 'gemini_tts'" in workflow
 
 
-def test_healthia_explain_wait_is_rate_limit_safe():
+def test_healthia_explain_wait_is_rate_limit_and_transient_error_safe():
     recorder = (ROOT / "scripts" / "record_final_live_english_demo.py").read_text(encoding="utf-8")
 
-    assert 'if "HTTP 429" not in str(exc):' in recorder
+    assert 'error_text = str(exc)' in recorder
+    assert '"HTTP 429" not in error_text and "HTTP 500" not in error_text' in recorder
     assert "rate_limit_backoff_ms: int = 3000" in recorder
     assert "page.wait_for_timeout(max(rate_limit_backoff_ms, poll_ms))" in recorder
     assert "timeout_s=210.0" in recorder
