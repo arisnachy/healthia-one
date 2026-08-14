@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import io
 import os
+import re
 import time
+import wave
 from datetime import timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -13,9 +16,88 @@ from healthia_one.education_video_models import NarrationAudio
 from healthia_one.google_constellation import GoogleAction, GoogleActionRequest, GoogleGrant, GoogleService, GrantBundle
 from healthia_one.google_constellation_singleton import get_google_constellation_service
 from healthia_one.google_constellation_store import GoogleActionAuthorization, build_action_intent_key, utc_now
+from healthia_one.language import LANGUAGE_NAMES, normalize_locale, tts_locale
 
 
 _TRUE = {"1", "true", "yes", "on"}
+
+
+_TTS_STYLE: dict[str, str] = {
+    "es": "Narra en español latinoamericano natural. Voz adulta, cálida, serena y cercana, como un profesional de salud que explica con calma y empatía. Ritmo claro y pausado, sin tono comercial ni dramatismo. Pronuncia cifras y términos médicos con precisión.",
+    "en": "Narrate in natural English. Use a warm, calm adult voice, like a healthcare professional explaining something important with empathy. Keep a clear, unhurried pace, with no commercial tone or drama. Pronounce medical terms and numbers precisely.",
+    "pt": "Narre em português brasileiro natural. Use uma voz adulta, calma, acolhedora e profissional, explicando com empatia. Mantenha um ritmo claro e sem pressa, sem tom comercial ou dramático. Pronuncie números e termos médicos com precisão.",
+    "fr": "Narre en français naturel avec une voix adulte, chaleureuse, calme et professionnelle. Explique comme un professionnel de santé, avec empathie et un rythme clair, sans ton commercial ni dramatique. Prononce les chiffres et termes médicaux avec précision.",
+    "de": "Sprich in natürlichem Deutsch mit einer erwachsenen, warmen, ruhigen und professionellen Stimme. Erkläre wie eine medizinische Fachperson mit Empathie und klarem, gemächlichem Tempo. Medizinische Begriffe und Zahlen müssen präzise ausgesprochen werden.",
+    "it": "Narra in italiano naturale con una voce adulta, calda, calma e professionale. Spiega con empatia e ritmo chiaro e tranquillo, senza tono commerciale o drammatico. Pronuncia con precisione numeri e termini medici.",
+}
+
+
+def _style_prompt(locale: str) -> str:
+    language = normalize_locale(locale)
+    if language in _TTS_STYLE:
+        return _TTS_STYLE[language]
+    return (
+        f"Narrate entirely in natural {LANGUAGE_NAMES.get(language, 'the requested language')}. "
+        "Use a warm, calm adult voice like a healthcare professional explaining important information with empathy. "
+        "Keep the pace clear and unhurried, with no commercial tone or drama. Pronounce medical terms and numbers precisely."
+    )
+
+
+def _split_for_tts(text: str, max_bytes: int = 3600) -> list[str]:
+    """Split narration at sentence boundaries below Gemini TTS unary limits."""
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return []
+    if len(clean.encode("utf-8")) <= max_bytes:
+        return [clean]
+    sentences = [item.strip() for item in re.split(r"(?<=[.!?。！？])\s+", clean) if item.strip()]
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences or [clean]:
+        candidate = f"{current} {sentence}".strip()
+        if current and len(candidate.encode("utf-8")) > max_bytes:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = candidate
+        while len(current.encode("utf-8")) > max_bytes:
+            # Last-resort Unicode-safe split for a pathological sentence.
+            cut = max(1, int(len(current) * max_bytes / len(current.encode("utf-8"))) - 8)
+            part = current[:cut].rstrip()
+            while part and len(part.encode("utf-8")) > max_bytes:
+                part = part[:-1]
+            if not part:
+                break
+            chunks.append(part)
+            current = current[len(part):].lstrip()
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _merge_linear16_wavs(parts: list[bytes]) -> bytes:
+    if not parts:
+        raise RuntimeError("Gemini TTS produced no WAV parts")
+    frames: list[bytes] = []
+    params = None
+    for data in parts:
+        with wave.open(io.BytesIO(data), "rb") as wav:
+            current = (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype())
+            if params is None:
+                params = current
+            elif params != current:
+                raise RuntimeError("Gemini TTS WAV chunks have incompatible audio parameters")
+            frames.append(wav.readframes(wav.getnframes()))
+    assert params is not None
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(params[0])
+        wav.setsampwidth(params[1])
+        wav.setframerate(params[2])
+        wav.setcomptype(params[3], "not compressed")
+        for frame_block in frames:
+            wav.writeframes(frame_block)
+    return output.getvalue()
 
 
 class GoogleEducationMediaProvider:
@@ -39,6 +121,10 @@ class GoogleEducationMediaProvider:
     async def synthesize(self, *, patient_id: str, mission_id: str, text: str, locale: str) -> NarrationAudio:
         if not self.media_enabled():
             raise RuntimeError("HealthIA education media is cost-gated in this deployment")
+        chunks = _split_for_tts(text)
+        if not chunks:
+            raise RuntimeError("HealthIA Explain narration is empty")
+
         grant = GoogleGrant.mission_scoped(
             patient_id=patient_id,
             bundle=GrantBundle.TEXT_TO_SPEECH,
@@ -46,23 +132,37 @@ class GoogleEducationMediaProvider:
             ttl_minutes=30,
         )
         self.constellation.runtime.grant_store.save(grant)
-        request = GoogleActionRequest(
-            patient_id=patient_id,
-            mission_id=mission_id,
-            action=GoogleAction.TEXT_TO_SPEECH_SYNTHESIZE,
-            payload={
-                "text": text,
-                "language_code": "es-US" if locale == "es" else "en-US",
-                "audio_encoding": "MP3",
-            },
-        )
-        receipt, outcome = await asyncio.to_thread(self.constellation.runtime.guarded_executor.execute, request)
-        if receipt.status != "completed" or outcome is None:
-            raise RuntimeError("Text-to-Speech did not produce an authorized narration")
-        encoded = str(outcome.data.get("audio_content_base64") or "")
-        if not encoded:
-            raise RuntimeError("Text-to-Speech returned no narration bytes")
-        return NarrationAudio(data=base64.b64decode(encoded), suffix=".mp3", mime_type="audio/mpeg")
+
+        language = normalize_locale(locale)
+        model_name = os.getenv("HEALTHIA_EDUCATION_TTS_MODEL", "gemini-2.5-pro-tts").strip()
+        voice_name = os.getenv("HEALTHIA_EDUCATION_TTS_VOICE", "Charon").strip()
+        wav_parts: list[bytes] = []
+        for index, chunk in enumerate(chunks):
+            request = GoogleActionRequest(
+                patient_id=patient_id,
+                mission_id=mission_id,
+                action=GoogleAction.TEXT_TO_SPEECH_SYNTHESIZE,
+                payload={
+                    "text": chunk,
+                    "language_code": tts_locale(language),
+                    "audio_encoding": "LINEAR16",
+                    "sample_rate_hertz": 24000,
+                    "model_name": model_name,
+                    "voice_name": voice_name,
+                    "style_prompt": _style_prompt(language),
+                    "chunk_index": index,
+                    "chunk_count": len(chunks),
+                },
+            )
+            receipt, outcome = await asyncio.to_thread(self.constellation.runtime.guarded_executor.execute, request)
+            if receipt.status != "completed" or outcome is None:
+                raise RuntimeError("Gemini Text-to-Speech did not produce an authorized narration")
+            encoded = str(outcome.data.get("audio_content_base64") or "")
+            if not encoded:
+                raise RuntimeError("Gemini Text-to-Speech returned no narration bytes")
+            wav_parts.append(base64.b64decode(encoded))
+
+        return NarrationAudio(data=_merge_linear16_wavs(wav_parts), suffix=".wav", mime_type="audio/wav")
 
     async def maybe_generate_veo_clip(
         self,
