@@ -1,0 +1,42 @@
+name: Patch adaptive final demo recorder once
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/workflows/patch-adaptive-demo-recorder-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+          fetch-depth: 0
+
+      - name: Make live recorder tolerate either adaptive entry path
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/record_final_live_english_demo.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        before = latest_assistant_message(page)\n        send_chat(page, "Since yesterday I have burning pain when I urinate and I need to go very often. Help me understand what information is still missing.")\n        human = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=25.0)\n        require(str(human.get("content") or "").strip(), "human-first assistant response was empty")\n        require(str((human.get("metadata") or {}).get("response_locale") or "") == "en", "human-first response was not English")\n        page.wait_for_timeout(400)\n        require(page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').count() == 0, "structured interview appeared on the human-first turn")\n        report["checks"].append("human_first_conversation_before_structured_intake")\n        overlay(page, "Human before workflow", "One symptom does not become a rigid form. HealthIA first responds naturally.", 3)\n        clear_overlay(page)\n\n        send_chat(page, "The burning is 6 out of 10, I also have lower abdominal pain, and the urinary frequency is getting worse. I want to discuss a health problem.")\n        assistant_id, status = wait_for_dynamic_or_orientation(page, str(human.get("id") or ""), timeout_s=70.0)\n        require(status == "dynamic_clinical_questions", f"concrete clinical follow-up did not start adaptive intake: {status}")\n        require_message_locale(page, assistant_id, "en")\n        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)\n        overlay(page, "Google ADK + Gemini", "ADK activates the bounded workflow. Gemini creates exactly five case-specific questions, shown one conversational turn at a time.", 4)\n        clear_overlay(page)\n        answer_conversational_block(page, answer_prefix="Synthetic answer")\n        report["checks"].append("one_question_at_a_time_five_question_contract")\n        checkpoint(report)\n'''
+          new = '''        before = latest_assistant_message(page)\n        send_chat(page, "Since yesterday I have burning pain when I urinate and I need to go very often. Help me understand what information is still missing.")\n        first_reply = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=25.0)\n        require(str(first_reply.get("content") or "").strip(), "initial assistant response was empty")\n        require(str((first_reply.get("metadata") or {}).get("response_locale") or "") == "en", "initial response was not English")\n\n        dynamic_statuses = {"dynamic_clinical_questions", "dynamic_clinical_followup_questions"}\n        block = page.locator('.clinical-question-block[data-question-source="gemini_dynamic"]').last\n        deadline = time.time() + 6.0\n        while time.time() < deadline and block.count() == 0:\n            page.wait_for_timeout(250)\n\n        if block.count():\n            state = api_json(page, "/api/bootstrap")\n            dynamic_message = next((\n                item for item in reversed(state.get("messages", []))\n                if str((item.get("metadata") or {}).get("llm_status") or "") in dynamic_statuses\n            ), None)\n            require(bool(dynamic_message), "dynamic clinical UI appeared without a durable dynamic assistant message")\n            assistant_id = str(dynamic_message.get("id") or "")\n            status = str((dynamic_message.get("metadata") or {}).get("llm_status") or "")\n            report["adaptive_entry_mode"] = "first_turn"\n        else:\n            overlay(page, "Adaptive start", "HealthIA begins in natural language and waits for more detail when the first message is not yet sufficient for the bounded workflow.", 3)\n            clear_overlay(page)\n            before_followup = latest_assistant_message(page)\n            send_chat(page, "The burning is 6 out of 10, I also have lower abdominal pain, and the urinary frequency is getting worse. I want to discuss a health problem.")\n            assistant_id, status = wait_for_dynamic_or_orientation(page, str(before_followup.get("id") or ""), timeout_s=70.0)\n            report["adaptive_entry_mode"] = "followup_turn"\n\n        require(status in dynamic_statuses, f"adaptive clinical workflow did not start with dynamic questions: {status}")\n        require_message_locale(page, assistant_id, "en")\n        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=10_000)\n        report["checks"].append("adaptive_clinical_workflow_started")\n        checkpoint(report)\n        overlay(page, "Google ADK + Gemini", "HealthIA adapts to the detail already provided. Once the bounded workflow starts, ADK and Gemini create exactly five case-specific questions, shown one conversational turn at a time.", 4)\n        clear_overlay(page)\n        answer_conversational_block(page, answer_prefix="Synthetic answer")\n        report["checks"].append("one_question_at_a_time_five_question_contract")\n        checkpoint(report)\n'''
+          if old not in text:
+              raise SystemExit('expected recorder block not found; refusing blind patch')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          git config user.name "healthia-one-maintenance"
+          git config user.email "127772990+arisnachy@users.noreply.github.com"
+          git add scripts/record_final_live_english_demo.py
+          git commit -m "Make final demo adaptive to clinical entry timing"
+          git push origin HEAD:feature/patient-education-video-20260813
