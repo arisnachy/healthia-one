@@ -1,0 +1,181 @@
+name: HealthIA Explain one-shot LIVE Veo sample
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/healthia-explain-live-veo-trigger.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-explain-one-shot-veo-sample
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      MODEL_ID: veo-3.1-fast-generate-001
+      OUTPUT_ROOT: gs://healthia-6088a-healthia-evidence/healthia-explain-live-veo-sample
+      EXPECTED_AUTHORIZATION: RUN_ONCE_I_AUTHORIZE_ONE_VEO_8S_SAMPLE_20260813
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Enforce one-shot authorization marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="$(tr -d '\r\n' < .github/healthia-explain-live-veo-trigger.txt)"
+          [[ "$marker" == "$EXPECTED_AUTHORIZATION" ]] || {
+            echo 'Exact one-shot Veo authorization marker is required.' >&2
+            exit 1
+          }
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify existing prerequisites only
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          grep -Fxq 'aiplatform.googleapis.com' <<<"$enabled" || {
+            echo 'Vertex AI API is not enabled. This workflow will not enable it.' >&2
+            exit 1
+          }
+          gcloud storage buckets describe "gs://healthia-6088a-healthia-evidence" --project "$PROJECT_ID" >/dev/null
+          echo 'Using pre-existing Vertex AI API and private HealthIA evidence bucket.'
+
+      - name: Generate one synthetic Veo 3.1 Fast clip
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/healthia-explain-live-veo
+          ACCESS="$(gcloud auth print-access-token)"
+          echo "::add-mask::$ACCESS"
+          export ACCESS
+          OUTPUT_URI="${OUTPUT_ROOT}/${GITHUB_RUN_ID}/"
+          export OUTPUT_URI
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          prompt = (
+              "Clean cinematic 3D medical educational animation showing blood flowing smoothly through a healthy artery, "
+              "then transitioning to a gently narrowed artery where the blood stream meets more resistance. "
+              "Anatomically plausible vessel wall, calm clinical blue-white environment, soft red blood cells, "
+              "smooth camera movement, premium patient-education style, no text, no labels, no people, no faces, "
+              "no patient data, no medication, no logos."
+          )
+          payload = {
+              "instances": [{"prompt": prompt}],
+              "parameters": {
+                  "storageUri": os.environ["OUTPUT_URI"],
+                  "sampleCount": 1,
+                  "durationSeconds": 8,
+                  "resolution": "720p",
+                  "aspectRatio": "16:9",
+                  "personGeneration": "disallow"
+              },
+          }
+          Path('/tmp/veo-request.json').write_text(json.dumps(payload), encoding='utf-8')
+          Path('/tmp/prompt-sha.txt').write_text(hashlib.sha256(prompt.encode()).hexdigest(), encoding='utf-8')
+          PY
+          endpoint="https://${REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${REGION}/publishers/google/models/${MODEL_ID}:predictLongRunning"
+          http_code="$(curl -sS -o /tmp/veo-start.json -w '%{http_code}' -X POST "$endpoint" \
+            -H "Authorization: Bearer $ACCESS" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data-binary @/tmp/veo-request.json)"
+          if [[ "$http_code" != "200" ]]; then
+            echo "Veo start failed with HTTP $http_code" >&2
+            jq -c '{error:{code:.error.code,status:.error.status,message:.error.message}}' /tmp/veo-start.json 2>/dev/null || true
+            exit 1
+          fi
+          OPERATION="$(jq -r '.name // empty' /tmp/veo-start.json)"
+          [[ -n "$OPERATION" ]] || { echo 'Veo returned no operation name.' >&2; exit 1; }
+          echo "::add-mask::$OPERATION"
+          export OPERATION
+          poll="https://${REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${REGION}/publishers/google/models/${MODEL_ID}:fetchPredictOperation"
+          done_flag=false
+          for _ in $(seq 1 60); do
+            code="$(curl -sS -o /tmp/veo-poll.json -w '%{http_code}' -X POST "$poll" \
+              -H "Authorization: Bearer $ACCESS" \
+              -H 'Content-Type: application/json; charset=utf-8' \
+              --data-binary "$(jq -cn --arg op "$OPERATION" '{operationName:$op}')")"
+            [[ "$code" == "200" ]] || { echo "Veo poll failed with HTTP $code" >&2; exit 1; }
+            if [[ "$(jq -r '.done // false' /tmp/veo-poll.json)" == "true" ]]; then
+              done_flag=true
+              break
+            fi
+            sleep 10
+          done
+          [[ "$done_flag" == "true" ]] || { echo 'Veo operation did not complete within 10 minutes.' >&2; exit 1; }
+          if jq -e '.error' /tmp/veo-poll.json >/dev/null 2>&1; then
+            jq -c '{error:{code:.error.code,status:.error.status,message:.error.message}}' /tmp/veo-poll.json >&2
+            exit 1
+          fi
+          GCS_URI="$(jq -r '.response.videos[0].gcsUri // .response.generatedVideos[0].video.uri // .response.generated_videos[0].video.uri // empty' /tmp/veo-poll.json)"
+          if [[ -z "$GCS_URI" ]]; then
+            echo 'Completed Veo response did not contain a recognized GCS video URI.' >&2
+            jq -c '{done, response_keys:(.response|keys)}' /tmp/veo-poll.json 2>/dev/null || true
+            exit 1
+          fi
+          echo "::add-mask::$GCS_URI"
+          gcloud storage cp "$GCS_URI" dist/healthia-explain-live-veo/healthia-explain-veo-real.mp4 >/dev/null
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          p=Path('dist/healthia-explain-live-veo/healthia-explain-veo-real.mp4')
+          data=p.read_bytes()
+          if len(data) < 10000 or b'ftyp' not in data[:64]:
+              raise SystemExit('Downloaded Veo output is not a valid-looking MP4')
+          manifest={
+              'status':'LIVE_PASS',
+              'provider':'Vertex AI Veo',
+              'model':os.environ['MODEL_ID'],
+              'duration_seconds':8,
+              'resolution':'720p',
+              'sample_count':1,
+              'synthetic_only':True,
+              'patient_data_sent':False,
+              'person_generation':'disallow',
+              'video_bytes':len(data),
+              'video_sha256':hashlib.sha256(data).hexdigest(),
+              'prompt_sha256':Path('/tmp/prompt-sha.txt').read_text().strip(),
+          }
+          Path('dist/healthia-explain-live-veo/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          print(json.dumps(manifest, sort_keys=True))
+          PY
+          rm -f /tmp/veo-request.json /tmp/veo-start.json /tmp/veo-poll.json /tmp/prompt-sha.txt
+
+      - name: Upload real Veo sample
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-explain-live-veo-sample
+          path: dist/healthia-explain-live-veo
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove temporary private GCS generation output
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud storage rm --recursive "${OUTPUT_ROOT}/${GITHUB_RUN_ID}/**" >/dev/null 2>&1
+          exit 0
