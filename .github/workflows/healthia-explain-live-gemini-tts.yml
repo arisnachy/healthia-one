@@ -5,7 +5,7 @@ on:
     branches:
       - feature/patient-education-video-20260813
     paths:
-      - .github/healthia-explain-live-tts-trigger.txt
+      - .github/workflows/healthia-explain-live-gemini-tts.yml
 
 permissions:
   contents: read
@@ -20,20 +20,19 @@ jobs:
     timeout-minutes: 10
     env:
       PROJECT_ID: healthia-6088a
-      EXPECTED_AUTHORIZATION: RUN_ONCE_I_AUTHORIZE_GEMINI_TTS_NARRATION_20260813
+      EXPECTED_MESSAGE: Trigger one authorized Gemini TTS narration
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Enforce one-shot authorization marker
+      - name: Enforce one-shot authorization commit
         shell: bash
         run: |
           set -euo pipefail
-          marker="$(tr -d '\r\n' < .github/healthia-explain-live-tts-trigger.txt)"
-          [[ "$marker" == "$EXPECTED_AUTHORIZATION" ]] || {
-            echo 'Exact one-shot Gemini TTS authorization marker is required.' >&2
+          [[ "${{ github.event.head_commit.message }}" == "$EXPECTED_MESSAGE" ]] || {
+            echo 'Exact one-shot Gemini TTS authorization commit is required.' >&2
             exit 1
           }
 
