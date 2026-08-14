@@ -75,8 +75,12 @@ def wait_for_assistant_after(
         try:
             message = latest_assistant_message(page)
         except Exception as exc:
-            if "HTTP 429" not in str(exc):
+            error_text = str(exc)
+            if "HTTP 429" not in error_text and "HTTP 500" not in error_text:
                 raise
+            # HealthIA Explain can hold a long media request while Firestore or
+            # the single Cloud Run instance briefly returns a transient read error.
+            # Keep polling with backoff; a persistent fault still fails at timeout.
             page.wait_for_timeout(max(rate_limit_backoff_ms, poll_ms))
             continue
         if message.get("id") and message.get("id") != previous_id:
