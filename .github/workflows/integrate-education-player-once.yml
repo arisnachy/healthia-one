@@ -1,0 +1,182 @@
+name: One-shot HealthIA Explain chat player integration
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/integrate-education-player-trigger.txt
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+          fetch-depth: 0
+
+      - name: Patch chat player and login locale copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < .github/integrate-education-player-trigger.txt)" = "INTEGRATE_HEALTHIA_EXPLAIN_PLAYER_20260813"
+          python - <<'PY'
+          from pathlib import Path
+
+          auth_path = Path('web/auth.js')
+          auth = auth_path.read_text(encoding='utf-8')
+          auth = auth.replace('hero: t("auth.hero"), heroBody: t("auth.login.hero_body")', 'hero: t("auth.login.preview_sub"), heroBody: t("auth.login.hero_body")')
+          auth_path.write_text(auth, encoding='utf-8')
+
+          app_path = Path('web/app.js')
+          app = app_path.read_text(encoding='utf-8')
+          anchor = '''function timeLabel(value) {\n  const date = new Date(value);\n  return Number.isNaN(date.getTime()) ? tr("app.now") : new Intl.DateTimeFormat(localeTag(), {hour:"2-digit", minute:"2-digit"}).format(date);\n}\n'''
+          addition = r'''
+function educationVideoRecord(message) {
+  const record = message?.metadata?.education_video;
+  return record && typeof record === "object" ? record : null;
+}
+
+function educationVisibleMessage(message) {
+  const record = educationVideoRecord(message);
+  if (!record || record.status !== "completed") return message.content;
+  return String(message.content || "")
+    .replace(/\n*\[▶[^\]]*\]\(\/api\/education\/videos\/[^)]+\)\n*/g, "\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function appendEducationControls(message, content) {
+  const metadata = message?.metadata || {};
+  const offer = metadata.education_video_offer;
+  const action = metadata.ui_action;
+  if (offer && action?.type === "offer_education_video") {
+    const offerCard = document.createElement("div");
+    offerCard.className = "education-video-offer";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "education-video-create";
+    button.textContent = action.label || action.label_en || "Create video";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try { await sendMessage("yes"); }
+      finally { button.disabled = false; }
+    });
+    offerCard.append(button);
+    content.append(offerCard);
+  }
+
+  const record = educationVideoRecord(message);
+  if (!record || record.status !== "completed" || !record.url) return;
+  const card = document.createElement("section");
+  card.className = "education-video-card";
+  const heading = document.createElement("div");
+  heading.className = "education-video-heading";
+  const eyebrow = document.createElement("span");
+  eyebrow.textContent = "HealthIA Explain";
+  const title = document.createElement("strong");
+  title.textContent = record.title || record.topic || "HealthIA Explain";
+  heading.append(eyebrow, title);
+
+  const video = document.createElement("video");
+  video.controls = true;
+  video.playsInline = true;
+  video.preload = "metadata";
+  video.src = record.url;
+  video.setAttribute("aria-label", title.textContent);
+
+  const fallback = document.createElement("a");
+  fallback.className = "education-video-open";
+  fallback.href = record.url;
+  fallback.target = "_blank";
+  fallback.rel = "noopener";
+  fallback.textContent = action?.label || action?.label_en || "Open video";
+  fallback.hidden = true;
+  video.addEventListener("error", () => { fallback.hidden = false; }, {once:true});
+
+  card.append(heading, video, fallback);
+  content.append(card);
+}
+'''
+          if 'function appendEducationControls(' not in app:
+              if anchor not in app:
+                  raise SystemExit('timeLabel anchor changed')
+              app = app.replace(anchor, anchor + addition, 1)
+
+          app = app.replace('''content.innerHTML = `<div class="message-head"><strong>${escapeHtml(publicName(message.author))}</strong><span>${timeLabel(message.created_at)}</span></div><div class="message-body">${renderMarkdown(message.content)}</div>`;''', '''content.innerHTML = `<div class="message-head"><strong>${escapeHtml(publicName(message.author))}</strong><span>${timeLabel(message.created_at)}</span></div><div class="message-body">${renderMarkdown(educationVisibleMessage(message))}</div>`;''', 1)
+          app = app.replace('''  if (message.agent_plan?.length) {''', '''  appendEducationControls(message, content);\n  if (message.agent_plan?.length) {''', 1)
+          app_path.write_text(app, encoding='utf-8')
+
+          css_path = Path('web/styles.css')
+          css = css_path.read_text(encoding='utf-8')
+          marker = '/* HealthIA Explain embedded player */'
+          if marker not in css:
+              css += r'''
+
+/* HealthIA Explain embedded player */
+.education-video-offer{margin-top:12px;display:flex;align-items:center;gap:10px}
+.education-video-create{appearance:none;border:1px solid #35557f;background:#2a4165;color:#fff;border-radius:12px;padding:10px 16px;font:inherit;font-weight:700;cursor:pointer;box-shadow:0 8px 24px rgba(42,65,101,.13)}
+.education-video-create:hover{filter:brightness(1.06)}
+.education-video-create:disabled{opacity:.55;cursor:wait}
+.education-video-card{margin-top:14px;border:1px solid #dce5f0;border-radius:18px;background:#f8fafc;padding:12px;box-shadow:0 10px 28px rgba(27,48,79,.08);overflow:hidden}
+.education-video-heading{display:flex;flex-direction:column;gap:3px;padding:2px 4px 10px}
+.education-video-heading span{font-size:.72rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#55749d}
+.education-video-heading strong{font-size:.96rem;color:#182f50}
+.education-video-card video{display:block;width:100%;max-height:430px;aspect-ratio:16/9;border-radius:13px;background:#0b1524;object-fit:contain}
+.education-video-open{display:inline-flex;margin:10px 4px 2px;font-weight:700;color:#315f9a;text-decoration:none}
+@media(max-width:720px){.education-video-card{margin-left:-4px;margin-right:-4px}.education-video-card video{max-height:60vh}}
+'''
+          css_path.write_text(css, encoding='utf-8')
+
+          test_path = Path('tests/test_education_video_frontend.py')
+          test_path.write_text(r'''from pathlib import Path
+
+
+def test_chat_embeds_completed_healthia_explain_video_and_offer_button():
+    source = Path("web/app.js").read_text(encoding="utf-8")
+    assert "function appendEducationControls" in source
+    assert 'action?.type === "offer_education_video"' in source
+    assert 'await sendMessage("yes")' in source
+    assert 'document.createElement("video")' in source
+    assert "video.controls = true" in source
+    assert "video.playsInline = true" in source
+    assert "video.src = record.url" in source
+    assert "educationVisibleMessage(message)" in source
+
+
+def test_healthia_explain_player_has_responsive_product_styling():
+    css = Path("web/styles.css").read_text(encoding="utf-8")
+    assert "HealthIA Explain embedded player" in css
+    assert ".education-video-card video" in css
+    assert "aspect-ratio:16/9" in css
+
+
+def test_non_english_login_uses_the_new_continuity_hero_translation():
+    source = Path("web/auth.js").read_text(encoding="utf-8")
+    assert 'hero: t("auth.login.preview_sub")' in source
+''', encoding='utf-8')
+          PY
+
+      - name: Validate frontend player
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check web/app.js
+          node --check web/auth.js
+          python -m pip install --quiet -e '.[test]'
+          pytest -q tests/test_education_video_frontend.py tests/test_ui_locale_packs.py tests/test_education_video_core.py tests/test_education_renderer_smoke.py
+
+      - name: Self-clean and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/integrate-education-player-trigger.txt .github/workflows/integrate-education-player-once.yml
+          git config user.name "HealthIA ONE CI"
+          git config user.email "127772990+arisnachy@users.noreply.github.com"
+          git add web tests/test_education_video_frontend.py .github
+          git commit -m "Embed HealthIA Explain video player in patient chat"
+          git push origin HEAD:feature/patient-education-video-20260813
