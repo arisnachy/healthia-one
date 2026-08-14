@@ -29,6 +29,22 @@ def test_final_demo_uses_only_approved_gemini_male_voice():
     assert "warm adult male voice" in narrator
 
 
+def test_final_demo_accepts_either_safe_adaptive_clinical_entry_path():
+    workflow = (ROOT / ".github" / "workflows" / "final-live-english-demo.yml").read_text(encoding="utf-8")
+    recorder = (ROOT / "scripts" / "record_final_live_english_demo.py").read_text(encoding="utf-8")
+    narration = (ROOT / "docs" / "FINAL_DEMO_NARRATION_EN.txt").read_text(encoding="utf-8")
+
+    assert "adaptive_clinical_workflow_started" in workflow
+    assert "adaptive_clinical_workflow_started" in recorder
+    assert "human_first_conversation_before_structured_intake" not in workflow
+    assert "human_first_conversation_before_structured_intake" not in recorder
+    assert 'report["adaptive_entry_mode"] = "first_turn"' in recorder
+    assert 'report["adaptive_entry_mode"] = "followup_turn"' in recorder
+    assert "dynamic_clinical_questions" in recorder
+    assert "dynamic_clinical_followup_questions" in recorder
+    assert "adapts to how much clinical detail is already present" in narration
+
+
 def test_demo_narrator_splits_long_text_below_gemini_unary_limit():
     import importlib.util
 
