@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from app.main import app, service
-from healthia_one.education_video import PatientEducationVideoRouter
 from healthia_one.education_video_api import build_education_video_router
 from healthia_one.education_video_models import is_acceptance, is_rejection, is_video_request
+from healthia_one.education_video_recovery import ResilientPatientEducationVideoRouter
 
 
 def _latest_assistant_offered_video(state) -> bool:
@@ -18,7 +18,7 @@ def install_healthia_explain() -> None:
     if getattr(service.gemini, "_healthia_explain_installed", False):
         return
 
-    education = PatientEducationVideoRouter(
+    education = ResilientPatientEducationVideoRouter(
         service.settings,
         client_provider=service.gemini._get_client,
         cost_guard=service.gemini.cost_guard,
