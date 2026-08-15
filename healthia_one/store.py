@@ -11,6 +11,20 @@ from healthia_one.models import PatientState, utc_now
 PATIENT_STATE_COLLECTION = "healthia_one_patients"
 
 
+def _prepare_autonomous_state(state: PatientState) -> bool:
+    """Reconcile local autonomous work before the canonical state commit.
+
+    Result Guardian is deliberately state-only at this boundary: no network call,
+    email, push, or external mutation is allowed here. It may create/resolve a
+    durable mission and stage an outbox intent. The store then commits that exact
+    mission/context before Eventarc can observe the intent.
+    """
+    from healthia_one.result_guardian import reconcile_result_guardian
+
+    report = reconcile_result_guardian(state)
+    return bool(report.get("opened") or report.get("resolved") or report.get("new_result_ids"))
+
+
 async def _flush_post_commit_intents(state: PatientState) -> bool:
     """Flush staged Autopilot work only after PatientState is durable.
 
@@ -54,6 +68,10 @@ class MemoryStore(StateStore):
         patient_id = current_patient_id()
         async with self._lock:
             state.profile.id = patient_id
+            # Autonomous reconciliation must happen while state.updated_at still
+            # represents the previous durable commit. That lets Result Guardian
+            # distinguish a newly-arrived result from historical evidence.
+            _prepare_autonomous_state(state)
             state.updated_at = utc_now()
             # Commit the mission/context/intents first.
             self._states[patient_id] = state.model_copy(deep=True)
@@ -101,6 +119,7 @@ class JsonStore(StateStore):
             path = self._patient_path()
             patient_id = current_patient_id()
             state.profile.id = patient_id
+            _prepare_autonomous_state(state)
             state.updated_at = utc_now()
             path.parent.mkdir(parents=True, exist_ok=True)
             await self._write(path, state)
@@ -134,6 +153,7 @@ class FirestoreStore(StateStore):
     async def save(self, state: PatientState) -> None:
         patient_id = current_patient_id()
         state.profile.id = patient_id
+        _prepare_autonomous_state(state)
         state.updated_at = utc_now()
         # Persist canonical patient state before Eventarc can observe the event.
         await self._ref().set(state.model_dump(mode="json"))
