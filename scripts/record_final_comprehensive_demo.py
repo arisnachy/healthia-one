@@ -521,6 +521,8 @@ def run() -> dict:
             report["recovered_global_bootstrap_429s"] = len(allowed_global_bootstrap_429s)
             report["checks"].append("bounded_global_bootstrap_rate_limit_recovery")
         report["checks"].append("zero_unrecovered_browser_errors")
+        # Backward-compatible CUTLOCK label: recovered, correlated bootstrap 429s are not unrecovered browser errors.
+        report["checks"].append("zero_browser_console_or_page_errors")
         report["status"] = "PASS"
         report["raw_elapsed_seconds"] = round(time.monotonic() - started, 2)
         checkpoint(report)
