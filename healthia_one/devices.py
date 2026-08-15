@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from healthia_one.guardian_context import assess_guardian_batch, guardian_pattern_summary
 from healthia_one.integrations import health_data_provider_catalog
 from healthia_one.safety import assess_vital
 from healthia_one.models import (
@@ -94,6 +95,8 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
     sections: set[str] = set()
     existing = set(state.synced_external_ids)
     initial_vital_count = len(state.vitals)
+    prior_device_observations = list(state.device_observations)
+    accepted_records: list[DeviceObservation] = []
     transport_identity_verified = any(
         bool(item.metadata.get("paired_connection_id") and item.metadata.get("paired_device_id"))
         for item in batch.records
@@ -106,6 +109,7 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         section = apply_observation(state, record)
         state.device_observations.append(record)
         state.synced_external_ids.append(scoped_external_id)
+        accepted_records.append(record)
         existing.add(scoped_external_id)
         accepted += 1
         if section:
@@ -150,6 +154,9 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         connection.last_error = ""
         connection.permissions = [item.value for item in batch.granted_metrics]
     state.updated_at = datetime.now(timezone.utc)
+
+    # The deterministic safety layer is evaluated first and remains authoritative.
+    # Guardian may add context, but can never suppress a priority/urgent safety alert.
     safety_alerts = []
     for vital in state.vitals[initial_vital_count:]:
         decision = assess_vital(vital)
@@ -164,6 +171,13 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
                 "requires_human_review": True,
             }
         )
+
+    guardian_assessments = assess_guardian_batch(
+        state,
+        accepted_records,
+        history=prior_device_observations,
+    )
+
     return {
         "accepted": accepted,
         "duplicates": duplicates,
@@ -173,6 +187,8 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         "transport_identity_verified": transport_identity_verified,
         "clinical_source_verified": False,
         "safety_alerts": safety_alerts,
+        "guardian_assessments": [item.model_dump(mode="json") for item in guardian_assessments],
+        "guardian_summary": guardian_pattern_summary(guardian_assessments),
     }
 
 
