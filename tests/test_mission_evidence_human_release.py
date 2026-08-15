@@ -229,6 +229,7 @@ async def test_one_document_cannot_be_reassigned_to_a_second_open_mission() -> N
         title="Other open mission",
         mission_type="other",
         status=MissionStatus.WAITING_PATIENT,
+        next_action="Wait for explicitly linked evidence for this separate mission.",
     )
     state.missions.append(second)
     document = ClinicalDocument(
