@@ -1,4 +1,4 @@
-final-comprehensive-devpost-2026-08-14-attempt-1
+final-comprehensive-devpost-2026-08-14-attempt-2
 voice=gemini-2.5-pro-tts-charon-male
 ui-locale=system-auto
 content-locale=user-language
@@ -7,3 +7,4 @@ breadth=record-genogram-documents-treatment-visit-timeline-control
 hero=results-taskmaster-healthia-explain
 veo=3.1-fast
 cloud=run-firestore-gcs-adk-gemini
+playwright-arg=keyword-fixed
