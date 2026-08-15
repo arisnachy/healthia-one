@@ -26,7 +26,17 @@ class HealthiaFirebaseMessagingService : FirebaseMessagingService() {
         val kind = message.data["kind"].orEmpty()
         if (kind != "healthia_update" || !validProofId(proofId)) return
 
-        val notificationShown = showNeutralNotification()
+        val alreadyShown = FirebaseRuntime.deliveryProofAlreadyShown(applicationContext, proofId)
+        val notificationShown = if (alreadyShown) {
+            // Eventarc/provider redelivery may repeat the same stable proof. Do not
+            // disturb the patient with a second visible notification; acknowledge
+            // that this proof already produced one visible alert.
+            true
+        } else {
+            showNeutralNotification().also { shown ->
+                if (shown) FirebaseRuntime.markDeliveryProofShown(applicationContext, proofId)
+            }
+        }
         FirebaseRuntime.acknowledgeDelivery(applicationContext, proofId, notificationShown)
     }
 
