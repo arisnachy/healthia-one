@@ -48,6 +48,10 @@ def _assessment(**updates) -> GuardianAssessment:
 def _state(*, auto_send: bool = True) -> PatientState:
     state = PatientState()
     state.profile.email = "ana@example.com"
+    # 00:00 -> 00:00 means no quiet-hours interval; tests stay deterministic
+    # regardless of when GitHub Actions happens to run them.
+    state.consent.quiet_hours_start = "00:00"
+    state.consent.quiet_hours_end = "00:00"
     state.missions = [
         HealthMission(
             id="mission_guardian_email",
