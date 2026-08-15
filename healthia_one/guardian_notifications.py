@@ -45,6 +45,38 @@ def _first_name(state: PatientState) -> str:
 
 def _email_body(state: PatientState, assessment: GuardianAssessment) -> tuple[str, str]:
     first = _first_name(state)
+    if assessment.classification == "bp_followup_due":
+        return (
+            "HealthIA is waiting for your next blood-pressure reading",
+            (
+                f"Hi {first},\n\n"
+                "The blood-pressure follow-up interval you authorized has elapsed since the last reading in HealthIA. "
+                "I opened a measurement mission that will remain active until a new reading actually reaches your record.\n\n"
+                "This is a follow-up reminder based on your stored care plan, not a diagnosis. No medication or treatment was changed.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
+    if assessment.classification == "bp_followup_measurement_resolved":
+        return (
+            "HealthIA received your follow-up blood-pressure reading",
+            (
+                f"Hi {first},\n\n"
+                "A new blood-pressure measurement reached your HealthIA record, so I closed the measurement-capture mission automatically.\n\n"
+                "This confirms that the requested data arrived; it does not mean HealthIA declared your blood pressure controlled, and no treatment was changed.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
+    if assessment.classification == "bp_followup_safety_handoff":
+        return (
+            "HealthIA received your reading and kept the mission open for safety review",
+            (
+                f"Hi {first},\n\n"
+                "A new blood-pressure reading reached HealthIA, but the deterministic safety layer flagged the measurement for prompt human review. "
+                "The follow-up mission therefore remains open instead of being marked clinically resolved.\n\n"
+                "Open HealthIA to see the safety guidance. No medication or treatment was changed automatically.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
     if assessment.classification == "postvisit_summary_gap":
         return (
             "HealthIA is preserving continuity after your visit",
@@ -146,18 +178,6 @@ def plan_guardian_notification(
     *,
     mission_id: str,
 ) -> GuardianNotificationPlan:
-    """Create a bounded patient-contact plan from one Guardian assessment.
-
-    Email composition is allowed without external mutation. Sending requires two
-    explicit standing signal flags in PatientConsent.signal_types:
-
-    - guardian_email: patient wants Guardian email updates;
-    - guardian_email_auto_send: patient allows low-risk Guardian update emails to
-      be sent without approving each message individually.
-
-    This planner does not itself send email. The outbound worker must still pass
-    the Google/external action guard and persist a provider receipt.
-    """
     if not assessment.notify_patient:
         return GuardianNotificationPlan(
             patient_id=state.profile.id,
@@ -204,7 +224,5 @@ def plan_guardian_notification(
         push_requested=push_opt_in,
         email=email_draft,
         urgent_email_only_forbidden=True,
-        reason=(
-            "A Guardian assessment needs patient context. External delivery remains consent- and receipt-gated."
-        ),
+        reason="A Guardian assessment needs patient context. External delivery remains consent- and receipt-gated.",
     )
