@@ -22,6 +22,8 @@ dependencies = [
   "google-cloud-firestore>=2.21,<3",
   "google-cloud-secret-manager>=2.25,<3",
   "google-cloud-storage>=3.3,<4",
+  "Pillow>=11,<13",
+  "imageio-ffmpeg>=0.6,<1",
 ]
 
 [project.optional-dependencies]

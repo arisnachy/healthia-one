@@ -1,0 +1,14 @@
+final-devpost-taskmaster-resilient-2026-08-14-attempt-8
+runner=streamlined-playwright
+cloud-memory=1Gi
+voice=gemini-2.5-pro-tts-charon-male
+healthia-explain=resilient-safe-recovery
+ui-locale=system-auto
+content-locale=user-language
+video-locale=user-language
+veo=3.1-fast
+firestore=transient-retry
+runtime-service-usage=granted
+gemini-tts-http-timeout=180s
+gemini-tts-retry=3
+bootstrap-transient-recovery=bounded-scoped-429-500

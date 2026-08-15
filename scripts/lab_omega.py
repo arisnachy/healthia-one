@@ -79,8 +79,12 @@ def login_language_probe(browser: Browser, base_url: str, locale: str, expected_
     configure_page(page, report)
     page.goto(f"{base_url}/login", wait_until="networkidle")
     require(page.locator("html").get_attribute("lang") == expected_lang, f"{locale} html lang mismatch")
-    require(fragment.lower() in page.locator(".auth-brand h1").inner_text().lower(), f"{locale} login copy mismatch")
+    brand = page.locator(".auth-wordmark").inner_text()
+    require("healthia one" in brand.lower(), f"{locale} HealthIA ONE brand mismatch")
+    hero = page.locator('[data-i18n="auth.hero"]').inner_text()
+    require(fragment.lower() in hero.lower(), f"{locale} login hero copy mismatch")
     report["checks"][f"login_locale_{expected_lang}"] = "pass"
+    report["checks"][f"login_brand_{expected_lang}"] = "pass"
     screenshot(page, f"login-{expected_lang}")
     context.close()
     checkpoint(f"login_{expected_lang}_pass")
@@ -300,8 +304,8 @@ def run() -> dict:
                 elif Path("/usr/bin/chromium").exists():
                     launch["executable_path"] = "/usr/bin/chromium"
                 browser = playwright.chromium.launch(**launch)
-                login_language_probe(browser, base_url, "en-US", "en", "Your health should remember you", report)
-                login_language_probe(browser, base_url, "es-DO", "es", "Tu salud debería recordarte", report)
+                login_language_probe(browser, base_url, "en-US", "en", "Your health continues", report)
+                login_language_probe(browser, base_url, "es-DO", "es", "Tu salud continúa", report)
                 session_cookie = register_and_export_session(browser, base_url, report)
                 context, root_html = authenticated_context(browser, base_url, session_cookie, report)
                 exercise_registered_views(root_html, report)

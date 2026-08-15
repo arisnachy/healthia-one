@@ -5,14 +5,35 @@
 HealthIA ONE is a patient-owned continuity agent that turns scattered health evidence into durable, patient-scoped missions. It does more than answer: it can decide what information is missing, preserve original clinical evidence, use Gemini to extract what is actually readable, update longitudinal state, retrieve the saved evidence later, and close a Taskmaster mission only when the durable outcome exists.
 
 **Hackathon track:** The Taskmaster  
-**Google AI:** Gemini 3.5 Flash on Vertex AI  
+**Google AI:** Gemini 3.5 Flash on Vertex AI + Gemini 2.5 Pro TTS + optional Veo 3.1 Fast  
 **Agent framework:** Google ADK  
-**Cloud:** Cloud Run + Firestore + private Cloud Storage + Vertex AI + Secret Manager  
-**JUDGE Ω:** **100/100 evidence-backed on the merged Taskmaster candidate; subsequent changes require a fresh exact-head CI gate**
+**Cloud:** Cloud Run + Firestore + private Cloud Storage + Vertex AI + Secret Manager + Places/Maps  
+**Preserved JUDGE Ω:** **100/100 evidence-backed on the merged Taskmaster candidate**  
+**Integrated HealthIA Explain branch:** full deterministic CI/E2E/LAB/JUDGE gate **PASS**; fresh Cloud/video proof required before replacing the preserved submission candidate
 
 The public/demo flows use synthetic patients and synthetic clinical files only.
 
 ## Why this is not just a chatbot
+
+### HealthIA Explain — understand your health visually
+
+When understanding becomes the task, HealthIA can offer a **private patient-education video** instead of forcing the patient through another wall of text. The same durable mission system resolves the language the patient is currently using, selects only topic-relevant authorized evidence, asks Gemini for a bounded storyboard, narrates it with **Gemini 2.5 Pro TTS**, and can enrich one generic scene with **Veo 3.1 Fast**.
+
+The safety split is intentional:
+
+- exact patient values, medication names, measurements and warning labels stay on controlled HealthIA cards;
+- Veo receives only a generic PHI-free visual prompt — no name, age, medication, laboratory value, date, identifier or patient measurement;
+- Gemini TTS runs through HealthIA's existing patient/mission Google grant + receipt boundary;
+- the video cannot diagnose a new disease, prescribe, change a dose or tell the patient to stop medication;
+- if media generation fails, the mission remains retryable instead of claiming a fake success.
+
+A real one-shot Vertex proof generated an 8-second 720p `veo-3.1-fast-generate-001` clip in run **`31758267226`**. A separate real Google Cloud proof generated natural Spanish-Latin-America narration with `gemini-2.5-pro-tts` / `Charon` in run **`31764094573`**.
+
+### Language follows the patient
+
+HealthIA separates the interface locale from the language of the current clinical conversation. The shipped UI automatically selects the production English/Spanish pack from the browser/OS locale unless the patient saves an override. The clinical/content layer supports a broader explicit locale set: when the patient writes in another supported language, the response and HealthIA Explain narration follow that message first; short or ambiguous input falls back to the browser/profile locale. Exact record values are preserved rather than loosely translated.
+
+The integrated login + multilingual + HealthIA Explain branch passed the complete deterministic release gate in GitHub Actions run **`31767221658`** on head **`0de5adad497b0a15defbedc1c0341394dc1680fd`** before the judge-facing documentation refresh. See [`docs/EVIDENCE.md`](docs/EVIDENCE.md) for the current proof boundary.
 
 ### Adaptive clinical interview
 

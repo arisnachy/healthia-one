@@ -5,14 +5,92 @@ This is the judge-facing source of truth for what HealthIA ONE has actually prov
 ## Current status
 
 - **Primary track:** The Taskmaster
-- **JUDGE Ω evidence-backed score:** **100/100**
-- **Verdict when the exact submission head is green:** `SUBMISSION_LOCKED`
-- **All hard gates:** proven
-- **Public judge video:** published and independently verified without credentials
+- **Preserved submission JUDGE Ω evidence-backed score:** **100/100**
+- **Integrated HealthIA Explain branch:** deterministic regression gate **PASS**
+- **HealthIA Explain real Veo provider:** **LIVE PASS**
+- **HealthIA Explain real Gemini TTS provider:** **LIVE PASS**
+- **Replacement Devpost Cloud/video proof:** pending intentional recording/publication
 
-The score is computed from `hackathon/judge_omega_scorecard.json` by `scripts/judge_omega.py` against the official 40/30/30 rubric.
+The internal score is computed by `scripts/judge_omega.py` against the official 40/30/30 rubric. It is an internal evidence-backed assessment, not a guarantee of external judging outcome.
 
-## 1. Exact-candidate Cloud + unmocked browser proof — PASS
+## 1. Integrated HealthIA Explain + multilingual + redesigned login — PASS
+
+**GitHub Actions run:** `31767221658`  
+**Branch head:** `0de5adad497b0a15defbedc1c0341394dc1680fd`  
+**Branch:** `feature/patient-education-video-20260813`
+
+This exact software head passed:
+
+- complete pytest suite;
+- Full System Verification;
+- KIRA DialogBench multi-turn context gate;
+- Chromium clinical end-to-end verification;
+- LAB OMEGA core full-window laboratory;
+- LAB OMEGA secondary/state-changing laboratory;
+- compileall;
+- smoke test;
+- JUDGE OMEGA evidence review;
+- semantic frontend validation;
+- version-layer rejection gate;
+- secure PowerShell parser gate;
+- verified release archive build;
+- verified release archive inspection;
+- pytest again from the extracted release archive.
+
+New behavior under this branch includes:
+
+- the approved HealthIA ONE split-screen login;
+- browser/OS-driven English/Spanish UI locale with persistent override;
+- patient-message-first clinical/content language routing with bounded fallback;
+- multilingual HealthIA Explain missions;
+- Gemini TTS behind the existing patient/mission Google grant + receipt boundary;
+- optional Veo visual generation that excludes patient-specific values and identifiers;
+- long TTS narration chunking and deterministic WAV merge;
+- no autonomous diagnosis/prescription/treatment change in the education-video path.
+
+**Truth boundary:** this run is deterministic/local regression proof. It does not by itself claim that the new integrated head was deployed to Cloud Run or used in the public Devpost video. Those are separate proof layers and must be refreshed before replacing the preserved submission evidence.
+
+## 2. HealthIA Explain real Vertex AI Veo 3.1 Fast — LIVE PASS
+
+**Run:** `31758267226`  
+**Model:** `veo-3.1-fast-generate-001`  
+**Project:** `healthia-6088a`  
+**Region:** `us-central1`
+
+One explicitly authorized synthetic generation produced a real MP4:
+
+- duration: 8 seconds;
+- resolution: 720p;
+- aspect ratio: 16:9;
+- sample count: 1;
+- person generation: disabled;
+- no names, faces, medications, laboratory values, measurements or other patient data in the prompt;
+- output downloaded and validated as a real-looking MP4;
+- artifact preserved in GitHub Actions;
+- temporary private GCS generation output removed after artifact capture.
+
+This proves the optional visual provider is real, not a mocked interface. The production HealthIA Explain architecture still treats Veo as optional enrichment; controlled HealthIA cards carry exact patient-specific facts.
+
+## 3. HealthIA Explain real Gemini 2.5 Pro TTS — LIVE PASS
+
+**Run:** `31764094573`  
+**Model:** `gemini-2.5-pro-tts`  
+**Voice:** `Charon`  
+**Locale:** `es-419`
+
+One explicitly authorized synthetic narration used Google Cloud Text-to-Speech / Gemini TTS with natural-language voice direction for a warm, calm, adult clinical explanation.
+
+The successful artifact demonstrated:
+
+- real Google Cloud authentication;
+- Text-to-Speech API availability;
+- promptable Gemini TTS synthesis;
+- natural clinical narration instead of the robotic local prototype fallback;
+- synthetic content only.
+
+The production branch now routes Gemini TTS through HealthIA's existing `text_to_speech.synthesize` Google action, mission-scoped grant and receipt boundary.
+
+## 4. Preserved exact-candidate Cloud + unmocked browser proof — PASS
 
 **Run:** `31262429792`  
 **Candidate SHA:** `a28955c3641c37a9e5a06f5f0ccf943ccb197bbd`  
@@ -39,7 +117,7 @@ Proven on the deployed runtime:
 
 Sanitized machine evidence: `hackathon/evidence/cloud_exact_candidate_proof.json`.
 
-## 2. Cross-revision continuity — PASS
+## 5. Preserved cross-revision continuity — PASS
 
 **Run:** `31262903731`  
 **Artifact:** `healthia-cloud-revision-continuity-proof` (`9023298988`)  
@@ -54,7 +132,7 @@ After process replacement, patient A retained its longitudinal marker, multimoda
 
 Sanitized machine evidence: `hackathon/evidence/cloud_revision_continuity_proof.json`.
 
-## 3. Continuous judge demo — PASS
+## 6. Preserved continuous judge demo — PASS
 
 **Run:** `31265639488`  
 **Candidate SHA:** `3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`  
@@ -69,7 +147,7 @@ The continuous Playwright recording visibly covers problem → value proposition
 
 Sanitized machine evidence: `hackathon/evidence/final_judge_demo_proof.json`.
 
-## 4. Stable public judge video — PASS
+## 7. Preserved stable public judge video — PASS
 
 **Direct public video URL:**  
 `https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm`
@@ -97,41 +175,44 @@ Permanent machine evidence: `hackathon/evidence/public_judge_video_proof.json`.
 
 **Security boundary:** the public submission video is a GitHub Release asset. The patient clinical-evidence GCS bucket remains private and is not reused for public submission media.
 
-## 5. Deterministic verification — PASS
+## 8. Deterministic verification boundary — PASS
 
-The release gate includes:
+The repository release gate includes:
 
 - pytest;
-- 14 full-system workflows;
+- full-system workflows;
 - Chromium E2E;
+- LAB OMEGA;
 - Python compileall;
 - smoke tests;
 - JUDGE Ω validation;
 - frontend semantic/syntax checks;
 - PowerShell parsing;
 - release ZIP build and verification;
-- pytest again from the extracted release archive;
-- independent public judge-video probe.
+- pytest again from the extracted release archive.
 
-The runtime installs Google ADK core while Firestore/GCS clients are declared explicitly, avoiding the broad unused ADK GCP extras bundle. Tests lock that dependency boundary.
+Cloud, media-generation, recording and publication mutation gates are explicit opt-in. Ordinary CI does not silently deploy Cloud or consume Veo quota.
 
-Cloud, recording and publication mutation gates are explicit opt-in and are returned to `enabled=false` after controlled use.
-
-## 6. Earlier one-request Vertex proof — PASS
+## 9. Earlier one-request Vertex proof — PASS
 
 Run `31228561751` independently demonstrated that after one Gemini 3.5 Flash multimodal request persisted original/result/twin evidence, HealthIA could retrieve it and complete the result-explanation mission without spending a second Gemini request merely to paraphrase the stored evidence.
 
-## 7. Explicitly excluded evidence
+## 10. Explicitly excluded evidence
 
 Run `31203021748` ended in HTTP 429 due depleted quota/credits and is **not** counted as passing evidence. Failed development/provisioning iterations are likewise excluded from the winning evidence set.
 
-## 8. Final lock condition
+Early local HealthIA Explain videos using an operating-system `espeak` voice were prototypes only and are **not** evidence of the production narration quality. The real Gemini TTS proof is run `31764094573`.
 
-All rubric hard gates are now proven. The remaining step is operational rather than evidentiary:
+## 11. Replacement submission lock condition
 
-1. let the **exact final branch HEAD** finish CI + JUDGE + public-video probe with all mutation triggers disabled;
-2. PR #29 was merged as `a1525ec` after its candidate head stayed green;
-3. rerun the exact-head gate for any later change before replacing the preserved submission candidate;
-4. use `docs/DEVPOST_SUBMISSION.md`, the architecture diagram, repository and verified public video URL in Devpost.
+The preserved submission evidence remains valid. The integrated branch should replace it only after this exact sequence:
+
+1. freeze one final integrated SHA after documentation changes;
+2. pass fresh exact-head CI/JUDGE on that SHA;
+3. perform bounded Cloud deployment/proof on that same source state;
+4. record the refreshed 3–4 minute judge demo showing the new login, multilingual behavior and HealthIA Explain;
+5. publish and anonymously verify the replacement video bytes;
+6. align README, `docs/DEVPOST_SUBMISSION.md`, `docs/ARCHITECTURE.md`, Devpost description and video URL to that canonical state;
+7. only then replace the preserved Devpost references.
 
 A 100/100 JUDGE score is an evidence-backed internal rubric result; it is **not a guarantee of winning the hackathon**.

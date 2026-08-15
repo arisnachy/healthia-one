@@ -22,6 +22,7 @@ def test_core_runtime_serializes_refresh_and_owns_one_event_stream() -> None:
 def test_only_semantic_frontend_modules_are_loaded() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     expected = (
+        "i18n-packs.js",
         "i18n.js",
         "app.js",
         "clinical-council.js",
@@ -41,6 +42,7 @@ def test_only_semantic_frontend_modules_are_loaded() -> None:
     assert html.count("<script ") == len(expected)
     for script in expected:
         assert html.count(f'/assets/{script}') == 1
+    assert html.index('/assets/i18n-packs.js') < html.index('/assets/i18n.js')
     icons = (WEB / "icons.js").read_text(encoding="utf-8")
     assert "loadScript(" not in icons
     assert "document.createElement('script')" not in icons
@@ -58,6 +60,8 @@ def test_i18n_runtime_is_os_aware_and_has_input_language_override() -> None:
     assert '"Accept-Language":responseLocale' in app
     assert '<html lang="en">' in index
     assert '<html lang="en">' in login
+    assert '/assets/i18n-packs.js' in index
+    assert '/assets/i18n-packs.js' in login
     assert '/assets/i18n.js' in index
     assert '/assets/i18n.js' in login
     assert 'data-i18n="chat.hero"' in index

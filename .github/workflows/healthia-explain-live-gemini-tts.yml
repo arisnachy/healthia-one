@@ -1,0 +1,133 @@
+name: HealthIA Explain one-shot LIVE Gemini TTS narration
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - .github/workflows/healthia-explain-live-gemini-tts.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-explain-one-shot-gemini-tts
+  cancel-in-progress: false
+
+jobs:
+  narrate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      EXPECTED_MESSAGE: Trigger one authorized Gemini TTS narration
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Enforce one-shot authorization commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ github.event.head_commit.message }}" == "$EXPECTED_MESSAGE" ]] || {
+            echo 'Exact one-shot Gemini TTS authorization commit is required.' >&2
+            exit 1
+          }
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify Text-to-Speech prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          grep -Fxq 'texttospeech.googleapis.com' <<<"$enabled" || {
+            echo 'Cloud Text-to-Speech API is not enabled. This workflow will not enable it.' >&2
+            exit 1
+          }
+
+      - name: Generate one natural HealthIA narration with Gemini TTS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/healthia-explain-gemini-tts
+          ACCESS="$(gcloud auth print-access-token)"
+          echo "::add-mask::$ACCESS"
+
+          cat > /tmp/tts-request.json <<'JSON'
+          {
+            "input": {
+              "prompt": "Narra en español latinoamericano neutro. Voz masculina adulta, cálida, grave, serena y cercana. Suena como un profesional de salud explicando algo importante a un paciente con calma y empatía. Ritmo natural y pausado, sin tono comercial, sin dramatismo y absolutamente sin sonar robótico. Articula las cifras y los términos médicos con claridad. Usa pequeñas pausas naturales entre ideas.",
+              "text": "Hola. HealthIA preparó esta explicación para ayudarte a entender mejor la hipertensión arterial. La presión arterial es la fuerza con la que la sangre empuja las paredes de las arterias. Cuando esa fuerza se mantiene alta, el corazón y los vasos sanguíneos trabajan bajo más tensión. En la animación puedes observar cómo el flujo de sangre encuentra mayor resistencia cuando una arteria se estrecha. En este ejemplo clínico sintético, la presión registrada es de ciento cincuenta y dos sobre noventa y cuatro milímetros de mercurio. Una presión elevada de forma persistente necesita seguimiento clínico. Con el tiempo, la hipertensión sin control puede aumentar el riesgo de problemas en el corazón, el cerebro y los riñones, y muchas veces no produce síntomas al principio. Lo importante es seguir el plan indicado por tu profesional de salud: tomar los medicamentos exactamente como fueron prescritos, medir la presión, acudir a los controles y mantener hábitos saludables. Busca atención urgente si presentas dolor de pecho, falta de aire, debilidad súbita, dificultad para hablar, dolor de cabeza intenso o cambios importantes en la visión. Si algo no quedó claro, pregúntame. Puedo explicártelo de otra manera."
+            },
+            "voice": {
+              "languageCode": "es-419",
+              "name": "Charon",
+              "modelName": "gemini-2.5-pro-tts"
+            },
+            "audioConfig": {
+              "audioEncoding": "LINEAR16",
+              "sampleRateHertz": 24000
+            }
+          }
+          JSON
+
+          code="$(curl -sS -o /tmp/tts-response.json -w '%{http_code}' -X POST \
+            'https://texttospeech.googleapis.com/v1/text:synthesize' \
+            -H "Authorization: Bearer $ACCESS" \
+            -H "x-goog-user-project: $PROJECT_ID" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data-binary @/tmp/tts-request.json)"
+          if [[ "$code" != "200" ]]; then
+            echo "Gemini TTS failed with HTTP $code" >&2
+            jq -c '{error:{code:.error.code,status:.error.status,message:.error.message}}' /tmp/tts-response.json 2>/dev/null || true
+            exit 1
+          fi
+          jq -r '.audioContent // empty' /tmp/tts-response.json | base64 -d > dist/healthia-explain-gemini-tts/healthia-explain-narration.wav
+          test -s dist/healthia-explain-gemini-tts/healthia-explain-narration.wav
+          python - <<'PY'
+          import hashlib, json, wave
+          from pathlib import Path
+          p=Path('dist/healthia-explain-gemini-tts/healthia-explain-narration.wav')
+          data=p.read_bytes()
+          if len(data) < 10000 or data[:4] != b'RIFF':
+              raise SystemExit('Gemini TTS output is not a valid-looking WAV file')
+          with wave.open(str(p), 'rb') as wf:
+              frames=wf.getnframes(); rate=wf.getframerate(); channels=wf.getnchannels(); width=wf.getsampwidth()
+          duration=frames/rate if rate else 0
+          info={'sample_rate_hz':rate,'channels':channels,'sample_width_bytes':width,'duration_seconds':round(duration,3)}
+          Path('dist/healthia-explain-gemini-tts/audio-info.json').write_text(json.dumps(info,indent=2)+'\n')
+          manifest={
+              'status':'LIVE_PASS',
+              'provider':'Google Cloud Gemini TTS',
+              'model':'gemini-2.5-pro-tts',
+              'voice':'Charon',
+              'locale':'es-419',
+              'synthetic_patient_only':True,
+              'audio_bytes':len(data),
+              'audio_sha256':hashlib.sha256(data).hexdigest(),
+              **info,
+          }
+          Path('dist/healthia-explain-gemini-tts/manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          print(json.dumps(manifest, sort_keys=True))
+          PY
+          rm -f /tmp/tts-request.json /tmp/tts-response.json
+
+      - name: Upload natural narration sample
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-explain-gemini-tts-narration
+          path: dist/healthia-explain-gemini-tts
+          if-no-files-found: error
+          retention-days: 7

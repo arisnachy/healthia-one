@@ -13,4 +13,4 @@ COPY web ./web
 COPY demo ./demo
 RUN pip install --no-cache-dir .
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn app.healthia_explain_main:app --host 0.0.0.0 --port ${PORT}"]

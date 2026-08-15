@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from healthia_one.gemini_tts_connector import GeminiTextToSpeechConnector
 from healthia_one.google_action_guard import GuardedGoogleActionExecutor, GuardedMissionExecutorAdapter
 from healthia_one.google_clinical_cloud_connectors import (
     DocumentAIConnector,
@@ -13,7 +14,6 @@ from healthia_one.google_clinical_cloud_connectors import (
     HealthcareConnector,
     ServerAdcTokenProvider,
     SpeechConnector,
-    TextToSpeechConnector,
     VeoConnector,
 )
 from healthia_one.google_connector_runtime import (
@@ -183,7 +183,7 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
     connectors[GoogleService.HEALTHCARE] = HealthcareConnector(token_provider=server_token_provider)
     connectors[GoogleService.FCM] = FCMConnector(token_provider=server_token_provider)
     connectors[GoogleService.SPEECH] = SpeechConnector(token_provider=server_token_provider)
-    connectors[GoogleService.TEXT_TO_SPEECH] = TextToSpeechConnector(token_provider=server_token_provider)
+    connectors[GoogleService.TEXT_TO_SPEECH] = GeminiTextToSpeechConnector(token_provider=server_token_provider)
     connectors[GoogleService.VEO] = VeoConnector(token_provider=server_token_provider)
 
     class PatientContextExecutor(GoogleActionExecutor):

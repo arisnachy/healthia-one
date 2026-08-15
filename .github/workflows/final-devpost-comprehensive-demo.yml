@@ -1,64 +1,48 @@
-name: Final live English hackathon demo
+name: Final comprehensive Devpost demo
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "app/**"
-      - "healthia_one/**"
-      - "web/**"
-      - "healthia_agent/**"
-      - "scripts/record_final_live_english_demo.py"
-      - "scripts/synthesize_gemini_demo_narration.py"
-      - "docs/FINAL_DEMO_NARRATION_EN.txt"
-      - ".github/workflows/final-live-english-demo.yml"
-      - "docs/HACKATHON_WIN_PLAN.md"
-      - "tests/test_human_chat_health_os.py"
-      - "tests/test_conversation_brain.py"
-      - "tests/test_result_ai_locale.py"
   push:
     branches:
       - feature/patient-education-video-20260813
     paths:
-      - ".github/final-live-demo-trigger.txt"
+      - ".github/final-comprehensive-devpost-trigger.txt"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: healthia-final-live-demo-${{ github.event.pull_request.number || github.ref }}
+  group: healthia-final-comprehensive-devpost-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  exact-candidate-live-demo:
-    name: Deploy exact candidate and record live English demo
+  record:
+    name: Record comprehensive exact-candidate demo
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
-      SERVICE_NAME: healthia-one-final-video
+      SERVICE_NAME: healthia-one-final-comprehensive
       BUCKET_NAME: healthia-6088a-healthia-evidence
       BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
       RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
       NARRATION_MODEL: gemini-2.5-pro-tts
       NARRATION_VOICE: Charon
       NARRATION_LANGUAGE: en-US
+
     steps:
-      - name: Check out exact candidate head
+      - name: Check out exact candidate
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
-      - name: Prove checked-out SHA is the candidate SHA
+      - name: Prove exact checked-out SHA
         shell: bash
-        env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$actual" = "$EXPECTED_SHA"
+          test "$actual" = "${{ github.sha }}"
           echo "HEALTHIA_EXACT_HEAD_PASS $actual"
 
       - name: Authenticate to Google Cloud
@@ -72,7 +56,7 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Verify live demo Google prerequisites
+      - name: Verify Google prerequisites
         shell: bash
         run: |
           set -euo pipefail
@@ -81,7 +65,7 @@ jobs:
           grep -Fxq 'aiplatform.googleapis.com' <<<"$enabled"
           grep -Fxq 'texttospeech.googleapis.com' <<<"$enabled"
 
-      - name: Deploy this exact commit to temporary private Cloud Run service
+      - name: Deploy exact candidate to temporary private Cloud Run service
         shell: bash
         run: |
           set -euo pipefail
@@ -95,14 +79,14 @@ jobs:
             --max 1 \
             --concurrency 20 \
             --cpu 1 \
-            --memory 512Mi \
+            --memory 1Gi \
             --timeout 600 \
             --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=24,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_GCS_BUCKET=${BUCKET_NAME},HEALTHIA_EDUCATION_MEDIA_ENABLED=true,HEALTHIA_EDUCATION_TTS_MODEL=gemini-2.5-pro-tts,HEALTHIA_EDUCATION_TTS_VOICE=Charon,HEALTHIA_EDUCATION_VEO_ENABLED=true,HEALTHIA_EDUCATION_VEO_MODEL=veo-3.1-fast-generate-001,HEALTHIA_EDUCATION_VEO_WAIT_SECONDS=90,GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
             --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" \
             --no-allow-unauthenticated \
             --quiet
 
-      - name: Bind recorder to exact deployed revision
+      - name: Bind recorder to deployed revision
         id: cloud
         shell: bash
         run: |
@@ -122,17 +106,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install recorder and media tools
+      - name: Install browser and media tools
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install playwright
-          python -m playwright install --with-deps chromium
+          python -m playwright install chromium
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg
 
-      - name: Record continuous live English application demo
+      - name: Record comprehensive live application flow
         env:
           HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
           HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
@@ -140,47 +124,45 @@ jobs:
           HEALTHIA_CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
           HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
-          HEALTHIA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python scripts/record_final_live_english_demo.py
+          HEALTHIA_CANDIDATE_SHA: ${{ github.sha }}
+        run: python scripts/record_final_comprehensive_demo.py
 
-      - name: Generate natural male narration with Gemini TTS
+      - name: Generate final narration with Gemini Charon
         shell: bash
         run: |
           set -euo pipefail
-          base=dist/final-live-english-demo
+          base=dist/final-comprehensive-demo
           mkdir -p "$base/audio"
           GOOGLE_CLOUD_PROJECT="$PROJECT_ID" python scripts/synthesize_gemini_demo_narration.py \
-            --input docs/FINAL_DEMO_NARRATION_EN.txt \
+            --input docs/FINAL_COMPREHENSIVE_NARRATION_EN.txt \
             --output "$base/audio/narration.wav" \
             --project "$PROJECT_ID" \
             --language-code "$NARRATION_LANGUAGE" \
             --voice "$NARRATION_VOICE" \
             --model "$NARRATION_MODEL" \
-            --style "Narrate in natural English with a warm adult male voice. Sound calm, grounded, intelligent and reassuring, like a thoughtful physician-engineer explaining a real healthcare product to judges. Use a medium-low pitch, natural pauses, clear articulation and a relaxed conversational rhythm. Never sound like an announcer, advertisement, synthetic assistant or dramatic trailer."
+            --style "Narrate in natural English with a warm adult male voice. Sound calm, grounded, intelligent and reassuring, like a thoughtful physician-engineer explaining a serious healthcare product to judges. Use a medium-low pitch, natural pauses, clear articulation and a relaxed conversational rhythm. Never sound like an announcer, advertisement, synthetic assistant or dramatic trailer."
 
-      - name: Build narrated public-hosting master around four minutes
+      - name: Build comprehensive master under four minutes
         shell: bash
         run: |
           set -euo pipefail
-          base=dist/final-live-english-demo
+          base=dist/final-comprehensive-demo
           mkdir -p "$base/master"
           raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"
-          test -n "$raw"
-          test -s "$base/audio/narration.wav"
+          test -n "$raw" && test -s "$base/audio/narration.wav"
           raw_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$raw")"
           narration_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$base/audio/narration.wav")"
           read video_factor audio_speed target < <(python - "$raw_duration" "$narration_duration" <<'PY'
           import sys
-          raw=float(sys.argv[1])
-          narration=float(sys.argv[2])
+          raw=float(sys.argv[1]); narration=float(sys.argv[2])
           if raw <= 0 or narration <= 0:
               raise SystemExit('invalid live-video or narration duration')
-          target=min(235.0, max(205.0, raw*1.45))
+          target=min(237.0, max(220.0, narration + 3.0, raw * 1.03))
           video_factor=target/raw
           audio_target=max(1.0, target-1.0)
           audio_speed=narration/audio_target
-          if not 0.5 <= audio_speed <= 2.0:
-              raise SystemExit(f'audio speed outside ffmpeg atempo range: {audio_speed:.4f}')
+          if not 0.78 <= audio_speed <= 1.25:
+              raise SystemExit(f'narration would require unnatural speed: {audio_speed:.4f}')
           print(f"{video_factor:.8f} {audio_speed:.8f} {target:.3f}")
           PY
           )
@@ -192,8 +174,7 @@ jobs:
             -c:a aac -ar 48000 -b:a 160k "$base/master/narration-master.m4a"
 
           ffmpeg -hide_banner -loglevel error -y \
-            -i "$raw" \
-            -vf "setpts=${video_factor}*PTS" -an \
+            -i "$raw" -vf "setpts=${video_factor}*PTS" -an \
             -c:v libx264 -preset veryfast -crf 21 -pix_fmt yuv420p \
             -movflags +faststart "$base/master/video-master.mp4"
 
@@ -202,44 +183,45 @@ jobs:
             -i "$base/master/narration-master.m4a" \
             -map 0:v:0 -map 1:a:0 -c:v copy -c:a copy \
             -t "$target" -movflags +faststart \
-            "$base/HealthIA-ONE-Gemini-Taskmaster-final.mp4"
+            "$base/HealthIA-ONE-Devpost-COMPREHENSIVE-FINAL.mp4"
 
-      - name: CUTLOCK — reject over-limit, silent, static or non-Gemini narration
+      - name: CUTLOCK — validate breadth, Taskmaster and Charon
         shell: bash
         run: |
           set -euo pipefail
-          final=dist/final-live-english-demo/HealthIA-ONE-Gemini-Taskmaster-final.mp4
-          report=dist/final-live-english-demo/report.json
-          narration_meta=dist/final-live-english-demo/audio/narration.wav.json
+          final=dist/final-comprehensive-demo/HealthIA-ONE-Devpost-COMPREHENSIVE-FINAL.mp4
+          report=dist/final-comprehensive-demo/report.json
+          narration_meta=dist/final-comprehensive-demo/audio/narration.wav.json
           test -s "$final" && test -s "$report" && test -s "$narration_meta"
           duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$final")"
           audio_streams="$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$final" | wc -l | tr -d ' ')"
           video_streams="$(ffprobe -v error -select_streams v -show_entries stream=index -of csv=p=0 "$final" | wc -l | tr -d ' ')"
           python - "$duration" "$audio_streams" "$video_streams" "$report" "$narration_meta" <<'PY'
           import json, sys
-          duration=float(sys.argv[1])
-          audio_streams=int(sys.argv[2])
-          video_streams=int(sys.argv[3])
+          duration=float(sys.argv[1]); audio_streams=int(sys.argv[2]); video_streams=int(sys.argv[3])
           report=json.load(open(sys.argv[4], encoding='utf-8'))
           narration=json.load(open(sys.argv[5], encoding='utf-8'))
-          if not 180 <= duration < 240:
-              raise SystemExit(f'final Taskmaster demo must be about four minutes and strictly under four minutes: {duration:.2f}s')
+          if not 210 <= duration < 240:
+              raise SystemExit(f'comprehensive demo duration outside target: {duration:.2f}s')
           if audio_streams < 1 or video_streams < 1:
-              raise SystemExit('final demo must contain both live video and narration audio')
+              raise SystemExit('final demo must contain both audio and video')
           if narration.get('provider') != 'Google Cloud Gemini TTS' or narration.get('model') != 'gemini-2.5-pro-tts' or narration.get('voice') != 'Charon':
-              raise SystemExit(f'final narration is not the approved Gemini male voice: {narration}')
-          if report.get('status') != 'PASS':
-              raise SystemExit(f"recorder report is not PASS: {report}")
-          if report.get('live_app_only') is not True or report.get('static_screenshots_used') is not False:
-              raise SystemExit('demo is not certified as live-app-only')
+              raise SystemExit(f'wrong narration source: {narration}')
+          if report.get('status') != 'PASS' or report.get('live_app_only') is not True or report.get('static_screenshots_used') is not False:
+              raise SystemExit(f'live recorder proof invalid: {report}')
           required={
               'exact_candidate_live_google_runtime',
-              'adaptive_clinical_workflow_started',
-              'one_question_at_a_time_five_question_contract',
-              'chat_health_os_open_results',
+              'ui_locale_auto_and_multilingual_translation',
+              'longitudinal_patient_record_visible',
+              'family_genogram_visible',
+              'document_archive_and_original_upload_visible',
+              'treatment_plan_and_safe_checkin_visible',
+              'appointment_and_consultation_brief_visible',
+              'unified_health_timeline_visible',
+              'permissions_audit_and_export_visible',
+              'results_workspace_opened',
               'multimodal_original_result_and_provenance',
               'english_multimodal_result_explanation',
-              'explicit_current_topic_overrides_stale_context',
               'assistant_mission_link_matches_persisted_taskmaster',
               'taskmaster_mission_completed_from_persisted_evidence',
               'healthia_explain_private_video_completed',
@@ -251,21 +233,24 @@ jobs:
           }
           missing=required-set(report.get('checks') or [])
           if missing:
-              raise SystemExit(f'missing demo gates: {sorted(missing)}')
-          print(f'HEALTHIA_CUTLOCK_PASS duration={duration:.2f}s audio_streams={audio_streams} video_streams={video_streams} narration=Gemini-TTS-Charon')
+              raise SystemExit(f'missing comprehensive demo gates: {sorted(missing)}')
+          video=report.get('education_video') or {}
+          if video.get('private') is not True or video.get('narration_status') != 'gemini_tts':
+              raise SystemExit(f'HealthIA Explain proof incomplete: {video}')
+          print(f"HEALTHIA_COMPREHENSIVE_DEVPOST_CUTLOCK_PASS duration={duration:.2f}s narration=Gemini-TTS-Charon")
           PY
-          sha256sum "$final" | tee dist/final-live-english-demo/final-video.sha256
+          sha256sum "$final" | tee dist/final-comprehensive-demo/final-video.sha256
 
-      - name: Upload exact-candidate live English judge evidence
+      - name: Upload comprehensive Devpost evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-ONE-final-live-English-demo
-          path: dist/final-live-english-demo
+          name: HealthIA-ONE-Devpost-COMPREHENSIVE-FINAL
+          path: dist/final-comprehensive-demo
           if-no-files-found: error
           retention-days: 30
 
-      - name: Remove temporary Cloud Run video service
+      - name: Remove temporary Cloud Run service
         if: always()
         shell: bash
         run: |
