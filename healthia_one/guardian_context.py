@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from healthia_one.autopilot_event_intents import stage_event_intent
 from healthia_one.models import (
     AgentStep,
     ChatMessage,
@@ -308,10 +309,10 @@ def apply_guardian_autonomy(
 ) -> dict[str, list[str]]:
     """Convert meaningful Guardian assessments into durable work without a chat prompt.
 
-    This function runs inside the same patient-state transaction as Health Connect
-    ingestion. It may create/update a patient mission and emit a durable Autopilot
-    outbox event. It never changes treatment or suppresses the deterministic safety
-    layer.
+    This function mutates PatientState only. It stages an Autopilot event intent in
+    the same durable state as the mission, but does not write the external outbox.
+    The service saves PatientState first and flushes the intent afterwards, so an
+    Eventarc worker can never wake before the mission/context that caused it exists.
     """
     created_mission_ids: list[str] = []
     updated_mission_ids: list[str] = []
@@ -396,32 +397,21 @@ def apply_guardian_autonomy(
             mission.updated_at = state.updated_at
             updated_mission_ids.append(mission.id)
 
-        # Use the already verified Autopilot outbox/Eventarc contract. The event
-        # type remains patient_state_changed; payload.source narrows it to Guardian
-        # so no new event schema is invented just for this wave.
-        try:
-            from healthia_one.opportunity_integration import enqueue_event
-
-            event = enqueue_event(
-                state,
-                "patient_state_changed",
-                dedupe_key=f"guardian|{assessment.observation_id}|{assessment.classification}|{mission.id}",
-                payload={
-                    "source": "guardian_context",
-                    "mission_id": mission.id,
-                    "mission_created": created,
-                    "guardian_assessment": assessment.model_dump(mode="json"),
-                    "notification_requested": bool(assessment.notify_patient),
-                    "treatment_changed": False,
-                    "human_boundary": True,
-                },
-            )
-            event_ids.append(event.id)
-        except Exception:
-            # State persistence and safety must not fail merely because the async
-            # outbox transport is unavailable. The caller can surface zero events
-            # and cloud proof must fail closed until the outbox is healthy.
-            continue
+        event = stage_event_intent(
+            state,
+            "patient_state_changed",
+            dedupe_key=f"guardian|{assessment.observation_id}|{assessment.classification}|{mission.id}",
+            payload={
+                "source": "guardian_context",
+                "mission_id": mission.id,
+                "mission_created": created,
+                "guardian_assessment": assessment.model_dump(mode="json"),
+                "notification_requested": bool(assessment.notify_patient),
+                "treatment_changed": False,
+                "human_boundary": True,
+            },
+        )
+        event_ids.append(event.id)
 
     return {
         "created_mission_ids": created_mission_ids,
