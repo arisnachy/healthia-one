@@ -1,0 +1,297 @@
+name: Guardian Wave 14 clean operationalization
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/guardian-wave14-operationalize.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave14-operationalize
+  cancel-in-progress: false
+
+jobs:
+  operationalize:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/guardian-wave14-operationalize')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      PRODUCT_SHA: f9a3906484095460916218623a919a01b4f87e30
+      GMAIL_WORKER: healthia-gmail-worker
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      AUTOPILOT_TRIGGER: healthia-opportunity-events
+    steps:
+      - name: Checkout exact merged Wave 14 product source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCT_SHA }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify exact clean source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$PRODUCT_SHA" ]]
+          # The production Dockerfile must remain clean; proof scripts were never merged.
+          if grep -Eq '^COPY[[:space:]]+scripts[[:space:]]+\.\/scripts' Dockerfile; then
+            echo "Refusing operational promotion: product Dockerfile unexpectedly includes proof scripts." >&2
+            exit 1
+          fi
+          grep -q 'healthia_one' Dockerfile
+
+      - name: Build clean exact-head product image
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-wave14-clean"
+          image="${package}:${PRODUCT_SHA}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          digest=""
+          for _ in $(seq 1 72); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Read current Gmail worker contract
+        id: gmail
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail-before.json
+          sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail-before.json)"
+          url="$(jq -r '.status.url // empty' /tmp/gmail-before.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail-before.json)"
+          command="$(jq -r '(.spec.template.spec.containers[0].command // []) | join(" ")' /tmp/gmail-before.json)"
+          args="$(jq -r '(.spec.template.spec.containers[0].args // []) | join(" ")' /tmp/gmail-before.json)"
+          test -n "$sa" && test -n "$url"
+          [[ "$topic" == projects/*/topics/* ]]
+          echo "sa=$sa" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "topic=$topic" >> "$GITHUB_OUTPUT"
+          echo "command=$command" >> "$GITHUB_OUTPUT"
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - name: Promote clean Wave 14 image to private Gmail worker
+        id: gmail_promote
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update "$GMAIL_WORKER" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.build.outputs.image }}" \
+            --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=true" \
+            --quiet
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail-after.json
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/gmail-after.json)"
+          proactive="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_PROACTIVE_ENABLED") | .value][0] // empty' /tmp/gmail-after.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail-after.json)"
+          test -n "$revision"
+          [[ "${proactive,,}" == "true" ]]
+          [[ "$topic" == "${{ steps.gmail.outputs.topic }}" ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify clean Gmail worker remains private
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${{ steps.gmail.outputs.url }}"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+          if [[ -z "$code" || "$code" =~ ^2 ]]; then
+            echo "Gmail worker unexpectedly became public: ${code:-empty}" >&2
+            exit 1
+          fi
+
+      - name: Discover Autopilot service and Eventarc trigger without guessing topology
+        id: topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/guardian-wave14-operationalize
+          service_exists=false
+          trigger_exists=false
+          if gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/autopilot-before.json 2>/dev/null; then
+            service_exists=true
+          else
+            echo '{}' > /tmp/autopilot-before.json
+          fi
+          gcloud eventarc triggers list --project "$PROJECT_ID" --format=json > /tmp/triggers.json
+          jq --arg name "$AUTOPILOT_TRIGGER" '[.[] | select((.name // "") | endswith("/" + $name) or . == $name)] | .[0] // {}' /tmp/triggers.json > /tmp/autopilot-trigger.json
+          trigger_name="$(jq -r '.name // empty' /tmp/autopilot-trigger.json)"
+          [[ -n "$trigger_name" ]] && trigger_exists=true
+
+          echo "service_exists=$service_exists" >> "$GITHUB_OUTPUT"
+          echo "trigger_exists=$trigger_exists" >> "$GITHUB_OUTPUT"
+          if [[ "$service_exists" == "true" ]]; then
+            old_image="$(jq -r '.spec.template.spec.containers[0].image // empty' /tmp/autopilot-before.json)"
+            old_proactive="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_PROACTIVE_ENABLED") | .value][0] // "__ABSENT__"' /tmp/autopilot-before.json)"
+            old_topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // "__ABSENT__"' /tmp/autopilot-before.json)"
+            service_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/autopilot-before.json)"
+            service_url="$(jq -r '.status.url // empty' /tmp/autopilot-before.json)"
+            echo "old_image=$old_image" >> "$GITHUB_OUTPUT"
+            echo "old_proactive=$old_proactive" >> "$GITHUB_OUTPUT"
+            echo "old_topic=$old_topic" >> "$GITHUB_OUTPUT"
+            echo "service_sa=$service_sa" >> "$GITHUB_OUTPUT"
+            echo "service_url=$service_url" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$trigger_exists" == "true" ]]; then
+            trigger_location="$(jq -r '.name | split("/")[3] // empty' /tmp/autopilot-trigger.json)"
+            destination_service="$(jq -r '.destination.cloudRun.service // empty' /tmp/autopilot-trigger.json)"
+            destination_region="$(jq -r '.destination.cloudRun.region // empty' /tmp/autopilot-trigger.json)"
+            destination_path="$(jq -r '.destination.cloudRun.path // empty' /tmp/autopilot-trigger.json)"
+            trigger_sa="$(jq -r '.serviceAccount // empty' /tmp/autopilot-trigger.json)"
+            event_type="$(jq -r '.eventFilters.type // empty' /tmp/autopilot-trigger.json)"
+            database="$(jq -r '.eventFilters.database // empty' /tmp/autopilot-trigger.json)"
+            document="$(jq -r '.eventFilters.document // empty' /tmp/autopilot-trigger.json)"
+            echo "trigger_location=$trigger_location" >> "$GITHUB_OUTPUT"
+            echo "destination_service=$destination_service" >> "$GITHUB_OUTPUT"
+            echo "destination_region=$destination_region" >> "$GITHUB_OUTPUT"
+            echo "destination_path=$destination_path" >> "$GITHUB_OUTPUT"
+            echo "trigger_sa=$trigger_sa" >> "$GITHUB_OUTPUT"
+            echo "event_type=$event_type" >> "$GITHUB_OUTPUT"
+            echo "database=$database" >> "$GITHUB_OUTPUT"
+            echo "document=$document" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "# HealthIA Wave 14 operational topology"
+            echo
+            echo "Clean product source: $PRODUCT_SHA"
+            echo "Clean image digest: ${{ steps.build.outputs.digest }}"
+            echo "Gmail worker clean revision: ${{ steps.gmail_promote.outputs.revision }}"
+            echo "Gmail worker private: yes"
+            echo "Gmail worker proactive: true"
+            echo "Autopilot service exists: $service_exists"
+            echo "Eventarc trigger exists: $trigger_exists"
+            if [[ "$trigger_exists" == "true" ]]; then
+              echo "Trigger location: $trigger_location"
+              echo "Destination service: $destination_service"
+              echo "Destination region: $destination_region"
+              echo "Destination path: $destination_path"
+              echo "Event type: $event_type"
+              echo "Database: $database"
+              echo "Document pattern: $document"
+            fi
+          } > dist/guardian-wave14-operationalize/topology.md
+
+          if [[ "$service_exists" != "true" || "$trigger_exists" != "true" ]]; then
+            echo "Autopilot service/trigger topology is incomplete; failing closed after clean Gmail promotion." >&2
+            cat dist/guardian-wave14-operationalize/topology.md
+            exit 1
+          fi
+
+      - name: Verify Eventarc trigger contract exactly
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.topology.outputs.destination_service }}" == "$AUTOPILOT_SERVICE" ]]
+          [[ "${{ steps.topology.outputs.destination_region }}" == "$REGION" ]]
+          [[ "${{ steps.topology.outputs.destination_path }}" == "/events/firestore" ]]
+          [[ "${{ steps.topology.outputs.event_type }}" == "google.cloud.firestore.document.v1.created" ]]
+          [[ "${{ steps.topology.outputs.database }}" == "(default)" ]]
+          [[ "${{ steps.topology.outputs.document }}" == "healthia_autopilot_events/{eventId}" ]]
+          test -n "${{ steps.topology.outputs.trigger_sa }}"
+          test -n "${{ steps.topology.outputs.service_sa }}"
+
+      - name: Promote clean Wave 14 image to private Autopilot worker
+        id: autopilot_promote
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update "$AUTOPILOT_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.build.outputs.image }}" \
+            --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${{ steps.gmail.outputs.topic }}" \
+            --quiet
+          gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/autopilot-after.json
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/autopilot-after.json)"
+          proactive="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_PROACTIVE_ENABLED") | .value][0] // empty' /tmp/autopilot-after.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/autopilot-after.json)"
+          test -n "$revision"
+          [[ "${proactive,,}" == "true" ]]
+          [[ "$topic" == "${{ steps.gmail.outputs.topic }}" ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Autopilot worker remains private and Eventarc invoker IAM is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${{ steps.topology.outputs.service_url }}"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+          if [[ -z "$code" || "$code" =~ ^2 ]]; then
+            echo "Autopilot worker unexpectedly became public: ${code:-empty}" >&2
+            exit 1
+          fi
+          trigger_sa="${{ steps.topology.outputs.trigger_sa }}"
+          policy="$(gcloud run services get-iam-policy "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json)"
+          jq -e --arg member "serviceAccount:${trigger_sa}" '.bindings[]? | select(.role=="roles/run.invoker") | .members[]? | select(.==$member)' <<<"$policy" >/dev/null
+
+      - name: Final operational report
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="dist/guardian-wave14-operationalize/topology.md"
+          {
+            echo
+            echo "## Promotion"
+            echo "Autopilot clean revision: ${{ steps.autopilot_promote.outputs.revision }}"
+            echo "Autopilot private: yes"
+            echo "Autopilot proactive: true"
+            echo "Eventarc invoker IAM: verified"
+            echo
+            echo "## Truth boundary"
+            echo "This workflow verifies deployed topology and clean Wave 14 promotion. It does not by itself prove a fresh Eventarc event invocation; a separate live event probe is required before claiming Eventarc end-to-end PASS."
+          } >> "$report"
+          cat "$report"
+
+      - name: Roll back Autopilot if post-promotion verification failed
+        if: failure() && steps.autopilot_promote.outcome == 'success' && steps.topology.outputs.old_image != ''
+        shell: bash
+        run: |
+          set +e
+          args=(run services update "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --image "${{ steps.topology.outputs.old_image }}")
+          old_proactive="${{ steps.topology.outputs.old_proactive }}"
+          old_topic="${{ steps.topology.outputs.old_topic }}"
+          if [[ "$old_proactive" == "__ABSENT__" ]]; then
+            args+=(--remove-env-vars HEALTHIA_PROACTIVE_ENABLED)
+          else
+            args+=(--update-env-vars "HEALTHIA_PROACTIVE_ENABLED=${old_proactive}")
+          fi
+          if [[ "$old_topic" == "__ABSENT__" ]]; then
+            args+=(--remove-env-vars HEALTHIA_GMAIL_PUBSUB_TOPIC)
+          else
+            args+=(--update-env-vars "HEALTHIA_GMAIL_PUBSUB_TOPIC=${old_topic}")
+          fi
+          gcloud "${args[@]}" --quiet
+
+      - name: Upload sanitized operational topology
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave14-operational-topology
+          path: dist/guardian-wave14-operationalize
+          if-no-files-found: warn
+          retention-days: 30
