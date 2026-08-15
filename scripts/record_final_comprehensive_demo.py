@@ -189,14 +189,6 @@ def run() -> dict:
     pdf_path = OUTPUT / "synthetic-final-lab.pdf"
     pdf = tiny_pdf()
     pdf_path.write_bytes(pdf)
-    note_path = OUTPUT / "synthetic-care-note.txt"
-    note_path.write_text(
-        "Synthetic patient note for hackathon demonstration.\n"
-        "Purpose: verify patient-owned document archive and provenance.\n"
-        "No real patient information is present.\n",
-        encoding="utf-8",
-    )
-
     suffix = uuid4().hex[:10]
     email = f"comprehensive-demo-{suffix}@example.test"
     password = f"Comprehensive!{suffix}Aa9"
@@ -302,24 +294,6 @@ def run() -> dict:
         clear_overlay(page)
         report["checks"].append("family_genogram_visible")
 
-        activate(page, "documents")
-        page.wait_for_selector("#addDocumentButton", timeout=10_000)
-        page.locator("#addDocumentButton").click()
-        page.wait_for_selector("#documentDialog[open]", timeout=10_000)
-        page.locator('#documentForm input[name="file"]').set_input_files(str(note_path))
-        page.locator('#documentForm input[name="title"]').fill("Synthetic care note")
-        page.locator('#documentForm select[name="category"]').select_option("consultation")
-        page.locator('#documentForm button[type="submit"]').click()
-        page.wait_for_selector("#documentDialog", state="hidden", timeout=60_000)
-        page.wait_for_function(
-            """() => document.querySelector('#documentsRoot')?.textContent?.includes('Synthetic care note') === true""",
-            timeout=30_000,
-        )
-        page.wait_for_timeout(700)
-        overlay(page, "Patient document archive", "Clinical files keep category, source, status and the original bytes. If HealthIA cannot read something, it preserves the source instead of inventing content.", 4.5)
-        clear_overlay(page)
-        report["checks"].append("document_archive_and_original_upload_visible")
-
         activate(page, "treatment")
         page.wait_for_selector("#treatmentRoot .treatment-card", timeout=12_000)
         taken = page.locator('#treatmentRoot [data-dose="taken"]').first
@@ -377,6 +351,18 @@ def run() -> dict:
         checkpoint(report)
         overlay(page, "Evidence first", "The synthetic original is preserved in private Cloud Storage; Gemini extracts readable evidence and Firestore keeps patient-scoped state with provenance.", 4.5)
         clear_overlay(page)
+
+        activate(page, "documents")
+        page.wait_for_selector("#documentsRoot .document-card", timeout=15_000)
+        page.wait_for_function(
+            """name => document.querySelector('#documentsRoot')?.textContent?.includes(name) === true""",
+            arg=filename,
+            timeout=15_000,
+        )
+        overlay(page, "Patient document archive", "The same original lab is now visible in the patient document archive with category, provenance and source bytes — one evidence object reused across the product, not a disconnected demo upload.", 4.5)
+        clear_overlay(page)
+        report["checks"].append("document_archive_and_original_upload_visible")
+        checkpoint(report)
 
         activate(page, "chat")
         before_explanation = latest_assistant_message(page)
