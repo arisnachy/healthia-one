@@ -12,6 +12,7 @@ from healthia_one.auth import patient_scope
 from healthia_one.autopilot_events import EventOutboxStore
 from healthia_one.autopilot_runtime import OpportunityAutopilot
 from healthia_one.autopilot_scheduler import enqueue_scheduled_refreshes, load_firestore_patient_states
+from healthia_one.bp_followup_guardian import bp_followup_due
 from healthia_one.config import Settings, settings
 from healthia_one.guardian_context import GuardianAssessment
 from healthia_one.guardian_delivery import GuardianPushDispatcher
@@ -41,7 +42,6 @@ def event_id_from_cloudevent_headers(headers) -> str:
 def _network_policy(event, permissions) -> tuple[bool, bool]:
     event_type = event.event_type
     payload = event.payload or {}
-
     if event_type == "manual.discovery_refresh":
         return True, False
     if event_type == "manual.resource_refresh":
@@ -65,6 +65,12 @@ def _is_guardian_event(record) -> bool:
     )
 
 
+def care_continuity_due(state: PatientState, *, runtime_enabled: bool = True) -> bool:
+    if not runtime_enabled:
+        return False
+    return appointment_guardian_due(state) or bp_followup_due(state)
+
+
 async def load_patient_state(settings_value: Settings, patient_id: str) -> PatientState:
     service = HealthIAService(settings_value)
     with patient_scope(patient_id):
@@ -72,41 +78,39 @@ async def load_patient_state(settings_value: Settings, patient_id: str) -> Patie
 
 
 async def reconcile_care_patient(settings_value: Settings, patient_id: str) -> dict:
-    """Re-read one patient and commit state-only care reconciliation.
-
-    Cloud Scheduler invokes the worker; this helper does not notify anyone by
-    itself. Saving the canonical state runs the state-only Guardians first, and
-    only after that durable commit are any notification intents flushed to the
-    existing Eventarc outbox.
-    """
     service = HealthIAService(settings_value)
     with patient_scope(patient_id):
         state = await service.snapshot()
         if state.profile.id != patient_id:
             raise PermissionError("Scheduled care patient does not match canonical patient state")
-        if not appointment_guardian_due(state):
+        if not care_continuity_due(state, runtime_enabled=settings_value.proactive_enabled):
             return {"patient_id": patient_id, "status": "not_due"}
-        before = {
-            mission.id: mission.status.value
+        before_missions = {
+            mission.id: (mission.status.value, mission.updated_at.isoformat())
             for mission in state.missions
         }
         await service.store.save(state)
         persisted = await service.snapshot()
-        after = {
-            mission.id: mission.status.value
+        after_missions = {
+            mission.id: (mission.status.value, mission.updated_at.isoformat())
             for mission in persisted.missions
         }
-        changed = before != after or len(persisted.missions) != len(state.missions)
         appointment_missions = [
             mission
             for mission in persisted.missions
             if mission.mission_type == "appointment_guardian_preparation"
         ]
+        bp_missions = [
+            mission
+            for mission in persisted.missions
+            if mission.mission_type == "bp_followup_guardian_measurement"
+        ]
         return {
             "patient_id": patient_id,
             "status": "reconciled",
-            "changed": changed,
+            "changed": before_missions != after_missions,
             "appointment_missions": len(appointment_missions),
+            "bp_followup_missions": len(bp_missions),
         }
 
 
@@ -189,10 +193,7 @@ async def process_outbox_event(
             "event_id": event_id,
             "status": "processed",
             "duplicate": report.duplicate,
-            "network_policy": {
-                "scientific": allow_science,
-                "paid_resource": allow_paid,
-            },
+            "network_policy": {"scientific": allow_science, "paid_resource": allow_paid},
             "guardian_delivery": guardian_delivery,
             "report": report.model_dump(mode="json"),
         }
@@ -230,7 +231,7 @@ def create_worker_app(
             "iam_boundary_required": settings_value.env != "local",
             "scientific_schedule": "weekly_opt_in",
             "resource_schedule": "monthly_opt_in",
-            "care_continuity_schedule": "daily_appointment_window",
+            "care_continuity_schedule": "daily_appointment_and_bp_followup",
             "guardian_eventarc": True,
             "guardian_push": "explicit_opt_in_only",
             "guardian_email": "standing_patient_opt_in_plus_connected_gmail",
@@ -299,10 +300,12 @@ def create_worker_app(
             raise HTTPException(status_code=503, detail="Care scheduler must run behind Cloud Run IAM")
         project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
         states = await asyncio.to_thread(load_firestore_patient_states, project)
-        due_ids = [state.profile.id for state in states if appointment_guardian_due(state)]
-        reports = []
-        for patient_id in due_ids:
-            reports.append(await reconcile_care_patient(settings_value, patient_id))
+        due_ids = [
+            state.profile.id
+            for state in states
+            if care_continuity_due(state, runtime_enabled=settings_value.proactive_enabled)
+        ]
+        reports = [await reconcile_care_patient(settings_value, patient_id) for patient_id in due_ids]
         return {
             "mode": "care_continuity",
             "patient_states_scanned": len(states),
@@ -311,7 +314,10 @@ def create_worker_app(
             "model_calls": 0,
             "network_calls_for_clinical_reasoning": 0,
             "reports": reports,
-            "note": "Only consented patients with a scheduled appointment inside the 72-hour preparation window are reconciled.",
+            "note": (
+                "Daily care reconciliation covers consented appointment preparation and explicitly opted-in blood-pressure follow-up. "
+                "Clinical reasoning remains deterministic and zero-model in this scheduler path."
+            ),
         }
 
     return app
