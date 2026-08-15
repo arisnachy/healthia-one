@@ -6,8 +6,10 @@ param(
     [string] $SchedulerServiceAccount = "",
     [string] $ScientificJobName = "healthia-scientific-radar-weekly",
     [string] $ResourceJobName = "healthia-resource-radar-monthly",
+    [string] $RecoveryJobName = "healthia-autopilot-intent-recovery",
     [string] $ScientificSchedule = "0 10 * * 0",
     [string] $ResourceSchedule = "0 11 1 * *",
+    [string] $RecoverySchedule = "*/15 * * * *",
     [string] $TimeZone = "Etc/UTC",
     [switch] $Confirmed
 )
@@ -82,6 +84,12 @@ $jobs = @(
         Schedule = $ResourceSchedule
         Path = "/scheduled/resources"
         Description = "HealthIA monthly assistance radar producer; patient-level execution remains opt-in and cost-guarded"
+    },
+    @{
+        Name = $RecoveryJobName
+        Schedule = $RecoverySchedule
+        Path = "/scheduled/recover-intents"
+        Description = "HealthIA recovery producer for already-authorized durable event intents left pending after process failure; zero model calls"
     }
 )
 
@@ -113,4 +121,5 @@ foreach ($job in $jobs) {
 Write-Host "HEALTHIA_AUTOPILOT_SCHEDULES_CREATED"
 Write-Host "Scientific: $ScientificJobName -> $ScientificSchedule ($TimeZone)"
 Write-Host "Resources: $ResourceJobName -> $ResourceSchedule ($TimeZone)"
-Write-Host "Both jobs target a private Cloud Run service using OIDC. Patient-level radar permissions remain OFF by default."
+Write-Host "Recovery: $RecoveryJobName -> $RecoverySchedule ($TimeZone)"
+Write-Host "All jobs target a private Cloud Run service using OIDC. Radar permissions remain OFF by default; recovery only flushes previously staged authorized intents."
