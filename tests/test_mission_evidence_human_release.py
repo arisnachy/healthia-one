@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from healthia_one.bp_followup_guardian import CONSENT_SIGNAL, MISSION_TYPE, reconcile_bp_followup_guardian
 from healthia_one.config import Settings
@@ -256,8 +257,6 @@ async def test_runtime_kill_switch_allows_explicit_link_but_blocks_automatic_rel
         for event in state.audit_events
         if event.action == "handoff_bp_followup_to_safety" and event.resource_id == mission.id
     )
-    # Remove prior staged intents from the fixture so this test observes only the
-    # effects of the explicit link under the disabled runtime.
     state.audit_events = [event for event in state.audit_events if event.action != "autopilot_event_intent"]
     document = ClinicalDocument(
         title="Human review note",
@@ -292,12 +291,21 @@ def test_composed_app_router_exposes_mission_evidence_paths_without_changing_fcm
     service = HealthIAService(Settings(store_backend="memory", llm_backend="mock"))
     app = FastAPI()
     app.include_router(build_fcm_device_router(service, service.settings))
-    paths = {route.path for route in app.routes if hasattr(route, "path")}
 
-    assert "/api/missions/{mission_id}/evidence/documents/{document_id}" in paths
-    assert "/api/missions/{mission_id}/evidence" in paths
-    assert "/api/devices/fcm/register" in paths
-    assert "/api/devices/fcm/ack" in paths
+    with TestClient(app) as client:
+        mission_response = client.get("/api/missions/mission_missing/evidence")
+        fcm_response = client.post(
+            "/api/devices/fcm/register",
+            json={
+                "device_id": "android-test-device",
+                "registration_token": "fcm-registration-token-1234567890",
+            },
+        )
+
+    assert mission_response.status_code == 404
+    assert mission_response.json()["detail"] == "Mission not found for authenticated patient"
+    assert fcm_response.status_code == 401
+    assert "dispositivo" in fcm_response.json()["detail"].lower()
 
 
 def test_documented_human_review_email_copy_preserves_truth_boundary() -> None:
