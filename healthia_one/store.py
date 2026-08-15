@@ -12,17 +12,28 @@ PATIENT_STATE_COLLECTION = "healthia_one_patients"
 
 
 def _prepare_autonomous_state(state: PatientState) -> bool:
-    """Reconcile local autonomous work before the canonical state commit.
+    """Reconcile state-only autonomous work before the canonical commit.
 
-    Result Guardian is deliberately state-only at this boundary: no network call,
-    email, push, or external mutation is allowed here. It may create/resolve a
-    durable mission and stage an outbox intent. The store then commits that exact
-    mission/context before Eventarc can observe the intent.
+    Guardians at this boundary may create/update/resolve durable missions and
+    stage outbox intents, but they may not perform network calls or provider
+    mutations. The canonical PatientState is committed first; only then can
+    Eventarc observe and deliver the staged intent.
     """
+    from healthia_one.appointment_guardian import reconcile_appointment_guardian
     from healthia_one.result_guardian import reconcile_result_guardian
 
-    report = reconcile_result_guardian(state)
-    return bool(report.get("opened") or report.get("resolved") or report.get("new_result_ids"))
+    result_report = reconcile_result_guardian(state)
+    appointment_report = reconcile_appointment_guardian(state)
+    result_changed = bool(
+        result_report.get("opened")
+        or result_report.get("resolved")
+        or result_report.get("new_result_ids")
+    )
+    appointment_changed = any(
+        appointment_report.get(key)
+        for key in ("created", "waiting", "completed", "cancelled")
+    )
+    return result_changed or appointment_changed
 
 
 async def _flush_post_commit_intents(state: PatientState) -> bool:
@@ -68,15 +79,12 @@ class MemoryStore(StateStore):
         patient_id = current_patient_id()
         async with self._lock:
             state.profile.id = patient_id
-            # Autonomous reconciliation must happen while state.updated_at still
-            # represents the previous durable commit. That lets Result Guardian
-            # distinguish a newly-arrived result from historical evidence.
+            # Reconciliation happens while updated_at still represents the
+            # previous durable commit. Result Guardian uses that boundary to
+            # distinguish newly-arrived result evidence from history.
             _prepare_autonomous_state(state)
             state.updated_at = utc_now()
-            # Commit the mission/context/intents first.
             self._states[patient_id] = state.model_copy(deep=True)
-            # Then expose the event to the outbox. If the intent status changes,
-            # persist that bookkeeping as a second commit.
             if await _flush_post_commit_intents(state):
                 state.updated_at = utc_now()
                 self._states[patient_id] = state.model_copy(deep=True)
@@ -155,7 +163,6 @@ class FirestoreStore(StateStore):
         state.profile.id = patient_id
         _prepare_autonomous_state(state)
         state.updated_at = utc_now()
-        # Persist canonical patient state before Eventarc can observe the event.
         await self._ref().set(state.model_dump(mode="json"))
         if await _flush_post_commit_intents(state):
             state.updated_at = utc_now()
