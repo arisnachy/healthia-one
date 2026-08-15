@@ -11,6 +11,9 @@ COPY healthia_one ./healthia_one
 COPY healthia_agent ./healthia_agent
 COPY web ./web
 COPY demo ./demo
+# Proof-branch only: the reversible Cloud Run Job harness lives under scripts/.
+# This Dockerfile change must not be merged into the product integration branch.
+COPY scripts ./scripts
 RUN pip install --no-cache-dir .
 
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
