@@ -6,6 +6,7 @@ on:
       - kira/video-v6-demo-final
     paths:
       - "scripts/record_v6_functional_demo.py"
+      - "scripts/record_v6_functional_demo_final.py"
       - ".github/workflows/video-v6-functional-live-demo.yml"
   workflow_dispatch:
 
@@ -93,7 +94,7 @@ jobs:
           cat dist/v6-functional-demo/server.log
           exit 1
 
-      - name: Record only the working product UI
+      - name: Record only working HealthIA product behavior
         shell: bash
         env:
           GOOGLE_GENAI_USE_VERTEXAI: "true"
@@ -101,27 +102,19 @@ jobs:
           GOOGLE_CLOUD_LOCATION: global
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('scripts/record_v6_functional_demo.py')
-          s = p.read_text(encoding='utf-8')
-          s = s.replace("page.locator('[data-open=\"chat\"]').click()", "page.locator('[data-open=\"chat\"]').last.click()")
-          p.write_text(s, encoding='utf-8')
-          PY
-          python scripts/record_v6_functional_demo.py
+          python scripts/record_v6_functional_demo_final.py
 
       - name: Generate Charon narration
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/v6-functional-demo
           python - <<'PY'
           import json
-          text = """This is HealthIA ONE running as a real patient application, not a slide presentation. We begin with a private account and a living clinical context. The first mission is for a family need: autism support near Santiago. HealthIA understands the request, creates durable work, and stops before using location. Only after the patient grants mission-scoped permission does it search Google Places. The results appear inside the product with real addresses, phone numbers, websites, and Google Maps links. The patient does not need to repeat everything. Saying the second one is enough for HealthIA to recover the mission and select the exact verified place. Next, the scientific radar checks current sources for an authorized health condition. A relevant discovery is stored with provenance, evidence level, reported benefits, and limitations. From the same interface, HealthIA compares that evidence with the medication and clinical context already recorded in the living twin. It organizes evidence for a professional conversation; it does not change treatment or pretend to predict an individual outcome. Finally, a missing creatinine study becomes another actionable mission. HealthIA searches for nearby places where the patient can complete the test and returns navigation links instead of leaving the patient with a reminder. HealthIA ONE combines a patient-owned clinical twin, current scientific evidence, family support, and real-world care navigation. Your health never starts over."""
+          text = """This is HealthIA ONE running as a real patient application, not a slide deck. A family autism need becomes a durable nearby-resource mission. After mission-scoped location permission, HealthIA executes Google Places and shows real addresses, phone numbers, websites, and Maps links. The second verified option can be selected exactly. Next, HealthIA's scientific radar queries current PubMed, Europe PMC, and ClinicalTrials.gov sources without an LLM retrieval call, then compares that evidence with the Losartan plan already stored in the living clinical twin. It shows an evidence timeline, not a fabricated outcome prediction. Finally, a missing creatinine test becomes another real nearby mission, returning places where the patient can complete it. One patient-owned system connects longitudinal health context, current evidence, family support, and real-world care navigation. Your health never starts over."""
           payload = {
             "input": {"text": text},
             "voice": {"languageCode": "en-US", "name": "en-US-Chirp3-HD-Charon"},
-            "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.03, "pitch": 0.0}
+            "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.07, "pitch": 0.0}
           }
           open('dist/v6-functional-demo/tts-request.json','w',encoding='utf-8').write(json.dumps(payload))
           PY
@@ -133,8 +126,7 @@ jobs:
             > dist/v6-functional-demo/tts-response.json
           python - <<'PY'
           import base64, json
-          p='dist/v6-functional-demo/tts-response.json'
-          data=json.load(open(p,encoding='utf-8'))
+          data=json.load(open('dist/v6-functional-demo/tts-response.json',encoding='utf-8'))
           audio=data.get('audioContent')
           if not audio:
               raise SystemExit(f'TTS failed: {data}')
@@ -149,21 +141,24 @@ jobs:
           audio="dist/v6-functional-demo/charon.mp3"
           test -s "$raw" && test -s "$audio"
           raw_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$raw")"
-          echo "Raw browser recording duration: $raw_dur"
-          speed="$(python - <<PY
-          d=float('$raw_dur')
-          target=226.0
-          print(max(1.0, d/target))
+          audio_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio")"
+          echo "Raw browser duration: $raw_dur"
+          echo "Narration duration: $audio_dur"
+          read speed pad <<<"$(python - <<PY
+          raw=float('$raw_dur'); audio=float('$audio_dur')
+          target=min(232.0, max(audio + 1.5, raw))
+          speed=max(1.0, raw/target)
+          adjusted=raw/speed
+          pad=max(0.0, audio + 1.0 - adjusted)
+          print(speed, pad)
           PY
           )"
-          vf="setpts=PTS/$speed,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+          vf="setpts=PTS/$speed,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,tpad=stop_mode=clone:stop_duration=$pad"
           ffmpeg -y -i "$raw" -i "$audio" \
-            -filter:v "$vf" \
-            -filter:a "apad=pad_dur=300" \
+            -filter:v "$vf" -filter:a "apad=pad_dur=3" \
             -map 0:v:0 -map 1:a:0 \
             -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
-            -c:a aac -b:a 160k -ar 48000 \
-            -movflags +faststart -shortest \
+            -c:a aac -b:a 160k -ar 48000 -movflags +faststart -shortest \
             dist/v6-functional-demo/HealthIA_ONE_V6_FUNCTIONAL_LIVE_DEMO.mp4
           final_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 dist/v6-functional-demo/HealthIA_ONE_V6_FUNCTIONAL_LIVE_DEMO.mp4)"
           echo "Final duration: $final_dur"
