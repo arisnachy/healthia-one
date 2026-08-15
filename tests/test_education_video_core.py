@@ -113,3 +113,11 @@ def test_video_topic_drops_duration_modifier_after_about_clause():
 
     assert topic_from_text("Create a one minute video about hypertension and blood pressure") == "hypertension and blood pressure"
     assert "pressão" in topic_from_text("Crie um vídeo curto sobre hipertensão e pressão arterial por 1 minuto").lower()
+
+
+def test_healthia_explain_tts_uses_bounded_retries_and_smaller_chunks():
+    source = (ROOT / "healthia_one" / "education_video_google.py").read_text(encoding="utf-8")
+    assert "max_bytes: int = 1800" in source
+    assert "for attempt in range(3):" in source
+    assert "await asyncio.sleep(2 * (attempt + 1))" in source
+    assert "after bounded retries" in source

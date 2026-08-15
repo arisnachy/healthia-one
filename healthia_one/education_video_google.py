@@ -43,7 +43,7 @@ def _style_prompt(locale: str) -> str:
     )
 
 
-def _split_for_tts(text: str, max_bytes: int = 3600) -> list[str]:
+def _split_for_tts(text: str, max_bytes: int = 1800) -> list[str]:
     """Split narration at sentence boundaries below Gemini TTS unary limits."""
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
     if not clean:
@@ -154,12 +154,23 @@ class GoogleEducationMediaProvider:
                     "chunk_count": len(chunks),
                 },
             )
-            receipt, outcome = await asyncio.to_thread(self.constellation.runtime.guarded_executor.execute, request)
-            if receipt.status != "completed" or outcome is None:
-                raise RuntimeError("Gemini Text-to-Speech did not produce an authorized narration")
-            encoded = str(outcome.data.get("audio_content_base64") or "")
+            encoded = ""
+            last_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    receipt, outcome = await asyncio.to_thread(self.constellation.runtime.guarded_executor.execute, request)
+                    if receipt.status == "completed" and outcome is not None:
+                        encoded = str(outcome.data.get("audio_content_base64") or "")
+                        if encoded:
+                            break
+                except Exception as exc:  # transport/runtime failures remain fail-closed after bounded retries
+                    last_error = exc
+                if attempt < 2:
+                    await asyncio.sleep(2 * (attempt + 1))
             if not encoded:
-                raise RuntimeError("Gemini Text-to-Speech returned no narration bytes")
+                if last_error is not None:
+                    raise RuntimeError("Gemini Text-to-Speech did not produce narration after bounded retries") from last_error
+                raise RuntimeError("Gemini Text-to-Speech did not produce an authorized narration after bounded retries")
             wav_parts.append(base64.b64decode(encoded))
 
         return NarrationAudio(data=_merge_linear16_wavs(wav_parts), suffix=".wav", mime_type="audio/wav")
