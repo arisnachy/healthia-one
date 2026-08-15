@@ -6,13 +6,14 @@ import io
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.request
 import wave
 from pathlib import Path
 
 
-def split_text(text: str, max_bytes: int = 3400) -> list[str]:
+def split_text(text: str, max_bytes: int = 2200) -> list[str]:
     clean = " ".join(str(text or "").split()).strip()
     if not clean:
         return []
@@ -57,26 +58,39 @@ def synthesize_chunk(*, token: str, project: str, text: str, prompt: str, langua
             "audioConfig": {"audioEncoding": "LINEAR16", "sampleRateHertz": 24000},
         }
     ).encode("utf-8")
-    request = urllib.request.Request(
-        "https://texttospeech.googleapis.com/v1/text:synthesize",
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "x-goog-user-project": project,
-            "Content-Type": "application/json; charset=utf-8",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:2500]
-        raise RuntimeError(f"Gemini TTS HTTP {exc.code}: {detail}") from exc
-    encoded = str(body.get("audioContent") or "")
-    if not encoded:
-        raise RuntimeError("Gemini TTS returned no audioContent")
-    return base64.b64decode(encoded)
+
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        request = urllib.request.Request(
+            "https://texttospeech.googleapis.com/v1/text:synthesize",
+            data=payload,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "x-goog-user-project": project,
+                "Content-Type": "application/json; charset=utf-8",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            encoded = str(body.get("audioContent") or "")
+            if not encoded:
+                raise RuntimeError("Gemini TTS returned no audioContent")
+            return base64.b64decode(encoded)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:2500]
+            # Retry only transient server/rate-limit responses. Client errors remain fail-closed.
+            if exc.code not in {429, 500, 502, 503, 504}:
+                raise RuntimeError(f"Gemini TTS HTTP {exc.code}: {detail}") from exc
+            last_error = RuntimeError(f"Gemini TTS transient HTTP {exc.code}: {detail}")
+        except (TimeoutError, urllib.error.URLError) as exc:
+            last_error = exc
+
+        if attempt < 3:
+            time.sleep(3 * attempt)
+
+    raise RuntimeError(f"Gemini TTS failed after 3 attempts: {last_error}") from last_error
 
 
 def merge_wavs(parts: list[bytes]) -> bytes:
