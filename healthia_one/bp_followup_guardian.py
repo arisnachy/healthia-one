@@ -7,9 +7,11 @@ from typing import Any
 from healthia_one.autopilot_event_intents import stage_event_intent
 from healthia_one.control import audit
 from healthia_one.guardian_context import GuardianAssessment
+from healthia_one.mission_evidence_api import linked_to_mission
 from healthia_one.models import (
     AgentStep,
     ChatMessage,
+    DocumentCategory,
     HealthMission,
     MissionStatus,
     PatientState,
@@ -22,6 +24,7 @@ from healthia_one.safety import assess_vital
 MISSION_TYPE = "bp_followup_guardian_measurement"
 RULE_KEY = "bp_followup_guardian:measurement"
 CONSENT_SIGNAL = "bp_followup"
+REVIEW_DOCUMENT_CATEGORIES = {DocumentCategory.CONSULTATION, DocumentCategory.DISCHARGE}
 
 
 def utc_now() -> datetime:
@@ -83,20 +86,29 @@ def bp_followup_due(state: PatientState, *, now: datetime | None = None) -> bool
 def _assessment(
     *, vital: VitalRecord, classification: str, risk_level: RiskLevel, provenance: list[str]
 ) -> GuardianAssessment:
+    if classification == "bp_followup_due":
+        summary = "The registered blood-pressure follow-up interval has elapsed without a newer measurement."
+        inference = "The monitoring interval in the patient-owned care plan is overdue."
+        hypothesis = "The patient may be able to provide a new measurement manually or through an authorized Health Connect source."
+    elif classification == "bp_followup_safety_handoff":
+        summary = "A new blood-pressure measurement satisfied data capture but triggered the deterministic safety layer."
+        inference = "A persisted blood-pressure reading arrived after the follow-up mission began and requires the safety workflow."
+        hypothesis = "No clinical cause is inferred from the measurement by this mission."
+    elif classification == "bp_followup_human_review_documented":
+        summary = "The patient explicitly linked post-handoff consultation/discharge evidence to the safety-gated mission."
+        inference = "Documented review evidence is now attached to the mission; HealthIA does not independently validate its clinical content."
+        hypothesis = "The workflow may be closed as documented-review evidence captured, without claiming clinical resolution."
+    else:
+        summary = "A new blood-pressure measurement satisfied the open follow-up mission."
+        inference = "A persisted blood-pressure reading arrived after the follow-up mission began."
+        hypothesis = "No clinical cause is inferred from the measurement by this mission."
+
     return GuardianAssessment(
         observation_id=vital.id,
         metric="blood_pressure_followup",
         classification=classification,
         risk_level=risk_level,
-        summary=(
-            "The registered blood-pressure follow-up interval has elapsed without a newer measurement."
-            if classification == "bp_followup_due"
-            else (
-                "A new blood-pressure measurement satisfies the data-capture mission but triggered the deterministic safety layer."
-                if classification == "bp_followup_safety_handoff"
-                else "A new blood-pressure measurement satisfied the open follow-up mission."
-            )
-        ),
+        summary=summary,
         observed={
             "vital_id": vital.id,
             "measured_at": vital.measured_at.isoformat(),
@@ -104,16 +116,8 @@ def _assessment(
             "diastolic": vital.diastolic,
         },
         context={"rule_key": RULE_KEY},
-        inference=(
-            "The monitoring interval in the patient-owned care plan is overdue."
-            if classification == "bp_followup_due"
-            else "A persisted blood-pressure reading arrived after the follow-up mission began."
-        ),
-        hypothesis=(
-            "The patient may be able to provide a new measurement manually or through an authorized Health Connect source."
-            if classification == "bp_followup_due"
-            else "No clinical cause is inferred from the measurement by this mission."
-        ),
+        inference=inference,
+        hypothesis=hypothesis,
         confidence="high",
         notify_patient=True,
         requires_human_review=classification == "bp_followup_safety_handoff",
@@ -273,6 +277,112 @@ def _new_reading_after_mission(state: PatientState, mission: HealthMission) -> V
         if vital.measured_at >= mission.created_at and vital.id not in set(mission.evidence_ids)
     ]
     return candidates[-1] if candidates else None
+
+
+def _safety_handoff_at(state: PatientState, mission: HealthMission) -> datetime | None:
+    events = [
+        event
+        for event in state.audit_events
+        if event.action == "handoff_bp_followup_to_safety"
+        and event.resource_id == mission.id
+        and event.outcome == "success"
+    ]
+    return min((event.created_at for event in events), default=None)
+
+
+def _linked_review_documents(state: PatientState, mission: HealthMission) -> list:
+    handoff_at = _safety_handoff_at(state, mission)
+    if handoff_at is None:
+        return []
+    return [
+        document
+        for document in state.documents
+        if document.patient_id == state.profile.id
+        and linked_to_mission(document, mission.id)
+        and document.category in REVIEW_DOCUMENT_CATEGORIES
+        and document.status != "invalid"
+        and document.uploaded_at >= handoff_at
+    ]
+
+
+def _close_after_documented_review(
+    state: PatientState,
+    mission: HealthMission,
+    documents: list,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    document_ids = [document.id for document in documents]
+    for document_id in document_ids:
+        if document_id not in mission.evidence_ids:
+            mission.evidence_ids.append(document_id)
+    mission.status = MissionStatus.COMPLETED
+    mission.risk_level = RiskLevel.INFO
+    mission.updated_at = now
+    mission.next_action = (
+        "Workflow closed because post-handoff consultation/discharge evidence was explicitly linked to this mission. "
+        "HealthIA does not claim that the clinical issue is resolved or independently validate the document's content."
+    )
+    receipt = audit(
+        state,
+        actor="healthia_bp_followup_guardian",
+        action="resolve_bp_followup_after_documented_review",
+        resource_type="health_mission",
+        resource_id=mission.id,
+        details={
+            "document_ids": document_ids,
+            "resolution": "documented_human_review_evidence_linked",
+            "explicit_patient_link_required": True,
+            "professional_authorship_verified": False,
+            "clinical_resolution_claimed": False,
+            "treatment_changed": False,
+        },
+    )
+    mission.closure_evidence = list(dict.fromkeys([
+        *mission.closure_evidence,
+        "documented_human_review_evidence_linked",
+        receipt.id,
+    ]))
+    state.messages.append(
+        ChatMessage(
+            patient_id=state.profile.id,
+            role="assistant",
+            author="HealthIA Guardian",
+            content=(
+                "You explicitly linked post-handoff consultation/discharge evidence to this safety-gated mission, so I closed the workflow. "
+                "That records documented review evidence only; HealthIA is not declaring the clinical situation resolved and did not change treatment."
+            ),
+            risk_level=RiskLevel.INFO,
+            mission_id=mission.id,
+            metadata={
+                "autonomous_bp_followup": True,
+                "bp_followup_human_review_documented": True,
+                "document_ids": document_ids,
+                "resolution_receipt_id": receipt.id,
+                "clinical_resolution_claimed": False,
+            },
+        )
+    )
+    readings = _blood_pressures(state)
+    source_vital = next(
+        (vital for vital in reversed(readings) if vital.id in mission.evidence_ids),
+        readings[-1],
+    )
+    assessment = _assessment(
+        vital=source_vital,
+        classification="bp_followup_human_review_documented",
+        risk_level=RiskLevel.INFO,
+        provenance=[source_vital.id, *document_ids, receipt.id],
+    )
+    event_id = _stage(state, mission, assessment, event_kind="human_review_documented")
+    return {
+        "status": "completed",
+        "mission_id": mission.id,
+        "document_ids": document_ids,
+        "receipt_id": receipt.id,
+        "event_id": event_id,
+        "clinical_resolution_claimed": False,
+    }
 
 
 def _keep_human_gate(
@@ -439,6 +549,13 @@ def reconcile_bp_followup_guardian(state: PatientState, *, now: datetime | None 
 
     mission = _open_mission(state)
     if mission is not None:
+        if mission.status == MissionStatus.WAITING_PROFESSIONAL:
+            review_documents = _linked_review_documents(state, mission)
+            if review_documents:
+                report["completed"].append(
+                    _close_after_documented_review(state, mission, review_documents, now=current)
+                )
+                return report
         reading = _new_reading_after_mission(state, mission)
         if reading is None:
             report["waiting"].append({"status": "waiting", "mission_id": mission.id})

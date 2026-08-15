@@ -11,6 +11,7 @@ from healthia_one.fcm_registration import (
     build_fcm_registration_store,
     build_registration,
 )
+from healthia_one.mission_evidence_api import build_mission_evidence_router
 from healthia_one.pairing import DevicePairingManager
 
 
@@ -28,17 +29,16 @@ def build_fcm_device_router(
     pairing_manager: DevicePairingManager | None = None,
     store: FCMRegistrationStore | None = None,
 ) -> APIRouter:
-    """Register FCM clients and record PHI-neutral delivery acknowledgements.
+    """Build the authenticated control-router bundle installed by app.main.
 
-    Raw FCM registration tokens are accepted and stored server-side only while the
-    user has private notifications enabled. Opt-out erases token material and keeps
-    only a disabled tombstone so automatic token refreshes cannot silently opt in.
-    Delivery evidence contains a short synthetic proof id, visible-notification
-    boolean and timestamp, never notification content or raw registration tokens.
+    Device FCM endpoints retain their exact `/api/devices/fcm` paths. Mission
+    evidence endpoints live in their own module/router and are composed here so
+    app.main does not need a second global router wiring path.
     """
 
     verifier = pairing_manager or DevicePairingManager()
     registrations = store or build_fcm_registration_store(settings)
+    root = APIRouter()
     router = APIRouter(prefix="/api/devices/fcm", tags=["devices"])
 
     async def active_principal(authorization: str | None, device_id: str):
@@ -51,10 +51,6 @@ def build_fcm_device_router(
             (item for item in state.device_connections if item.id == principal.connection_id),
             None,
         )
-        # A freshly paired Android has a valid signed bearer before its first
-        # Health Connect sync creates the longitudinal DeviceConnection row.
-        # Missing state is therefore not revocation. Explicit disconnect remains
-        # authoritative and permanently blocks the signed bearer.
         if connection is not None and connection.status == "disconnected":
             raise HTTPException(status_code=401, detail="La conexión del dispositivo fue revocada.")
         if connection is not None and str(connection.device_id or "") != principal.device_id:
@@ -175,4 +171,6 @@ def build_fcm_device_router(
             else None,
         }
 
-    return router
+    root.include_router(router)
+    root.include_router(build_mission_evidence_router(service))
+    return root
