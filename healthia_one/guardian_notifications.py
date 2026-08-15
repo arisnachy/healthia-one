@@ -45,6 +45,29 @@ def _first_name(state: PatientState) -> str:
 
 def _email_body(state: PatientState, assessment: GuardianAssessment) -> tuple[str, str]:
     first = _first_name(state)
+    if assessment.classification == "postvisit_summary_gap":
+        return (
+            "HealthIA is preserving continuity after your visit",
+            (
+                f"Hi {first},\n\n"
+                "HealthIA sees a completed appointment but cannot yet verify a consultation note or discharge summary in your longitudinal record. "
+                "I opened a post-visit continuity mission so the outcome of the visit does not get lost.\n\n"
+                "I am not guessing what happened during the appointment, and I did not change any diagnosis, medication, treatment, or appointment. "
+                "If you have the visit summary, open HealthIA and add the document when convenient.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
+    if assessment.classification == "postvisit_summary_resolved":
+        return (
+            "HealthIA captured the evidence from your completed visit",
+            (
+                f"Hi {first},\n\n"
+                "HealthIA matched a persisted consultation or discharge document to your completed visit and closed the post-visit continuity mission.\n\n"
+                "This confirms document capture only. It does not mean HealthIA inferred a diagnosis or independently validated the clinical content, "
+                "and no medication, treatment, or appointment was changed.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
     if assessment.classification == "appointment_preparation_gap":
         return (
             "HealthIA is preparing your upcoming appointment",
