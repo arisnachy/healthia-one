@@ -30,11 +30,7 @@ def utc_now() -> datetime:
 
 def _blood_pressures(state: PatientState) -> list[VitalRecord]:
     return sorted(
-        [
-            vital
-            for vital in state.vitals
-            if vital.systolic is not None and vital.diastolic is not None
-        ],
+        [vital for vital in state.vitals if vital.systolic is not None and vital.diastolic is not None],
         key=lambda item: item.measured_at,
     )
 
@@ -68,8 +64,6 @@ def _authorized(state: PatientState) -> bool:
 def _due(state: PatientState, *, now: datetime) -> tuple[bool, VitalRecord | None]:
     readings = _blood_pressures(state)
     if not readings:
-        # This Guardian follows an established monitoring stream. It does not
-        # create a monitoring plan merely because a patient has no BP data.
         return False, None
     latest = readings[-1]
     due_days = max(int(state.profile.care_plan.blood_pressure_due_days), 1)
@@ -80,19 +74,14 @@ def bp_followup_due(state: PatientState, *, now: datetime | None = None) -> bool
     if not _authorized(state):
         return False
     current = now or utc_now()
-    open_mission = _open_mission(state)
-    if open_mission is not None:
+    if _open_mission(state) is not None:
         return True
     due, _ = _due(state, now=current)
     return due
 
 
 def _assessment(
-    *,
-    vital: VitalRecord,
-    classification: str,
-    risk_level: RiskLevel,
-    provenance: list[str],
+    *, vital: VitalRecord, classification: str, risk_level: RiskLevel, provenance: list[str]
 ) -> GuardianAssessment:
     return GuardianAssessment(
         observation_id=vital.id,
@@ -162,21 +151,13 @@ def _stage(
     return event.id
 
 
-def _ensure_safety_handoff_message(
-    state: PatientState,
-    mission: HealthMission,
-    vital: VitalRecord,
-    decision,
-) -> None:
+def _ensure_safety_handoff_message(state: PatientState, mission: HealthMission, vital: VitalRecord, decision) -> None:
     if any(
         message.metadata.get("bp_followup_safety_handoff")
         and message.metadata.get("evidence_id") == vital.id
         for message in state.messages
     ):
         return
-    # Device ingestion may already have emitted its authoritative deterministic
-    # safety message. If so, attach the mission to the existing evidence instead
-    # of duplicating the warning copy.
     existing_device_alert = next(
         (
             message
@@ -211,12 +192,7 @@ def _ensure_safety_handoff_message(
     )
 
 
-def _open_due_mission(
-    state: PatientState,
-    latest: VitalRecord,
-    *,
-    now: datetime,
-) -> dict[str, Any]:
+def _open_due_mission(state: PatientState, latest: VitalRecord, *, now: datetime) -> dict[str, Any]:
     mission = HealthMission(
         patient_id=state.profile.id,
         title="Complete blood-pressure follow-up",
@@ -299,6 +275,45 @@ def _new_reading_after_mission(state: PatientState, mission: HealthMission) -> V
     return candidates[-1] if candidates else None
 
 
+def _keep_human_gate(
+    state: PatientState,
+    mission: HealthMission,
+    vital: VitalRecord,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    if vital.id not in mission.evidence_ids:
+        mission.evidence_ids.append(vital.id)
+    mission.updated_at = now
+    mission.next_action = (
+        "Additional blood-pressure evidence was captured, but this mission remains human-gated because an earlier reading triggered deterministic safety escalation."
+    )
+    receipt = audit(
+        state,
+        actor="healthia_bp_followup_guardian",
+        action="append_bp_evidence_while_waiting_professional",
+        resource_type="health_mission",
+        resource_id=mission.id,
+        details={
+            "vital_id": vital.id,
+            "human_release_required": True,
+            "clinical_resolution_claimed": False,
+            "treatment_changed": False,
+        },
+    )
+    if receipt.id not in mission.closure_evidence:
+        mission.closure_evidence.append(receipt.id)
+    return {
+        "status": "safety_handoff",
+        "mission_id": mission.id,
+        "vital_id": vital.id,
+        "risk_level": mission.risk_level.value,
+        "receipt_id": receipt.id,
+        "event_id": "",
+        "human_release_required": True,
+    }
+
+
 def _reconcile_open_mission(
     state: PatientState,
     mission: HealthMission,
@@ -306,6 +321,9 @@ def _reconcile_open_mission(
     *,
     now: datetime,
 ) -> dict[str, Any]:
+    if mission.status == MissionStatus.WAITING_PROFESSIONAL:
+        return _keep_human_gate(state, mission, vital, now=now)
+
     if vital.id not in mission.evidence_ids:
         mission.evidence_ids.append(vital.id)
     decision = assess_vital(vital)
@@ -347,6 +365,7 @@ def _reconcile_open_mission(
             "risk_level": decision.level.value,
             "receipt_id": receipt.id,
             "event_id": event_id,
+            "human_release_required": True,
         }
 
     mission.status = MissionStatus.COMPLETED
