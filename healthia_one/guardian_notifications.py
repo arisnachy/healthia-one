@@ -126,6 +126,17 @@ def _email_body(state: PatientState, assessment: GuardianAssessment) -> tuple[st
                 "— HealthIA Guardian"
             ),
         )
+    if assessment.classification == "medication_followup_human_review_documented":
+        return (
+            "HealthIA recorded documented review evidence for your medication follow-up",
+            (
+                f"Hi {first},\n\n"
+                "You explicitly linked a post-handoff consultation or discharge document to the medication follow-up mission, so HealthIA closed the workflow as documented-review evidence captured.\n\n"
+                "HealthIA did not independently verify professional authorship or clinical content, did not interpret the document as a new dose or medication order, "
+                "does not claim that the medication issue is clinically resolved, and did not change treatment.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
     if assessment.classification == "postvisit_summary_gap":
         return (
             "HealthIA is preserving continuity after your visit",
