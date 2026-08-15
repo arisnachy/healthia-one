@@ -15,6 +15,7 @@ def _prepare_autonomous_state(state: PatientState) -> bool:
     """Reconcile state-only autonomous work before the canonical commit."""
     from healthia_one.appointment_guardian import reconcile_appointment_guardian
     from healthia_one.bp_followup_guardian import reconcile_bp_followup_guardian
+    from healthia_one.medication_followup_guardian import reconcile_medication_followup_guardian
     from healthia_one.postvisit_guardian import reconcile_postvisit_guardian
     from healthia_one.result_guardian import reconcile_result_guardian
 
@@ -22,6 +23,7 @@ def _prepare_autonomous_state(state: PatientState) -> bool:
     appointment_report = reconcile_appointment_guardian(state)
     postvisit_report = reconcile_postvisit_guardian(state)
     bp_report = reconcile_bp_followup_guardian(state)
+    medication_report = reconcile_medication_followup_guardian(state)
     result_changed = bool(
         result_report.get("opened")
         or result_report.get("resolved")
@@ -39,7 +41,17 @@ def _prepare_autonomous_state(state: PatientState) -> bool:
         bp_report.get(key)
         for key in ("created", "waiting", "completed", "safety_handoff")
     )
-    return result_changed or appointment_changed or postvisit_changed or bp_changed
+    medication_changed = any(
+        medication_report.get(key)
+        for key in ("created", "waiting", "completed", "review_handoff")
+    )
+    return (
+        result_changed
+        or appointment_changed
+        or postvisit_changed
+        or bp_changed
+        or medication_changed
+    )
 
 
 async def _flush_post_commit_intents(state: PatientState) -> bool:

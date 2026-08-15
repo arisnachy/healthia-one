@@ -89,6 +89,43 @@ def _email_body(state: PatientState, assessment: GuardianAssessment) -> tuple[st
                 "— HealthIA Guardian"
             ),
         )
+    if assessment.classification == "medication_followup_due":
+        return (
+            "HealthIA is waiting for your next medication check-in",
+            (
+                f"Hi {first},\n\n"
+                "The HealthIA continuity interval for a medication check-in stream you explicitly authorized has elapsed. "
+                "I opened a check-in mission that will remain active until a new patient-reported check-in reaches your record.\n\n"
+                "This does not mean HealthIA believes you missed a dose, and it is not an instruction to take, repeat, double, skip, stop, or change medication. "
+                "No treatment was changed.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
+    if assessment.classification == "medication_followup_checkin_resolved":
+        return (
+            "HealthIA received your medication check-in",
+            (
+                f"Hi {first},\n\n"
+                "A new explicit medication check-in reached your HealthIA record, so I closed the check-in capture mission.\n\n"
+                "This confirms only what you reported. It does not establish adherence, medication effectiveness, or treatment safety, and HealthIA did not provide compensation or dose-change advice. "
+                "No treatment was changed.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
+    if assessment.classification in {
+        "medication_followup_safety_handoff",
+        "medication_followup_review_handoff",
+    }:
+        return (
+            "HealthIA recorded your check-in and kept the medication mission open for human review",
+            (
+                f"Hi {first},\n\n"
+                "Your medication check-in reached HealthIA, but the information in that check-in requires human clinical or pharmacy review before the workflow can close automatically.\n\n"
+                "HealthIA recorded the evidence but did not recommend an extra, replacement, reduced, skipped, stopped, or changed dose and did not change treatment. "
+                "Open HealthIA to review the safety or follow-up guidance.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
     if assessment.classification == "postvisit_summary_gap":
         return (
             "HealthIA is preserving continuity after your visit",
