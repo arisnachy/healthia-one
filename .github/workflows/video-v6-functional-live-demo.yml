@@ -101,6 +101,13 @@ jobs:
           GOOGLE_CLOUD_LOCATION: global
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/record_v6_functional_demo.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace("page.locator('[data-open=\"chat\"]').click()", "page.locator('[data-open=\"chat\"]').last.click()")
+          p.write_text(s, encoding='utf-8')
+          PY
           python scripts/record_v6_functional_demo.py
 
       - name: Generate Charon narration
