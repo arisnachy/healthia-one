@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 
 from healthia_one.config import Settings
+from healthia_one.control import in_quiet_hours, patient_now
 from healthia_one.google_constellation import (
     GrantBundle,
     GoogleAction,
@@ -104,6 +106,14 @@ class GuardianEmailDispatcher:
         event_id: str,
         mission_id: str,
     ) -> dict:
+        if not state.consent.proactive_enabled:
+            return {"status": "skipped_proactive_disabled", "sent": 0, "recovered": 0}
+        now = datetime.now(timezone.utc)
+        if state.consent.snoozed_until and now < state.consent.snoozed_until:
+            return {"status": "skipped_snoozed", "sent": 0, "recovered": 0}
+        if in_quiet_hours(state.consent, patient_now(state, now)):
+            return {"status": "skipped_quiet_hours", "sent": 0, "recovered": 0}
+
         plan = plan_guardian_notification(state, assessment, mission_id=mission_id)
         draft = plan.email
         if not assessment.notify_patient:
