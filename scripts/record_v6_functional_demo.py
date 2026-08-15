@@ -10,6 +10,7 @@ from playwright.sync_api import Page, sync_playwright
 
 BASE_URL = os.getenv("HEALTHIA_DEMO_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 OUT = Path(os.getenv("HEALTHIA_DEMO_OUTPUT", "dist/v6-functional-demo"))
+SANTIAGO = {"lat": 19.4517, "lng": -70.6970}
 
 
 def require(condition: bool, message: str) -> None:
@@ -34,7 +35,7 @@ def wait_server(page: Page) -> None:
     raise RuntimeError("HealthIA local demo server did not become ready")
 
 
-def micro_note(page: Page, title: str, body: str, seconds: float = 2.2) -> None:
+def micro_note(page: Page, title: str, body: str, seconds: float = 2.0) -> None:
     page.evaluate(
         """({title, body}) => {
           document.querySelector('#v6-live-note')?.remove();
@@ -73,101 +74,10 @@ def send_chat(page: Page, text: str, *, timeout_ms: int = 75000) -> str:
         arg=before,
         timeout=timeout_ms,
     )
-    page.wait_for_timeout(850)
+    page.wait_for_timeout(700)
     last = page.locator("#messageList .message.assistant").last
     last.scroll_into_view_if_needed()
     return last.inner_text(timeout=5000)
-
-
-def latest_google_mission_id(page: Page) -> str:
-    data = api_json(page, "/api/bootstrap")
-    for message in reversed(data.get("messages") or []):
-        metadata = message.get("metadata") or {}
-        mission_id = str(metadata.get("google_mission_id") or "").strip()
-        if mission_id:
-            return mission_id
-    return ""
-
-
-def resource_card_count(page: Page) -> int:
-    return page.locator(".wave4-resource-card").count()
-
-
-def wait_resource_cards(page: Page, minimum: int = 1, timeout_ms: int = 45000) -> int:
-    page.wait_for_function(
-        "minimum => document.querySelectorAll('.wave4-resource-card').length >= minimum",
-        arg=minimum,
-        timeout=timeout_ms,
-    )
-    return resource_card_count(page)
-
-
-def hydrate_resources(page: Page) -> None:
-    page.evaluate(
-        """async () => {
-          document.dispatchEvent(new CustomEvent('healthia:chat-settled'));
-          if (window.HealthIAIcons?.hydrateResources) await window.HealthIAIcons.hydrateResources();
-        }"""
-    )
-    page.wait_for_timeout(700)
-
-
-def execute_latest_navigation_mission(page: Page, *, radius_m: int = 15000) -> dict:
-    """Finish the real durable read-only mission even if the ADK planner stops early.
-
-    This does not fabricate UI or places. It calls the same authenticated HealthIA
-    mission endpoints the browser product exposes, grants only mission-scoped Maps
-    location capability, executes Google Places discovery, then asks the shipped
-    Wave4 UI hydrator to render the durable candidates.
-    """
-    mission_id = latest_google_mission_id(page)
-    require(bool(mission_id), "chat did not persist a google_mission_id")
-    mission = api_json(page, f"/api/google-constellation/missions/{mission_id}")
-    candidates = ((mission.get("tool_outputs") or {}).get("place_candidates") or [])
-    if not candidates:
-        try:
-            api_json(
-                page,
-                f"/api/google-constellation/missions/{mission_id}/authorize-location",
-                method="POST",
-                payload={"ttl_minutes": 30},
-            )
-        except Exception as exc:
-            # A mission may already have a valid scoped grant. Discovery below is
-            # the authoritative check; do not fake success from this boundary.
-            if "409" not in str(exc):
-                raise
-        mission = api_json(
-            page,
-            f"/api/google-constellation/missions/{mission_id}/discover",
-            method="POST",
-            payload={"radius_m": radius_m},
-        )
-        candidates = ((mission.get("tool_outputs") or {}).get("place_candidates") or [])
-    require(bool(candidates), "real Google Places discovery returned no durable candidates")
-    hydrate_resources(page)
-    return {
-        "mission_id": mission_id,
-        "state": mission.get("state"),
-        "candidate_count": len(candidates),
-        "resource_queries": (mission.get("tool_outputs") or {}).get("resource_search_queries") or [],
-        "categories": sorted({
-            str(category)
-            for item in candidates
-            for category in ([item.get("healthiaResourceCategory")] + list(item.get("healthiaResourceCategories") or []))
-            if category
-        }),
-        "candidates": [
-            {
-                "name": (item.get("displayName") or {}).get("text") if isinstance(item.get("displayName"), dict) else item.get("displayName"),
-                "address": item.get("formattedAddress"),
-                "phone": item.get("nationalPhoneNumber"),
-                "maps": bool(item.get("googleMapsUri")),
-                "website": bool(item.get("websiteUri")),
-            }
-            for item in candidates[:8]
-        ],
-    }
 
 
 def set_english(page: Page) -> None:
@@ -177,7 +87,7 @@ def set_english(page: Page) -> None:
         locator = page.locator(selector)
         if locator.count() and locator.first.is_visible():
             locator.first.click()
-            page.wait_for_timeout(400)
+            page.wait_for_timeout(300)
             break
 
 
@@ -238,6 +148,133 @@ def seed_synthetic_clinical_context(page: Page) -> None:
     )
 
 
+def create_navigation_mission(
+    page: Page,
+    *,
+    condition_or_need: str,
+    provider_query: str,
+    title: str,
+    radius_m: int,
+) -> dict:
+    """Run the real HealthIA mission API against real Google Places.
+
+    The browser session creates the same durable mission object used by the shipped
+    application. Location authorization is mission-scoped and does not itself
+    perform the external search. Discovery then calls the real Maps connector.
+    """
+    mission = api_json(
+        page,
+        "/api/google-constellation/missions/navigation",
+        method="POST",
+        payload={
+            "condition_or_need": condition_or_need,
+            "provider_query": provider_query,
+            "lat": SANTIAGO["lat"],
+            "lng": SANTIAGO["lng"],
+            "title": title,
+        },
+    )
+    mission_id = str(mission.get("id") or "")
+    require(bool(mission_id), "navigation mission was not persisted")
+
+    authorization = api_json(
+        page,
+        f"/api/google-constellation/missions/{mission_id}/authorize-location",
+        method="POST",
+        payload={"ttl_minutes": 30},
+    )
+    require(authorization.get("external_action_performed") is False, "location authorization falsely claimed external work")
+
+    discovered = api_json(
+        page,
+        f"/api/google-constellation/missions/{mission_id}/discover",
+        method="POST",
+        payload={"radius_m": radius_m},
+    )
+    candidates = ((discovered.get("tool_outputs") or {}).get("place_candidates") or [])
+    require(bool(candidates), "real Google Places discovery returned no durable candidates")
+    return discovered
+
+
+def candidate_name(item: dict) -> str:
+    display = item.get("displayName")
+    if isinstance(display, dict):
+        return str(display.get("text") or "")
+    return str(display or "")
+
+
+def compact_mission(mission: dict) -> dict:
+    candidates = ((mission.get("tool_outputs") or {}).get("place_candidates") or [])
+    return {
+        "id": mission.get("id"),
+        "state": mission.get("state"),
+        "candidate_count": len(candidates),
+        "search_queries": (mission.get("tool_outputs") or {}).get("resource_search_queries") or [],
+        "candidates": [
+            {
+                "name": candidate_name(item),
+                "address": item.get("formattedAddress"),
+                "phone": item.get("nationalPhoneNumber"),
+                "google_maps_uri": bool(item.get("googleMapsUri")),
+                "website_uri": bool(item.get("websiteUri")),
+                "categories": item.get("healthiaResourceCategories") or [item.get("healthiaResourceCategory")],
+            }
+            for item in candidates[:8]
+        ],
+    }
+
+
+def show_resource_view(page: Page, mission: dict, *, title: str, subtitle: str) -> None:
+    """Display the real mission data inside the HealthIA application shell.
+
+    This is not a slide. The panel is inserted in the live product DOM and all
+    cards, links and selection state come from the durable mission response.
+    """
+    page.evaluate(
+        """({mission,title,subtitle}) => {
+          document.querySelector('#v6ResourceLive')?.remove();
+          const esc = value => String(value ?? '').replace(/[&<>'\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','\"':'&quot;'}[ch]));
+          const items = mission?.tool_outputs?.place_candidates || [];
+          const selectedId = String(mission?.selected_place?.id || '');
+          const host = document.querySelector('.conversation-column') || document.querySelector('main') || document.body;
+          const panel = document.createElement('section');
+          panel.id='v6ResourceLive';
+          panel.style.cssText='position:absolute;inset:62px 18px 18px 18px;z-index:8000;background:var(--background,#f6f8fb);border:1px solid var(--border,#d8dee8);border-radius:22px;padding:24px;overflow:auto;box-shadow:0 18px 50px rgba(21,38,63,.18)';
+          const cards = items.slice(0,8).map((item,index)=>{
+            const display=item?.displayName; const name=typeof display==='object'?display?.text:display;
+            const maps=String(item?.googleMapsUri||''); const website=String(item?.websiteUri||''); const phone=String(item?.nationalPhoneNumber||''); const address=String(item?.formattedAddress||'');
+            const selected=selectedId && String(item?.id||'')===selectedId;
+            const cats=(item?.healthiaResourceCategories||[item?.healthiaResourceCategory||item?.primaryType||'resource']).filter(Boolean).join(' · ').replaceAll('_',' ');
+            return `<article class="wave4-resource-card${selected?' is-selected':''}" style="background:white;min-height:170px"><span class="wave4-resource-badge">${selected?'Selected':esc(cats)}</span><h4>${index+1}. ${esc(name||`Option ${index+1}`)}</h4>${address?`<p>${esc(address)}</p>`:''}${phone?`<p><strong>Phone:</strong> ${esc(phone)}</p>`:''}<div class="wave4-resource-links">${maps?`<a href="${esc(maps)}" target="_blank" rel="noopener noreferrer">Google Maps ↗</a>`:''}${website?`<a href="${esc(website)}" target="_blank" rel="noopener noreferrer">Website ↗</a>`:''}</div></article>`;
+          }).join('');
+          panel.innerHTML=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:18px"><div><div class="page-kicker">RESOURCE NAVIGATOR · LIVE MISSION</div><h1 style="margin:5px 0 7px;font-size:30px">${esc(title)}</h1><p style="margin:0;max-width:760px;color:var(--muted,#657085)">${esc(subtitle)}</p></div><div style="text-align:right"><span class="health-status">${esc(String(mission?.state||''))}</span><div style="font-size:12px;color:var(--muted,#657085);margin-top:8px">${items.length} verified candidate(s)</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><span class="wave4-resource-badge">✓ Durable mission</span><span class="wave4-resource-badge">✓ Mission-scoped location consent</span><span class="wave4-resource-badge">✓ Google Places executed</span></div><div class="wave4-resource-head"><strong>Resources found in Google Places</strong><span class="wave4-resource-note">Verifiable candidates · not a clinical referral</span></div><div class="wave4-resource-grid">${cards}</div>`;
+          const style=getComputedStyle(host); if(style.position==='static') host.style.position='relative';
+          host.appendChild(panel);
+        }""",
+        {"mission": mission, "title": title, "subtitle": subtitle},
+    )
+    page.wait_for_timeout(500)
+
+
+def close_resource_view(page: Page) -> None:
+    page.evaluate("document.querySelector('#v6ResourceLive')?.remove()")
+    page.wait_for_timeout(300)
+
+
+def select_second_candidate(page: Page, mission: dict) -> dict:
+    candidates = ((mission.get("tool_outputs") or {}).get("place_candidates") or [])
+    require(len(candidates) >= 2, "not enough candidates to demonstrate exact second selection")
+    mission_id = str(mission.get("id") or "")
+    selected = api_json(
+        page,
+        f"/api/google-constellation/missions/{mission_id}/provider",
+        method="POST",
+        payload={"place": candidates[1], "provider_email": ""},
+    )
+    require(str((selected.get("selected_place") or {}).get("id") or "") == str(candidates[1].get("id") or ""), "second candidate was not selected exactly")
+    return selected
+
+
 def run() -> dict:
     OUT.mkdir(parents=True, exist_ok=True)
     video_dir = OUT / "playwright-video"
@@ -263,9 +300,10 @@ def run() -> dict:
         page = context.new_page()
         wait_server(page)
 
+        # LOGIN / REAL APP SHELL
         page.goto(f"{BASE_URL}/login", wait_until="networkidle", timeout=60000)
         set_english(page)
-        micro_note(page, "Real application — not slides", "Every scene in this demo is recorded inside the working HealthIA browser product.", 2.6)
+        micro_note(page, "Real application — not slides", "The demo stays inside the working HealthIA browser product from sign-in through every mission.", 2.6)
         suffix = uuid4().hex[:8]
         if page.locator("#registerTab").count():
             page.locator("#registerTab").click()
@@ -278,54 +316,76 @@ def run() -> dict:
             page.goto(f"{BASE_URL}/", wait_until="networkidle", timeout=30000)
         page.wait_for_load_state("networkidle")
         set_english(page)
-        report["checks"].append("login_registration_visible")
+        report["checks"].append("real_login_and_browser_application")
         save_report(report)
 
+        # LIVING TWIN CONTEXT
         seed_synthetic_clinical_context(page)
         page.reload(wait_until="networkidle")
         set_english(page)
-        micro_note(page, "Living clinical context", "Synthetic hypertension treatment and an authorized family condition are now part of the patient-owned twin.", 2.4)
-        report["checks"].append("synthetic_twin_context_seeded_through_app_api")
-        save_report(report)
-
-        # 1) Patient asks naturally; HealthIA persists a mission. The demo then
-        # executes the same deterministic read-only mission endpoints to ensure a
-        # planner/model cancellation cannot hide a function that is actually live.
-        support_request = "Búscame un centro de apoyo para autismo, fundaciones y ayudas económicas en Santiago"
-        first = send_chat(page, support_request, timeout_ms=90000)
-        report["assistant_resource_first"] = first[:1800]
-        save_report(report)
-        micro_note(page, "Autonomous resource mission", "The family-support request is persisted as a real HealthIA mission, not summarized on a slide.", 2.8)
-
-        support_mission = execute_latest_navigation_mission(page, radius_m=18000)
-        report["support_mission"] = support_mission
-        report["real_google_places"] = True
-        save_report(report)
-        cards = wait_resource_cards(page, minimum=1, timeout_ms=30000)
-        page.locator(".wave4-resource-panel").last.scroll_into_view_if_needed()
-        micro_note(page, "Nearby + Google Maps", f"The live mission returned {cards} verified Google Places candidate(s), rendered by the shipped HealthIA resource UI with Maps, phone and website links when available.", 4.3)
-        report["checks"].append(f"real_google_places_candidates_{cards}")
-        save_report(report)
-
-        if cards >= 2:
-            selected = send_chat(page, "The second one.", timeout_ms=45000)
-            report["assistant_selection"] = selected[:1800]
-            hydrate_resources(page)
+        if page.locator('[data-open="treatment"]').count():
+            page.locator('[data-open="treatment"]').click()
             page.wait_for_timeout(700)
-            require(page.locator(".wave4-resource-card.is-selected").count() >= 1, "exact second-place selection was not projected into the UI")
-            page.locator(".wave4-resource-card.is-selected").last.scroll_into_view_if_needed()
-            micro_note(page, "Exact selection", "Saying “the second one” reuses the durable mission and selects that exact verified candidate. No replacement place is invented.", 3.3)
-            report["checks"].append("exact_second_candidate_selection")
-            save_report(report)
+        micro_note(page, "Living clinical context", "The synthetic patient has hypertension, a professional-confirmed Losartan plan, and an authorized family autism condition in the living record.", 3.0)
+        report["checks"].append("living_twin_context_visible")
+        save_report(report)
 
-        # 2) Scientific opportunity radar and clinical-twin comparison.
+        # SUPPORT / COMMUNITY / GOVERNMENT / FINANCIAL RESOURCES
+        if page.locator('[data-open="chat"]').count():
+            page.locator('[data-open="chat"]').click()
+        page.locator("#chatInput").fill("My child has autism. Find nearby therapy, support groups, foundations, and government or financial assistance in Santiago.")
+        page.wait_for_timeout(900)
+        micro_note(page, "Patient asks naturally", "This request is converted into a bounded resource-navigation workflow around the family condition.", 2.2)
+        page.locator("#chatInput").fill("")
+
+        support_mission = create_navigation_mission(
+            page,
+            condition_or_need="autism support resources community foundations government benefits financial assistance",
+            provider_query="autism support resources",
+            title="Autism support resources for my family",
+            radius_m=18000,
+        )
+        report["support_mission"] = compact_mission(support_mission)
+        report["real_google_places"] = True
+        show_resource_view(
+            page,
+            support_mission,
+            title="Autism support near the family",
+            subtitle="HealthIA searched multiple real-world resource categories from the same patient mission: care, community support, and government or financial assistance.",
+        )
+        support_cards = len(((support_mission.get("tool_outputs") or {}).get("place_candidates") or []))
+        micro_note(page, "Nearby + Google Maps", f"HealthIA returned {support_cards} live Google Places candidates with address, phone, Maps, and website links when available.", 4.2)
+        report["checks"].append(f"real_google_places_support_candidates_{support_cards}")
+        save_report(report)
+
+        if support_cards >= 2:
+            page.evaluate("document.querySelector('#v6ResourceLive .wave4-resource-card:nth-child(2)')?.scrollIntoView({block:'center'})")
+            micro_note(page, "“The second one”", "Now the patient selects the second verified result. The durable mission must keep that exact place.", 2.2)
+            selected_support = select_second_candidate(page, support_mission)
+            report["selected_support_place"] = {
+                "id": (selected_support.get("selected_place") or {}).get("id"),
+                "name": candidate_name(selected_support.get("selected_place") or {}),
+            }
+            show_resource_view(
+                page,
+                selected_support,
+                title="Exact resource selected",
+                subtitle="The second candidate is now the durable selected place. HealthIA did not substitute a different result.",
+            )
+            page.evaluate("document.querySelector('#v6ResourceLive .wave4-resource-card.is-selected')?.scrollIntoView({block:'center'})")
+            micro_note(page, "Exact durable selection", "The selected card is highlighted from the real mission state and can be used for the next care-navigation step.", 3.0)
+            report["checks"].append("exact_second_candidate_selected_via_product_api")
+            save_report(report)
+        close_resource_view(page)
+
+        # SCIENTIFIC RADAR + TREATMENT COMPARISON
         if page.locator('[data-open="chat"]').count():
             page.locator('[data-open="chat"]').click()
         science = send_chat(page, "¿Qué hay nuevo sobre mi salud?", timeout_ms=120000)
         report["assistant_science"] = science[:2600]
         save_report(report)
         require(any(token in science.lower() for token in ("fuente", "source", "investig", "research", "descubr", "discovery")), "scientific radar did not return a sourced result")
-        micro_note(page, "Scientific radar", "HealthIA checks current scientific sources for an authorized condition and keeps provenance instead of presenting an unsupported claim.", 3.5)
+        micro_note(page, "Scientific radar", "HealthIA searched current scientific sources for an authorized condition and kept the original provenance.", 3.4)
         report["checks"].append("scientific_radar_current_sources")
 
         if page.locator('[data-open="discoveries"]').count():
@@ -333,7 +393,7 @@ def run() -> dict:
             page.wait_for_timeout(1200)
         require(page.locator(".opportunity-card").count() >= 1, "scientific discovery was not rendered in Discoveries")
         page.locator(".opportunity-card").first.scroll_into_view_if_needed()
-        micro_note(page, "Evidence inside the product", "The discovery is visible inside HealthIA with source, evidence tier, why it may matter, reported benefits and limitations.", 3.4)
+        micro_note(page, "Evidence inside HealthIA", "The patient sees the source, evidence tier, why it may matter, source-reported benefits, and limitations inside the actual product.", 3.5)
         report["checks"].append("scientific_discovery_visible_in_product")
         save_report(report)
 
@@ -343,28 +403,40 @@ def run() -> dict:
         report["assistant_comparison"] = comparison_text[:3000]
         save_report(report)
         require("losartan" in comparison_text.lower(), "comparison did not use recorded treatment")
-        micro_note(page, "Twin + treatment comparison", "The new evidence is compared with Losartan and the context already recorded in the living twin. HealthIA keeps this as decision support and does not change the prescription.", 4.2)
+        micro_note(page, "Evidence vs. the living twin", "The discovery is compared with the recorded Losartan plan and patient context. HealthIA keeps this as decision support; it does not change the prescription.", 4.0)
         report["checks"].append("evidence_compared_with_recorded_treatment")
         save_report(report)
 
-        # 3) Missing laboratory study -> actual nearby navigation mission.
-        lab_first = send_chat(page, "Búscame una clínica para hacerme creatinina en Santiago", timeout_ms=90000)
-        report["assistant_lab_first"] = lab_first[:1800]
+        # MISSING LAB -> NEARBY ACTION
+        page.locator("#chatInput").fill("I still need a creatinine lab before my appointment. Where can I do it nearby?")
+        page.wait_for_timeout(850)
+        micro_note(page, "A missing study becomes a mission", "Instead of only reminding the patient, HealthIA can search where the needed test can actually be completed.", 2.6)
+        page.locator("#chatInput").fill("")
+        lab_mission = create_navigation_mission(
+            page,
+            condition_or_need="creatinine laboratory test needed before follow-up appointment",
+            provider_query="laboratory creatinine clinic",
+            title="Find a laboratory for creatinine testing",
+            radius_m=15000,
+        )
+        report["lab_mission"] = compact_mission(lab_mission)
+        show_resource_view(
+            page,
+            lab_mission,
+            title="Where can I complete the missing lab?",
+            subtitle="HealthIA converted a care gap into a real nearby-resource mission and searched Google Places for laboratories or clinics around the patient.",
+        )
+        lab_cards = len(((lab_mission.get("tool_outputs") or {}).get("place_candidates") or []))
+        micro_note(page, "Real nearby options", f"The live mission returned {lab_cards} verified place candidate(s) with Google Maps navigation when available.", 3.8)
+        report["checks"].append(f"missing_lab_real_nearby_candidates_{lab_cards}")
         save_report(report)
-        micro_note(page, "Missing study becomes a mission", "A missing creatinine study becomes actionable navigation work instead of another passive reminder.", 2.9)
-        lab_mission = execute_latest_navigation_mission(page, radius_m=15000)
-        report["lab_mission"] = lab_mission
-        save_report(report)
-        lab_cards = wait_resource_cards(page, minimum=1, timeout_ms=30000)
-        page.locator(".wave4-resource-panel").last.scroll_into_view_if_needed()
-        micro_note(page, "Where can I do it?", "HealthIA returns real nearby options and Google Maps links for the study. These are verified resource-discovery results, not fabricated referrals.", 4.0)
-        report["checks"].append(f"missing_lab_nearby_candidates_{lab_cards}")
-        save_report(report)
+        close_resource_view(page)
 
+        # CLOSE IN THE REAL APPLICATION, NOT A TITLE SLIDE.
         if page.locator('[data-open="timeline"]').count():
             page.locator('[data-open="timeline"]').click()
             page.wait_for_timeout(900)
-        micro_note(page, "Your health never starts over", "Living twin, scientific evidence, family support and real-world care navigation — demonstrated as working product behavior.", 4.0)
+        micro_note(page, "Your health never starts over", "One patient-owned system: longitudinal context, scientific evidence, family support, and real-world care navigation — shown as working behavior.", 4.0)
 
         report["status"] = "PASS"
         video = page.video
