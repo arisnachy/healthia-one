@@ -11,6 +11,7 @@ from healthia_one.fcm_registration import (
     build_fcm_registration_store,
     build_registration,
 )
+from healthia_one.medication_reconciliation import build_medication_reconciliation_router
 from healthia_one.mission_evidence_api import build_mission_evidence_router
 from healthia_one.pairing import DevicePairingManager
 
@@ -32,8 +33,8 @@ def build_fcm_device_router(
     """Build the authenticated control-router bundle installed by app.main.
 
     Device FCM endpoints retain their exact `/api/devices/fcm` paths. Mission
-    evidence endpoints live in their own module/router and are composed here so
-    app.main does not need a second global router wiring path.
+    evidence and medication-reconciliation endpoints live in separate modules
+    and are composed here so app.main keeps one authenticated control bundle.
     """
 
     verifier = pairing_manager or DevicePairingManager()
@@ -173,4 +174,5 @@ def build_fcm_device_router(
 
     root.include_router(router)
     root.include_router(build_mission_evidence_router(service))
+    root.include_router(build_medication_reconciliation_router(service))
     return root
