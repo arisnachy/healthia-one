@@ -292,7 +292,7 @@ def test_composed_app_router_exposes_mission_evidence_paths_without_changing_fcm
     service = HealthIAService(Settings(store_backend="memory", llm_backend="mock"))
     app = FastAPI()
     app.include_router(build_fcm_device_router(service, service.settings))
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
 
     assert "/api/missions/{mission_id}/evidence/documents/{document_id}" in paths
     assert "/api/missions/{mission_id}/evidence" in paths
