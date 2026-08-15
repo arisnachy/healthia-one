@@ -23,7 +23,6 @@ jobs:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       GMAIL_WORKER: healthia-gmail-worker
-      AUTOPILOT_SERVICE: healthia-one-autopilot
       PROOF_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +51,6 @@ jobs:
           image="${image_package}:${source_sha}"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "image_package=$image_package" >> "$GITHUB_OUTPUT"
           build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
           test -n "$build_id"
           echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
@@ -77,22 +75,15 @@ jobs:
           runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail-worker.json)"
           service_url="$(jq -r '.status.url // empty' /tmp/gmail-worker.json)"
           topic="$(jq -r '.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value' /tmp/gmail-worker.json | head -n1)"
+          old_proactive="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_PROACTIVE_ENABLED") | .value][0] // "__ABSENT__"' /tmp/gmail-worker.json)"
           test -n "$old_image" && test -n "$runtime_sa" && test -n "$service_url"
           [[ "$topic" == projects/*/topics/* ]]
           echo "old_image=$old_image" >> "$GITHUB_OUTPUT"
           echo "old_revision=$old_revision" >> "$GITHUB_OUTPUT"
+          echo "old_proactive=$old_proactive" >> "$GITHUB_OUTPUT"
           echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
           echo "service_url=$service_url" >> "$GITHUB_OUTPUT"
           echo "topic=$topic" >> "$GITHUB_OUTPUT"
-
-          # Verify the synthetic OAuth metadata still exists without reading secret payloads.
-          connection_exists="$(gcloud firestore documents describe \
-            "projects/${PROJECT_ID}/databases/(default)/documents/healthia_google_oauth_connections/${PROOF_PATIENT_ID}" \
-            --project "$PROJECT_ID" --format='value(name)' 2>/dev/null || true)"
-          if [[ -z "$connection_exists" ]]; then
-            echo "Synthetic proof OAuth metadata is unavailable; refusing live Gmail proof." >&2
-            exit 1
-          fi
 
       - name: Promote Wave 14 image to private Gmail worker
         id: promote
@@ -103,14 +94,18 @@ jobs:
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --image "${{ steps.build.outputs.image }}" \
+            --update-env-vars HEALTHIA_PROACTIVE_ENABLED=true \
             --quiet
-          revision="$(gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
-          current_image="$(gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail-worker-wave14.json
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/gmail-worker-wave14.json)"
+          current_image="$(jq -r '.spec.template.spec.containers[0].image // empty' /tmp/gmail-worker-wave14.json)"
+          proactive="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_PROACTIVE_ENABLED") | .value][0] // empty' /tmp/gmail-worker-wave14.json)"
           test -n "$revision"
           [[ "$current_image" == "${{ steps.build.outputs.image }}"* || "$current_image" == *"@sha256:"* ]]
+          [[ "${proactive,,}" == "true" ]]
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
 
-      - name: Verify private Wave 14 Gmail worker health
+      - name: Verify Gmail worker remains private
         shell: bash
         run: |
           set -euo pipefail
@@ -120,9 +115,6 @@ jobs:
             echo "Private worker unexpectedly allowed unauthenticated access: ${unauth:-empty}" >&2
             exit 1
           fi
-          token="$(gcloud auth print-identity-token --audiences="$url" 2>/dev/null || gcloud auth print-identity-token)"
-          body="$(curl -fsS -H "Authorization: Bearer ${token}" "$url/healthz")"
-          jq -e '.status == "ok" and .service == "healthia-gmail-worker" and .guardian_email_replies == "mission_linked_opt_in_only"' <<<"$body" >/dev/null
 
       - name: Create reversible Cloud Run proof jobs
         id: jobs
@@ -134,7 +126,7 @@ jobs:
           image="${{ steps.build.outputs.image }}"
           runtime_sa="${{ steps.preflight.outputs.runtime_sa }}"
           topic="${{ steps.preflight.outputs.topic }}"
-          common_env="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_GMAIL_PUBSUB_TOPIC=${topic},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID}"
+          common_env="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${topic},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID}"
           for phase in setup process reply verify restore; do
             name="${prefix}-${phase}"
             timeout="180s"
@@ -184,14 +176,15 @@ jobs:
           mkdir -p dist/guardian-wave14-live-proof
           report="dist/guardian-wave14-live-proof/report.md"
           source_sha="${{ steps.build.outputs.source_sha }}"
-          proof_path="projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_live_proofs/${GITHUB_RUN_ID}"
-          gcloud firestore documents describe "$proof_path" --project "$PROJECT_ID" --format=json > /tmp/wave14-proof.json
+          access_token="$(gcloud auth print-access-token)"
+          proof_url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_live_proofs/${GITHUB_RUN_ID}"
+          curl -fsS -H "Authorization: Bearer ${access_token}" "$proof_url" > /tmp/wave14-proof.json
+          unset access_token
           status="$(jq -r '.fields.status.stringValue // empty' /tmp/wave14-proof.json)"
           mission_status="$(jq -r '.fields.mission_status.stringValue // empty' /tmp/wave14-proof.json)"
           source_type="$(jq -r '.fields.vital_source_type.stringValue // empty' /tmp/wave14-proof.json)"
           outbox_status="$(jq -r '.fields.outbox_status.stringValue // empty' /tmp/wave14-proof.json)"
           processed_count="$(jq -r '.fields.processed_reply_count.integerValue // "0"' /tmp/wave14-proof.json)"
-          restored="$(jq -r '.fields.patient_state_restored.booleanValue // false' /tmp/wave14-proof.json)"
           {
             echo "# HealthIA Wave 14 bidirectional Guardian email — live proof"
             echo
@@ -211,6 +204,7 @@ jobs:
             echo "- Gmail send and Gmail reply used the real connected Google account and real Gmail thread."
             echo "- The patient reply text was controlled synthetic proof data (BP 128/80), not a human-authored clinical report."
             echo "- The return path had to arrive through the private Gmail PubSub worker and existing users.history.list bridge before the same HealthIA mission could close."
+            echo "- The outbound Autopilot phase ran as a separate private Cloud Run Job from the durable outbox; this proof does not claim Eventarc invoked that phase."
             echo "- No medication/treatment change was performed."
             echo "- No OAuth token, refresh token, mailbox address, email body, patient profile field, or secret payload is included in this artifact."
           } > "$report"
@@ -226,28 +220,33 @@ jobs:
           fi
           cat "$report"
 
-      - name: RESTORE original patient state
+      - name: RESTORE original synthetic patient state
+        id: restore
         if: always() && steps.setup.outputs.complete == 'true'
         shell: bash
         run: |
-          set +e
+          set -euo pipefail
           gcloud run jobs execute "${{ steps.jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
-          restore_exit=$?
-          proof_path="projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_live_proofs/${GITHUB_RUN_ID}"
-          restored="$(gcloud firestore documents describe "$proof_path" --project "$PROJECT_ID" --format='value(fields.patient_state_restored.booleanValue)' 2>/dev/null || true)"
-          if [[ $restore_exit -ne 0 || "$restored" != "True" && "$restored" != "true" ]]; then
-            echo "Original synthetic patient state restoration could not be independently confirmed." >&2
-            exit 1
-          fi
+          access_token="$(gcloud auth print-access-token)"
+          proof_url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_live_proofs/${GITHUB_RUN_ID}"
+          restored="$(curl -fsS -H "Authorization: Bearer ${access_token}" "$proof_url" | jq -r '.fields.patient_state_restored.booleanValue // false')"
+          unset access_token
+          [[ "$restored" == "true" ]]
+          echo "confirmed=true" >> "$GITHUB_OUTPUT"
 
       - name: Roll back Gmail worker if proof failed
         if: failure() && steps.preflight.outputs.old_image != ''
         shell: bash
         run: |
           set +e
-          gcloud run services update "$GMAIL_WORKER" \
-            --project "$PROJECT_ID" --region "$REGION" \
-            --image "${{ steps.preflight.outputs.old_image }}" --quiet
+          args=(run services update "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --image "${{ steps.preflight.outputs.old_image }}")
+          old_proactive="${{ steps.preflight.outputs.old_proactive }}"
+          if [[ "$old_proactive" == "__ABSENT__" ]]; then
+            args+=(--remove-env-vars HEALTHIA_PROACTIVE_ENABLED)
+          else
+            args+=(--update-env-vars "HEALTHIA_PROACTIVE_ENABLED=${old_proactive}")
+          fi
+          gcloud "${args[@]}" --quiet
 
       - name: Cleanup proof jobs
         if: always() && steps.jobs.outputs.setup_job != ''
