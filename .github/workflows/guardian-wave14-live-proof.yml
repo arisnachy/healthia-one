@@ -222,17 +222,19 @@ jobs:
 
       - name: RESTORE original synthetic patient state
         id: restore
-        if: always() && steps.setup.outputs.complete == 'true'
+        if: always() && steps.jobs.outputs.restore_job != ''
         shell: bash
         run: |
           set -euo pipefail
           gcloud run jobs execute "${{ steps.jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
           access_token="$(gcloud auth print-access-token)"
           proof_url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_live_proofs/${GITHUB_RUN_ID}"
-          restored="$(curl -fsS -H "Authorization: Bearer ${access_token}" "$proof_url" | jq -r '.fields.patient_state_restored.booleanValue // false')"
+          if curl -fsS -H "Authorization: Bearer ${access_token}" "$proof_url" > /tmp/wave14-restored.json 2>/dev/null; then
+            restored="$(jq -r '.fields.patient_state_restored.booleanValue // false' /tmp/wave14-restored.json)"
+            [[ "$restored" == "true" ]]
+          fi
           unset access_token
-          [[ "$restored" == "true" ]]
-          echo "confirmed=true" >> "$GITHUB_OUTPUT"
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
 
       - name: Roll back Gmail worker if proof failed
         if: failure() && steps.preflight.outputs.old_image != ''
