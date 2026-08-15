@@ -1,0 +1,273 @@
+name: Guardian Wave 14 bidirectional Gmail live proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/guardian-wave14-live-proof.yml"
+      - "scripts/guardian_wave14_live_proof.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave14-live-proof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  live-proof:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/guardian-wave14-live-proof')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      GMAIL_WORKER: healthia-gmail-worker
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      PROOF_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Build exact-head proof image
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-wave14-proof"
+          image="${image_package}:${source_sha}"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "image_package=$image_package" >> "$GITHUB_OUTPUT"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          digest=""
+          for _ in $(seq 1 72); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight live Gmail worker and preserve rollback state
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/guardian-wave14-live-proof
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail-worker.json
+          old_image="$(jq -r '.spec.template.spec.containers[0].image // empty' /tmp/gmail-worker.json)"
+          old_revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/gmail-worker.json)"
+          runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail-worker.json)"
+          service_url="$(jq -r '.status.url // empty' /tmp/gmail-worker.json)"
+          topic="$(jq -r '.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value' /tmp/gmail-worker.json | head -n1)"
+          test -n "$old_image" && test -n "$runtime_sa" && test -n "$service_url"
+          [[ "$topic" == projects/*/topics/* ]]
+          echo "old_image=$old_image" >> "$GITHUB_OUTPUT"
+          echo "old_revision=$old_revision" >> "$GITHUB_OUTPUT"
+          echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "service_url=$service_url" >> "$GITHUB_OUTPUT"
+          echo "topic=$topic" >> "$GITHUB_OUTPUT"
+
+          # Verify the synthetic OAuth metadata still exists without reading secret payloads.
+          connection_exists="$(gcloud firestore documents describe \
+            "projects/${PROJECT_ID}/databases/(default)/documents/healthia_google_oauth_connections/${PROOF_PATIENT_ID}" \
+            --project "$PROJECT_ID" --format='value(name)' 2>/dev/null || true)"
+          if [[ -z "$connection_exists" ]]; then
+            echo "Synthetic proof OAuth metadata is unavailable; refusing live Gmail proof." >&2
+            exit 1
+          fi
+
+      - name: Promote Wave 14 image to private Gmail worker
+        id: promote
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update "$GMAIL_WORKER" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "${{ steps.build.outputs.image }}" \
+            --quiet
+          revision="$(gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          current_image="$(gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          test -n "$revision"
+          [[ "$current_image" == "${{ steps.build.outputs.image }}"* || "$current_image" == *"@sha256:"* ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify private Wave 14 Gmail worker health
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${{ steps.preflight.outputs.service_url }}"
+          unauth="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+          if [[ -z "$unauth" || "$unauth" =~ ^2 ]]; then
+            echo "Private worker unexpectedly allowed unauthenticated access: ${unauth:-empty}" >&2
+            exit 1
+          fi
+          token="$(gcloud auth print-identity-token --audiences="$url" 2>/dev/null || gcloud auth print-identity-token)"
+          body="$(curl -fsS -H "Authorization: Bearer ${token}" "$url/healthz")"
+          jq -e '.status == "ok" and .service == "healthia-gmail-worker" and .guardian_email_replies == "mission_linked_opt_in_only"' <<<"$body" >/dev/null
+
+      - name: Create reversible Cloud Run proof jobs
+        id: jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix="${GITHUB_RUN_ID}"
+          prefix="healthia-wave14-${suffix}"
+          image="${{ steps.build.outputs.image }}"
+          runtime_sa="${{ steps.preflight.outputs.runtime_sa }}"
+          topic="${{ steps.preflight.outputs.topic }}"
+          common_env="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_GMAIL_PUBSUB_TOPIC=${topic},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID}"
+          for phase in setup process reply verify restore; do
+            name="${prefix}-${phase}"
+            timeout="180s"
+            [[ "$phase" == "verify" ]] && timeout="240s"
+            gcloud run jobs create "$name" \
+              --project "$PROJECT_ID" --region "$REGION" \
+              --image "$image" --service-account "$runtime_sa" \
+              --command python \
+              --args "scripts/guardian_wave14_live_proof.py,${phase}" \
+              --set-env-vars "$common_env" \
+              --max-retries 0 --task-timeout "$timeout" \
+              --quiet
+            echo "${phase}_job=$name" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: SETUP synthetic reversible patient state
+        id: setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.setup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - name: PROCESS durable Guardian outbox and send real Gmail
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.process_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: REPLY with controlled synthetic BP through real Gmail thread
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.reply_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: VERIFY real Gmail PubSub resumes and resolves same mission
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.verify_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Collect sanitized live evidence
+        if: always() && steps.setup.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/guardian-wave14-live-proof
+          report="dist/guardian-wave14-live-proof/report.md"
+          source_sha="${{ steps.build.outputs.source_sha }}"
+          proof_path="projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_live_proofs/${GITHUB_RUN_ID}"
+          gcloud firestore documents describe "$proof_path" --project "$PROJECT_ID" --format=json > /tmp/wave14-proof.json
+          status="$(jq -r '.fields.status.stringValue // empty' /tmp/wave14-proof.json)"
+          mission_status="$(jq -r '.fields.mission_status.stringValue // empty' /tmp/wave14-proof.json)"
+          source_type="$(jq -r '.fields.vital_source_type.stringValue // empty' /tmp/wave14-proof.json)"
+          outbox_status="$(jq -r '.fields.outbox_status.stringValue // empty' /tmp/wave14-proof.json)"
+          processed_count="$(jq -r '.fields.processed_reply_count.integerValue // "0"' /tmp/wave14-proof.json)"
+          restored="$(jq -r '.fields.patient_state_restored.booleanValue // false' /tmp/wave14-proof.json)"
+          {
+            echo "# HealthIA Wave 14 bidirectional Guardian email — live proof"
+            echo
+            echo "Exact source head: ${source_sha}"
+            echo "Image digest: ${{ steps.build.outputs.digest }}"
+            echo "Private Gmail worker revision: ${{ steps.promote.outputs.revision }}"
+            echo "Mode: real Google Gmail + users.watch/PubSub/history path, controlled synthetic BP reply, synthetic patient state only"
+            echo
+            echo "## Result before restore"
+            echo "- Proof status: ${status:-missing}"
+            echo "- Same durable mission status: ${mission_status:-missing}"
+            echo "- Persisted evidence source: ${source_type:-missing}"
+            echo "- Autopilot outbox: ${outbox_status:-missing}"
+            echo "- Processed reply cardinality: ${processed_count}"
+            echo
+            echo "## Truth boundary"
+            echo "- Gmail send and Gmail reply used the real connected Google account and real Gmail thread."
+            echo "- The patient reply text was controlled synthetic proof data (BP 128/80), not a human-authored clinical report."
+            echo "- The return path had to arrive through the private Gmail PubSub worker and existing users.history.list bridge before the same HealthIA mission could close."
+            echo "- No medication/treatment change was performed."
+            echo "- No OAuth token, refresh token, mailbox address, email body, patient profile field, or secret payload is included in this artifact."
+          } > "$report"
+          if [[ "$status" != "live_pass" || "$mission_status" != "completed" || "$source_type" != "patient_email_reply" || "$outbox_status" != "processed" || "$processed_count" != "1" ]]; then
+            cat "$report"
+            echo "Wave 14 live proof did not reach all required terminal evidence." >&2
+            exit 1
+          fi
+          if grep -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|access_token|id_token|ya29\.|sk-[A-Za-z0-9]|@[A-Za-z0-9.-]+\.[A-Za-z]{2,})' "$report"; then
+            rm -rf dist/guardian-wave14-live-proof
+            echo "Sensitive-looking material appeared in proof artifact; refusing upload." >&2
+            exit 1
+          fi
+          cat "$report"
+
+      - name: RESTORE original patient state
+        if: always() && steps.setup.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set +e
+          gcloud run jobs execute "${{ steps.jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          restore_exit=$?
+          proof_path="projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_live_proofs/${GITHUB_RUN_ID}"
+          restored="$(gcloud firestore documents describe "$proof_path" --project "$PROJECT_ID" --format='value(fields.patient_state_restored.booleanValue)' 2>/dev/null || true)"
+          if [[ $restore_exit -ne 0 || "$restored" != "True" && "$restored" != "true" ]]; then
+            echo "Original synthetic patient state restoration could not be independently confirmed." >&2
+            exit 1
+          fi
+
+      - name: Roll back Gmail worker if proof failed
+        if: failure() && steps.preflight.outputs.old_image != ''
+        shell: bash
+        run: |
+          set +e
+          gcloud run services update "$GMAIL_WORKER" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.preflight.outputs.old_image }}" --quiet
+
+      - name: Cleanup proof jobs
+        if: always() && steps.jobs.outputs.setup_job != ''
+        shell: bash
+        run: |
+          set +e
+          for name in \
+            "${{ steps.jobs.outputs.setup_job }}" \
+            "${{ steps.jobs.outputs.process_job }}" \
+            "${{ steps.jobs.outputs.reply_job }}" \
+            "${{ steps.jobs.outputs.verify_job }}" \
+            "${{ steps.jobs.outputs.restore_job }}"; do
+            [[ -n "$name" ]] && gcloud run jobs delete "$name" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1
+          done
+
+      - name: Upload sanitized Wave 14 live proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave14-bidirectional-Gmail-live-proof
+          path: dist/guardian-wave14-live-proof
+          if-no-files-found: warn
+          retention-days: 30
