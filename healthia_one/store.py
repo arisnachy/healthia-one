@@ -8,6 +8,9 @@ from healthia_one.auth import current_patient_id
 from healthia_one.models import PatientState, utc_now
 
 
+PATIENT_STATE_COLLECTION = "healthia_one_patients"
+
+
 class StateStore(ABC):
     @abstractmethod
     async def load(self) -> PatientState:
@@ -88,7 +91,7 @@ class FirestoreStore(StateStore):
 
     def _ref(self):
         patient_id = current_patient_id()
-        return self.client.collection("healthia_one_patients").document(patient_id)
+        return self.client.collection(PATIENT_STATE_COLLECTION).document(patient_id)
 
     async def load(self) -> PatientState:
         patient_id = current_patient_id()
