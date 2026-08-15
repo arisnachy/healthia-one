@@ -78,100 +78,39 @@ class JsonTransport:
         body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         encoded = None if body is None else json.dumps(body).encode("utf-8")
-        merged = {"Accept": "application/json", **(headers or {})}
-        if encoded is not None:
-            merged.setdefault("Content-Type", "application/json")
-        req = request.Request(url, data=encoded, headers=merged, method=method)
+        req = request.Request(
+            url,
+            data=encoded,
+            method=method,
+            headers={
+                "Accept": "application/json",
+                **({"Content-Type": "application/json"} if encoded is not None else {}),
+                **(headers or {}),
+            },
+        )
         try:
-            with request.urlopen(req, timeout=self.timeout_seconds) as response:  # pragma: no cover - live network
+            with request.urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = response.read()
-        except Exception as exc:  # pragma: no cover - live network
+        except Exception as exc:
             raise GoogleConnectorError(f"Google API request failed: {type(exc).__name__}") from exc
         if not raw:
             return {}
         try:
             return json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise GoogleConnectorError("Google API returned invalid JSON") from exc
-
-
-def _bearer(token: str) -> dict[str, str]:
-    if not token:
-        raise GoogleConnectorError("Google OAuth access token is unavailable for this patient/service")
-    return {"Authorization": f"Bearer {token}"}
-
-
-class MapsConnector:
-    service = GoogleService.MAPS
-
-    def __init__(self, api_key: str, transport: JsonTransport | None = None) -> None:
-        self.api_key = api_key
-        self.transport = transport or JsonTransport()
-
-    def execute(self, action: GoogleAction, payload: dict[str, Any], *, idempotency_key: str) -> ConnectorResult:
-        if not self.api_key:
-            raise GoogleConnectorError("GOOGLE_MAPS_API_KEY is not configured")
-        if action == GoogleAction.MAPS_SEARCH_NEARBY:
-            lat = float(payload["lat"])
-            lng = float(payload["lng"])
-            radius = min(max(float(payload.get("radius_m", 5000)), 100), 50000)
-            max_results = min(max(int(payload.get("max_results", 5)), 1), 20)
-            field_mask = str(
-                payload.get("field_mask")
-                or "places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri,places.websiteUri,places.nationalPhoneNumber"
-            )
-            body: dict[str, Any] = {
-                "maxResultCount": max_results,
-                "rankPreference": str(payload.get("rank_preference") or "DISTANCE"),
-                "locationRestriction": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": radius}},
-            }
-            included_types = [str(item) for item in payload.get("included_types", []) if str(item).strip()]
-            if included_types:
-                body["includedTypes"] = included_types[:50]
-            result = self.transport.call(
-                "POST",
-                "https://places.googleapis.com/v1/places:searchNearby",
-                headers={"X-Goog-Api-Key": self.api_key, "X-Goog-FieldMask": field_mask},
-                body=body,
-            )
-            places = result.get("places") or []
-            return ConnectorResult(
-                safe_summary=f"Found {len(places)} nearby place candidate(s).",
-                data={"places": places, "field_mask": field_mask},
-            )
-        if action == GoogleAction.MAPS_PLACE_DETAILS:
-            place_id = str(payload["place_id"])
-            fields = str(payload.get("fields") or "id,displayName,formattedAddress,location,googleMapsUri,websiteUri,nationalPhoneNumber,regularOpeningHours")
-            url = f"https://places.googleapis.com/v1/places/{parse.quote(place_id, safe='')}?fields={parse.quote(fields, safe=',')}"
-            result = self.transport.call("GET", url, headers={"X-Goog-Api-Key": self.api_key})
-            return ConnectorResult(resource_id=place_id, safe_summary="Loaded selected place details.", data=result)
-        if action == GoogleAction.MAPS_ROUTE:
-            body = {
-                "origin": {"location": {"latLng": {"latitude": float(payload["origin_lat"]), "longitude": float(payload["origin_lng"])}}},
-                "destination": {"location": {"latLng": {"latitude": float(payload["destination_lat"]), "longitude": float(payload["destination_lng"])}}},
-                "travelMode": str(payload.get("travel_mode") or "DRIVE"),
-            }
-            result = self.transport.call(
-                "POST",
-                "https://routes.googleapis.com/directions/v2:computeRoutes",
-                headers={"X-Goog-Api-Key": self.api_key, "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline"},
-                body=body,
-            )
-            return ConnectorResult(safe_summary="Calculated travel route.", data=result)
-        raise GoogleConnectorError(f"Unsupported Maps action: {action}")
+        except Exception as exc:
+            raise GoogleConnectorError("Google API returned a non-JSON response") from exc
 
 
 class OAuthConnectorBase:
     service: GoogleService
 
-    def __init__(self, patient_id: str, token_provider: AccessTokenProvider, transport: JsonTransport | None = None) -> None:
-        self.patient_id = patient_id
-        self.token_provider = token_provider
+    def __init__(self, access_token: str, transport: JsonTransport | None = None) -> None:
+        self.access_token = access_token
         self.transport = transport or JsonTransport()
 
     @property
     def headers(self) -> dict[str, str]:
-        return _bearer(self.token_provider.access_token(self.patient_id, self.service))
+        return {"Authorization": f"Bearer {self.access_token}"}
 
 
 class CalendarConnector(OAuthConnectorBase):
@@ -224,6 +163,11 @@ class GmailConnector(OAuthConnectorBase):
     def _message_id(idempotency_key: str) -> str:
         return f"<healthia-{idempotency_key[:32]}@healthia.one>"
 
+    @staticmethod
+    def _thread_evidence(data: dict[str, Any]) -> list[str]:
+        thread_id = str(data.get("threadId") or "").strip()
+        return [f"gmail_thread:{thread_id}"] if thread_id else []
+
     def _raw_message(self, payload: dict[str, Any], idempotency_key: str) -> str:
         msg = EmailMessage()
         msg["To"] = ", ".join(str(item) for item in payload.get("to", []))
@@ -263,12 +207,25 @@ class GmailConnector(OAuthConnectorBase):
         if action in {GoogleAction.GMAIL_SEND, GoogleAction.GMAIL_REPLY}:
             existing = self._find_sent(idempotency_key)
             if existing:
-                return ConnectorResult(resource_id=str(existing.get("id") or ""), safe_summary="Recovered an already-sent Gmail message for this mission action.", data=existing, external_mutation=True, recovered_existing=True)
+                return ConnectorResult(
+                    resource_id=str(existing.get("id") or ""),
+                    safe_summary="Recovered an already-sent Gmail message for this mission action.",
+                    evidence_ids=self._thread_evidence(existing),
+                    data=existing,
+                    external_mutation=True,
+                    recovered_existing=True,
+                )
             message: dict[str, Any] = {"raw": raw}
             if payload.get("thread_id"):
                 message["threadId"] = str(payload["thread_id"])
             data = self.transport.call("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", headers=self.headers, body=message)
-            return ConnectorResult(resource_id=str(data.get("id") or ""), safe_summary="Sent the authorized Gmail message.", data=data, external_mutation=True)
+            return ConnectorResult(
+                resource_id=str(data.get("id") or ""),
+                safe_summary="Sent the authorized Gmail message.",
+                evidence_ids=self._thread_evidence(data),
+                data=data,
+                external_mutation=True,
+            )
         raise GoogleConnectorError(f"Unsupported Gmail action: {action}")
 
 
@@ -328,52 +285,91 @@ class TasksConnector(OAuthConnectorBase):
             body = dict(payload.get("task") or {})
             notes = str(body.get("notes") or "")
             marker = f"HealthIA-Key: {idempotency_key}"
-            body["notes"] = f"{notes}\n\n{marker}".strip()
+            if marker not in notes:
+                body["notes"] = (notes + "\n\n" + marker).strip()
+            query = parse.quote(idempotency_key)
+            existing = self.transport.call("GET", f"https://tasks.googleapis.com/tasks/v1/lists/{tasklist}/tasks?showCompleted=true&showHidden=true&maxResults=100", headers=self.headers)
+            for task in existing.get("items") or []:
+                if idempotency_key in str(task.get("notes") or ""):
+                    return ConnectorResult(resource_id=str(task.get("id") or ""), safe_summary="Recovered the existing Google task for this mission action.", data=task, external_mutation=True, recovered_existing=True)
             data = self.transport.call("POST", f"https://tasks.googleapis.com/tasks/v1/lists/{tasklist}/tasks", headers=self.headers, body=body)
-            return ConnectorResult(resource_id=str(data.get("id") or ""), safe_summary="Created the authorized follow-up task.", data=data, external_mutation=True)
-        task_id = parse.quote(str(payload["task_id"]), safe="")
-        url = f"https://tasks.googleapis.com/tasks/v1/lists/{tasklist}/tasks/{task_id}"
-        body = dict(payload.get("task") or {})
-        if action == GoogleAction.TASKS_COMPLETE:
-            body["status"] = "completed"
-        if action in {GoogleAction.TASKS_UPDATE, GoogleAction.TASKS_COMPLETE}:
-            data = self.transport.call("PATCH", url, headers=self.headers, body=body)
-            return ConnectorResult(resource_id=task_id, safe_summary="Updated the authorized follow-up task.", data=data, external_mutation=True)
+            return ConnectorResult(resource_id=str(data.get("id") or ""), safe_summary="Created the authorized Google task.", data=data, external_mutation=True)
         raise GoogleConnectorError(f"Unsupported Tasks action: {action}")
 
 
-class GoogleActionExecutor:
-    def __init__(self, *, connectors: dict[GoogleService, GoogleConnector], receipt_store: ReceiptStore | None = None) -> None:
-        self.connectors = connectors
-        self.receipt_store = receipt_store or MemoryReceiptStore()
+class RawGoogleExecutor:
+    def __init__(self, connectors: list[GoogleConnector] | None = None) -> None:
+        self.connectors: dict[GoogleService, GoogleConnector] = {
+            connector.service: connector for connector in (connectors or [])
+        }
 
-    def execute(self, request_value: GoogleActionRequest, grants: list[GoogleGrant]) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
-        decision = authorize_google_action(request_value, grants)
-        key = build_idempotency_key(request_value)
-        prior = self.receipt_store.get(request_value.patient_id, key)
-        if prior and prior.status == "completed":
-            return prior, ConnectorResult(resource_id=prior.resource_id, safe_summary=prior.safe_summary, recovered_existing=True)
-        if not decision.allowed:
-            receipt = build_google_receipt(request_value, status="blocked", safe_summary=decision.reason)
-            self.receipt_store.save(receipt)
-            return receipt, None
-        connector = self.connectors.get(request_value.service)
+    def execute(self, request: GoogleActionRequest, *, idempotency_key: str) -> ConnectorResult:
+        connector = self.connectors.get(request.service)
         if connector is None:
-            receipt = build_google_receipt(request_value, status="blocked", safe_summary=f"{request_value.service} connector is not configured.")
+            raise GoogleConnectorError(f"No connector registered for {request.service.value}")
+        return connector.execute(request.action, request.payload, idempotency_key=idempotency_key)
+
+
+class GuardedGoogleExecutor:
+    def __init__(self, *, grant_store, receipt_store: ReceiptStore, raw_executor: RawGoogleExecutor, authorization_store=None) -> None:
+        self.grant_store = grant_store
+        self.receipt_store = receipt_store
+        self.raw_executor = raw_executor
+        self.authorization_store = authorization_store
+
+    def execute(self, request: GoogleActionRequest) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
+        grants = self.grant_store.list_for_patient(request.patient_id)
+        decision = authorize_google_action(request, grants)
+        idempotency_key = build_idempotency_key(request)
+        existing_receipt = self.receipt_store.get(request.patient_id, idempotency_key)
+        if existing_receipt is not None and existing_receipt.status == "completed":
+            return existing_receipt, ConnectorResult(
+                resource_id=existing_receipt.resource_id,
+                safe_summary=existing_receipt.safe_summary,
+                evidence_ids=list(existing_receipt.evidence_ids),
+                external_mutation=True,
+                recovered_existing=True,
+            )
+        if not decision.allowed:
+            receipt = build_google_receipt(request, decision, idempotency_key=idempotency_key)
             self.receipt_store.save(receipt)
             return receipt, None
-        try:
-            outcome = connector.execute(request_value.action, request_value.payload, idempotency_key=key)
-        except Exception as exc:
-            receipt = build_google_receipt(request_value, status="failed", safe_summary=f"{request_value.service} action failed closed: {type(exc).__name__}.")
-            self.receipt_store.save(receipt)
-            raise
+        if decision.explicit_authorization_required:
+            authorization_id = str(request.explicit_authorization_id or request.standing_authorization_id or "").strip()
+            authorization = (
+                self.authorization_store.get(request.patient_id, authorization_id)
+                if self.authorization_store is not None and authorization_id
+                else None
+            )
+            if authorization is None or not authorization.usable_for(
+                patient_id=request.patient_id,
+                mission_id=request.mission_id,
+                action=request.action,
+                intent_key=build_action_intent_key(request),
+            ):
+                receipt = build_google_receipt(
+                    request,
+                    decision.model_copy(update={"allowed": False, "reason": "External mutation authorization is missing, expired, already used, or does not match this exact intent."}),
+                    idempotency_key=idempotency_key,
+                )
+                self.receipt_store.save(receipt)
+                return receipt, None
+            authorization_id = authorization.id
+        else:
+            authorization_id = ""
+        result = self.raw_executor.execute(request, idempotency_key=idempotency_key)
         receipt = build_google_receipt(
-            request_value,
+            request,
+            decision,
+            idempotency_key=idempotency_key,
+            resource_id=result.resource_id,
             status="completed",
-            resource_id=outcome.resource_id,
-            safe_summary=outcome.safe_summary,
-            evidence_ids=outcome.evidence_ids,
+            authorization_id=authorization_id,
+            safe_summary=result.safe_summary,
+            evidence_ids=result.evidence_ids,
         )
         self.receipt_store.save(receipt)
-        return receipt, outcome
+        if decision.explicit_authorization_required and self.authorization_store is not None and authorization_id:
+            authorization.mark_used(receipt.id)
+            self.authorization_store.save(authorization)
+        return receipt, result
