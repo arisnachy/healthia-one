@@ -9,6 +9,7 @@ from healthia_one.google_constellation import (
     GoogleActionRequest,
     GoogleGrant,
     GoogleService,
+    build_idempotency_key,
 )
 from healthia_one.google_constellation_singleton import get_google_constellation_service
 from healthia_one.google_constellation_store import GoogleActionAuthorization, build_action_intent_key
@@ -57,7 +58,7 @@ class GuardianEmailDispatcher:
             raise PermissionError("Guardian email may only be sent to the patient's own profile email")
         if draft.contains_precise_location or draft.changes_treatment or draft.diagnostic_claim:
             raise PermissionError("Guardian email content crossed a protected clinical/privacy boundary")
-        if assessment.context.get("latitude") or assessment.context.get("longitude"):
+        if any(key in assessment.context for key in ("latitude", "longitude", "lat", "lng")):
             raise PermissionError("Guardian email cannot be generated from precise location context")
         mission = next((item for item in state.missions if item.id == mission_id), None)
         if mission is None or mission.patient_id != state.profile.id:
@@ -156,6 +157,24 @@ class GuardianEmailDispatcher:
         authorization_id = _stable_id("gauth", state.profile.id, mission_id, event_id, draft.id)
         authorization_store = runtime.authorization_store
         existing_auth = authorization_store.get(state.profile.id, authorization_id)
+        request = unsigned.model_copy(update={"standing_authorization_id": authorization_id})
+        prior_receipt = runtime.receipt_store.get(state.profile.id, build_idempotency_key(request))
+        if prior_receipt is not None and prior_receipt.status == "completed":
+            return {
+                "status": "recovered_existing",
+                "sent": 0,
+                "recovered": 1,
+                "draft_id": draft.id,
+                "receipt_id": prior_receipt.id,
+                "provider_message_id": prior_receipt.resource_id,
+                "authorization_id": prior_receipt.authorization_id,
+                "recipient_is_patient_profile": True,
+                "sender_is_connected_google_account": True,
+                "diagnosis_claimed": False,
+                "treatment_changed": False,
+                "precise_location_disclosed": False,
+            }
+
         if existing_auth is None:
             authorization_store.save(
                 GoogleActionAuthorization(
@@ -174,18 +193,8 @@ class GuardianEmailDispatcher:
             action=GoogleAction.GMAIL_SEND,
             intent_key=intent_key,
         ):
-            # A completed exact action is recovered by the durable receipt before
-            # authorization validation. Anything else must fail closed rather than
-            # silently widening or overwriting a prior authorization.
-            prior_request = unsigned.model_copy(update={"standing_authorization_id": authorization_id})
-            prior_receipt = runtime.receipt_store.get(
-                state.profile.id,
-                __import__("healthia_one.google_constellation", fromlist=["build_idempotency_key"]).build_idempotency_key(prior_request),
-            )
-            if prior_receipt is None or prior_receipt.status != "completed":
-                raise PermissionError("Guardian Gmail authorization is no longer usable for this exact event")
+            raise PermissionError("Guardian Gmail authorization is no longer usable for this exact event")
 
-        request = unsigned.model_copy(update={"standing_authorization_id": authorization_id})
         receipt, outcome = runtime.guarded_executor.execute(request)
         if receipt.status != "completed":
             return {
