@@ -68,8 +68,8 @@ def test_new_partial_lab_opens_durable_followup_without_changing_treatment() -> 
     )
     assert any(
         event.action == "autopilot_event_intent"
-        and event.details.get("payload", {}).get("guardian_domain") == "clinical_result"
-        and event.details.get("payload", {}).get("mission_id") == mission.id
+        and event.details.get("event", {}).get("payload", {}).get("guardian_domain") == "clinical_result"
+        and event.details.get("event", {}).get("payload", {}).get("mission_id") == mission.id
         for event in state.audit_events
     )
 
