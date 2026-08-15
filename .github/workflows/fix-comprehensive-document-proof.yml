@@ -1,0 +1,54 @@
+name: Fix comprehensive document proof
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - ".github/workflows/fix-comprehensive-document-proof.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+      - name: Reuse proven lab evidence for document archive scene
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/record_final_comprehensive_demo.py')
+          text = p.read_text(encoding='utf-8')
+
+          note_block = '''    note_path = OUTPUT / "synthetic-care-note.txt"\n    note_path.write_text(\n        "Synthetic patient note for hackathon demonstration.\\n"\n        "Purpose: verify patient-owned document archive and provenance.\\n"\n        "No real patient information is present.\\n",\n        encoding="utf-8",\n    )\n\n'''
+          if note_block not in text:
+              raise SystemExit('note setup block not found')
+          text = text.replace(note_block, '', 1)
+
+          early_docs = '''        activate(page, "documents")\n        page.wait_for_selector("#addDocumentButton", timeout=10_000)\n        page.locator("#addDocumentButton").click()\n        page.wait_for_selector("#documentDialog[open]", timeout=10_000)\n        page.locator('#documentForm input[name="file"]').set_input_files(str(note_path))\n        page.locator('#documentForm input[name="title"]').fill("Synthetic care note")\n        page.locator('#documentForm select[name="category"]').select_option("consultation")\n        page.locator('#documentForm button[type="submit"]').click()\n        page.wait_for_selector("#documentDialog", state="hidden", timeout=60_000)\n        page.wait_for_function(\n            """() => document.querySelector('#documentsRoot')?.textContent?.includes('Synthetic care note') === true""",\n            timeout=30_000,\n        )\n        page.wait_for_timeout(700)\n        overlay(page, "Patient document archive", "Clinical files keep category, source, status and the original bytes. If HealthIA cannot read something, it preserves the source instead of inventing content.", 4.5)\n        clear_overlay(page)\n        report["checks"].append("document_archive_and_original_upload_visible")\n\n'''
+          if early_docs not in text:
+              raise SystemExit('early document scene not found')
+          text = text.replace(early_docs, '', 1)
+
+          anchor = '''        overlay(page, "Evidence first", "The synthetic original is preserved in private Cloud Storage; Gemini extracts readable evidence and Firestore keeps patient-scoped state with provenance.", 4.5)\n        clear_overlay(page)\n\n        activate(page, "chat")\n'''
+          replacement = '''        overlay(page, "Evidence first", "The synthetic original is preserved in private Cloud Storage; Gemini extracts readable evidence and Firestore keeps patient-scoped state with provenance.", 4.5)\n        clear_overlay(page)\n\n        activate(page, "documents")\n        page.wait_for_selector("#documentsRoot .document-card", timeout=15_000)\n        page.wait_for_function(\n            """name => document.querySelector('#documentsRoot')?.textContent?.includes(name) === true""",\n            arg=filename,\n            timeout=15_000,\n        )\n        overlay(page, "Patient document archive", "The same original lab is now visible in the patient document archive with category, provenance and source bytes — one evidence object reused across the product, not a disconnected demo upload.", 4.5)\n        clear_overlay(page)\n        report["checks"].append("document_archive_and_original_upload_visible")\n        checkpoint(report)\n\n        activate(page, "chat")\n'''
+          if anchor not in text:
+              raise SystemExit('result-to-chat anchor not found')
+          text = text.replace(anchor, replacement, 1)
+
+          p.write_text(text, encoding='utf-8')
+          PY
+          python -m py_compile scripts/record_final_comprehensive_demo.py
+          grep -q 'document_archive_and_original_upload_visible' scripts/record_final_comprehensive_demo.py
+          ! grep -q 'synthetic-care-note' scripts/record_final_comprehensive_demo.py
+          git config user.name "healthia-recorder-bot"
+          git config user.email "healthia-recorder-bot@users.noreply.github.com"
+          git add scripts/record_final_comprehensive_demo.py
+          git commit -m "Reuse Taskmaster evidence for document archive proof"
+          git push origin HEAD:feature/patient-education-video-20260813
