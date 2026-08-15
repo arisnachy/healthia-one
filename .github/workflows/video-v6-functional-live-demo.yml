@@ -1,4 +1,4 @@
-name: HealthIA V9 master comprehensive live demo
+name: HealthIA V10 master comprehensive live demo
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: healthia-v9-master
+  group: healthia-v10-master
   cancel-in-progress: true
 
 env:
@@ -98,15 +98,28 @@ jobs:
           GOOGLE_CLOUD_LOCATION: global
         run: python scripts/record_v9_master_demo_entry.py
 
-      - name: Generate comprehensive Charon narration
+      - name: Generate V10 Charon narration
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
-          text = "HealthIA ONE began with one problem: a patient's health story is fragmented across conversations, laboratory files, devices, family history, treatments, appointments and follow-up tasks. The goal is not another chatbot. It is patient-owned continuity. This recording stays inside the real working HealthIA application. A patient account is created and a longitudinal record connects hypertension, a professional-confirmed Losartan plan, family context and care history. The patient then speaks naturally about dizziness. HealthIA uses the context it already has and runs its adaptive clinical conversation instead of restarting a fixed questionnaire. Gemini and Google ADK support adaptive reasoning, while deterministic code protects safety, identity and state transitions. Next, a synthetic laboratory file is uploaded through the real Results workflow. HealthIA preserves the original evidence, parses supported values, links them to the living clinical twin and keeps provenance before interpretation. If evidence is uncertain, the system is designed to fail closed instead of inventing a value. The same record can receive authorized Health Connect measurements such as activity, heart rate and weight. Device identity, allowed metrics and revocation matter because background data is not unlimited consent. HealthIA also turns needs into durable missions. A family autism need becomes a resource-navigation mission in Santiago. Before location is used, the mission stops at a mission-scoped consent boundary. Only after permission does the shipped navigation engine execute Google Places. It returns locality-validated candidates with addresses, Google Maps links, and phone or website information when available. When the patient chooses the second one, HealthIA selects that exact verified candidate. Reasoning can be flexible; identity and external actions remain exact. Opportunity Autopilot extends continuity beyond one conversation. HealthIA can watch authorized patient and family topics, keep discoveries quiet until they matter, and compare new scientific evidence with the current record. In this demo, the scientific radar queries PubMed, Europe PMC and ClinicalTrials.gov and compares relevant hypertension evidence with the recorded Losartan treatment. A publication never changes this patient's treatment by itself, and HealthIA does not fabricate an outcome prediction. Professional review remains the boundary. A missing creatinine study then becomes another actionable mission, and HealthIA finds real local places where the patient can complete that next step. The product also exposes patient controls for permissions, quiet hours, snooze and mute, audit history, export, device revocation and Google mission connections. Finally, the patient signs out and signs back in. The treatment, uploaded evidence, family context and longitudinal record are still attached to the same patient account. That continuity is the promise carried from the first HealthIA ONE video through the system shown now: one patient-owned health layer, adaptive when reasoning matters, deterministic when exactness matters, and paused for human consent when the decision is human. Your health never starts over."
-          payload = {"input":{"text":text},"voice":{"languageCode":"en-US","name":"en-US-Chirp3-HD-Charon"},"audioConfig":{"audioEncoding":"MP3","speakingRate":1.05,"pitch":0.0}}
+          text = """HealthIA ONE starts from one simple problem: a patient's health should not restart every time a new conversation begins. The system creates a patient-owned longitudinal health layer where profile, diagnoses, family history, pathological genogram, treatments, documents, appointments, visit preparation, health timeline, permissions and follow-up can remain connected. A patient can review the story in one place, keep treatment and medication check-ins organized, prepare for the next visit, preserve uploaded documents, control privacy, audit access and export information when needed. That continuity is the foundation.
+
+Now the main consultation flow. The patient speaks naturally instead of filling out a rigid form. HealthIA uses the context it already knows, identifies the goal, recalls relevant history, asks only the next useful questions and moves the clinical context forward. Gemini and Google ADK support adaptive reasoning, while deterministic rules protect identity, safety and exact state transitions. The consultation is not a disconnected chatbot exchange; each answer can update the living patient context for the next step.
+
+When evidence enters the conversation, the original source comes first. A laboratory result or clinical document is uploaded through the real product, preserved as evidence, parsed with provenance and linked to the longitudinal record. HealthIA can explain what it found, but if the evidence is incomplete or uncertain it fails closed instead of inventing a result. This evidence-first pattern also feeds the patient's digital clinical twin and future follow-up.
+
+HealthIA then turns unresolved needs into durable missions. A mission survives the conversation and waits for a real outcome instead of disappearing as a suggestion. Before an external action uses location or sensitive context, autonomy pauses for mission-scoped consent. After permission, HealthIA can use real Google Places to find validated nearby resources. If the patient says, 'the second one,' the system selects that exact candidate, not a guessed substitute. Human choice remains the boundary. After sign-out and sign-in, the mission, evidence and patient state still belong to the same account.
+
+The platform also extends beyond the consultation. Authorized Health Connect data can add measurements such as activity, heart rate, sleep or weight, with device identity, allowed metrics and revocation controls. Opportunity Autopilot can watch authorized patient or family needs and surface discoveries only when they become useful. The scientific radar can query PubMed, Europe PMC and ClinicalTrials dot gov, compare new evidence with the current treatment context, and create a reviewable next step without silently changing therapy. A missing creatinine study, for example, can become a concrete mission with real nearby laboratory options.
+
+HealthIA Explain adds another layer: complex health information can be transformed into a patient-friendly explanation, automatically adapted to language, and presented with generated visual media using Gemini, Veo and Gemini text to speech. The purpose is not decoration; it is comprehension without losing the underlying evidence.
+
+Across every version, the same principle has become stronger: artificial intelligence when reasoning matters, deterministic systems when exactness matters, preserved evidence when trust matters, and human consent when the decision is human. HealthIA ONE is not one feature. It is the connected journey from consultation, evidence and family context to missions, devices, scientific discovery, explanations and real-world action. Your health never starts over."""
+          payload = {"input":{"text":text},"voice":{"languageCode":"en-US","name":"en-US-Chirp3-HD-Charon"},"audioConfig":{"audioEncoding":"MP3","speakingRate":1.08,"pitch":0.0}}
           open('dist/v9-master-demo/tts-request.json','w',encoding='utf-8').write(json.dumps(payload))
+          open('dist/v9-master-demo/narration-v10.txt','w',encoding='utf-8').write(text)
           PY
           token="$(gcloud auth print-access-token)"
           curl -fsS -X POST "https://texttospeech.googleapis.com/v1/text:synthesize" \
@@ -118,15 +131,16 @@ jobs:
           data=json.load(open('dist/v9-master-demo/tts-response.json',encoding='utf-8'))
           if not data.get('audioContent'):
               raise SystemExit(data)
-          open('dist/v9-master-demo/charon.mp3','wb').write(base64.b64decode(data['audioContent']))
+          open('dist/v9-master-demo/charon-v10.mp3','wb').write(base64.b64decode(data['audioContent']))
           PY
+          ffprobe -v error -show_entries format=duration -of csv=p=0 dist/v9-master-demo/charon-v10.mp3 | tee dist/v9-master-demo/charon-v10-duration.txt
 
-      - name: Build final MP4
+      - name: Build V10 provisional MP4
         shell: bash
         run: |
           set -euo pipefail
           raw="dist/v9-master-demo/healthia-v9-master-live.webm"
-          audio="dist/v9-master-demo/charon.mp3"
+          audio="dist/v9-master-demo/charon-v10.mp3"
           test -s "$raw" && test -s "$audio"
           raw_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$raw")"
           audio_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio")"
@@ -144,24 +158,20 @@ jobs:
             -filter:a "apad=pad_dur=2" -map 0:v:0 -map 1:a:0 \
             -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
             -c:a aac -b:a 160k -ar 48000 -movflags +faststart -shortest \
-            dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4
-          duration="$(ffprobe -v error -show_entries format=duration -of csv=p=0 dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4)"
-          python - <<PY
-          d=float('$duration')
-          assert 150.0 < d < 240.0, d
-          PY
-          sha256sum dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4 | tee dist/v9-master-demo/sha256.txt
+            dist/v9-master-demo/HealthIA_ONE_V10_PROVISIONAL.mp4
 
-      - name: Upload V9 master demo
+      - name: Upload V10 source assets
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-ONE-V9-MASTER-COMPREHENSIVE-LIVE-DEMO
+          name: HealthIA-ONE-V10-SOURCE-ASSETS
           path: |
-            dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4
+            dist/v9-master-demo/HealthIA_ONE_V10_PROVISIONAL.mp4
             dist/v9-master-demo/healthia-v9-master-live.webm
+            dist/v9-master-demo/charon-v10.mp3
+            dist/v9-master-demo/charon-v10-duration.txt
+            dist/v9-master-demo/narration-v10.txt
             dist/v9-master-demo/report.json
             dist/v9-master-demo/server.log
-            dist/v9-master-demo/sha256.txt
           if-no-files-found: warn
           retention-days: 7
