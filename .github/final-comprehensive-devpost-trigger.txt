@@ -1,4 +1,4 @@
-final-comprehensive-devpost-2026-08-14-attempt-4
+final-comprehensive-devpost-2026-08-14-attempt-5
 voice=gemini-2.5-pro-tts-charon-male
 ui-locale=system-auto
 content-locale=user-language
@@ -9,3 +9,4 @@ veo=3.1-fast
 cloud=run-firestore-gcs-adk-gemini
 playwright-arg=keyword-fixed
 document-proof=reuse-taskmaster-original-evidence
+rate-limit-proof=correlated-recovered-bootstrap-429-only
