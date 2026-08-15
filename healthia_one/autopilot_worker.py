@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from healthia_one.auth import patient_scope
 from healthia_one.autopilot_events import EventOutboxStore
+from healthia_one.autopilot_intent_recovery import recover_firestore_event_intents
 from healthia_one.autopilot_runtime import OpportunityAutopilot
 from healthia_one.autopilot_scheduler import enqueue_scheduled_refreshes, load_firestore_patient_states
 from healthia_one.config import Settings, settings
@@ -166,6 +167,12 @@ def create_worker_app(
     async def state_loader(patient_id: str) -> PatientState:
         return await load_patient_state(settings_value, patient_id)
 
+    def require_private_cloud_runtime() -> None:
+        if settings_value.store_backend != "firestore":
+            raise HTTPException(status_code=409, detail="Autonomous production schedules require Firestore persistence")
+        if settings_value.env != "local" and os.getenv("K_SERVICE", "").strip() == "":
+            raise HTTPException(status_code=503, detail="Scheduler producer must run behind Cloud Run IAM")
+
     @app.get("/healthz")
     async def healthz() -> dict:
         return {
@@ -176,6 +183,7 @@ def create_worker_app(
             "iam_boundary_required": settings_value.env != "local",
             "scientific_schedule": "weekly_opt_in",
             "resource_schedule": "monthly_opt_in",
+            "intent_recovery_schedule": "every_15_minutes",
             "guardian_eventarc": True,
             "guardian_push": "explicit_opt_in_only",
         }
@@ -209,10 +217,7 @@ def create_worker_app(
     async def schedule_mode(mode: str) -> dict:
         if mode not in {"scientific", "resources"}:
             raise HTTPException(status_code=404, detail="Unknown radar schedule")
-        if settings_value.store_backend != "firestore":
-            raise HTTPException(status_code=409, detail="Scheduled radar production requires Firestore persistence")
-        if settings_value.env != "local" and os.getenv("K_SERVICE", "").strip() == "":
-            raise HTTPException(status_code=503, detail="Scheduler producer must run behind Cloud Run IAM")
+        require_private_cloud_runtime()
         project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
         states = await asyncio.to_thread(load_firestore_patient_states, project)
         events = await asyncio.to_thread(
@@ -237,6 +242,17 @@ def create_worker_app(
     @app.post("/scheduled/resources")
     async def scheduled_resources() -> dict:
         return await schedule_mode("resources")
+
+    @app.post("/scheduled/recover-intents")
+    async def scheduled_recover_intents() -> dict:
+        require_private_cloud_runtime()
+        project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
+        report = await asyncio.to_thread(recover_firestore_event_intents, project)
+        if report.get("failure_count"):
+            # Recovery is safe to rerun because every intent/outbox ID is stable.
+            # Return non-2xx so Cloud Scheduler retries transient partial failures.
+            raise HTTPException(status_code=503, detail={"message": "Intent recovery had failures", "report": report})
+        return report
 
     return app
 
