@@ -32,6 +32,15 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
+def _thread_id_from_evidence(evidence_ids: list[str]) -> str:
+    prefix = "gmail_thread:"
+    for value in evidence_ids:
+        text = str(value or "")
+        if text.startswith(prefix) and len(text) > len(prefix):
+            return text[len(prefix):]
+    return ""
+
+
 class GuardianEmailDispatcher:
     """Send one bounded Guardian update to the patient through connected Gmail.
 
@@ -87,12 +96,6 @@ class GuardianEmailDispatcher:
             raise PermissionError("Cancelled Guardian missions cannot trigger email")
 
     def _ensure_mission_gmail_grant(self, state: PatientState, mission_id: str) -> GoogleGrant:
-        """Derive the narrow Gmail capability from explicit Guardian auto-send consent.
-
-        The OAuth provider scope is checked separately. This HealthIA grant is
-        mission-scoped so the Guardian email consent cannot become a blanket
-        authorization for unrelated provider contact.
-        """
         runtime = self.constellation.runtime
         existing = next(
             (
@@ -129,6 +132,27 @@ class GuardianEmailDispatcher:
                 True,
             )
         return draft.body, True
+
+    def _persist_reply_thread(
+        self,
+        *,
+        state: PatientState,
+        mission_id: str,
+        event_id: str,
+        provider_message_id: str,
+        thread_id: str,
+        reply_opt_in: bool,
+    ):
+        if not reply_opt_in or not thread_id:
+            return None
+        return save_guardian_email_thread_link(
+            self.thread_store,
+            patient_id=state.profile.id,
+            mission_id=mission_id,
+            thread_id=thread_id,
+            provider_message_id=provider_message_id,
+            event_id=event_id,
+        )
 
     def dispatch(
         self,
@@ -187,9 +211,6 @@ class GuardianEmailDispatcher:
             "to": [draft.recipient],
             "subject": draft.subject,
             "body": email_body,
-            # Connector ignores these fields, but keeping them in the material
-            # payload binds the authorization/idempotency fingerprint to the exact
-            # Guardian event and standing-consent basis.
             "healthia_guardian_event_id": event_id,
             "healthia_consent_basis": consent_basis,
         }
@@ -206,6 +227,15 @@ class GuardianEmailDispatcher:
         request = unsigned.model_copy(update={"standing_authorization_id": authorization_id})
         prior_receipt = runtime.receipt_store.get(state.profile.id, build_idempotency_key(request))
         if prior_receipt is not None and prior_receipt.status == "completed":
+            thread_id = _thread_id_from_evidence(prior_receipt.evidence_ids)
+            thread_link = self._persist_reply_thread(
+                state=state,
+                mission_id=mission_id,
+                event_id=event_id,
+                provider_message_id=prior_receipt.resource_id,
+                thread_id=thread_id,
+                reply_opt_in=reply_opt_in,
+            )
             return {
                 "status": "recovered_existing",
                 "sent": 0,
@@ -217,7 +247,8 @@ class GuardianEmailDispatcher:
                 "recipient_is_patient_profile": True,
                 "sender_is_connected_google_account": True,
                 "reply_opt_in": reply_opt_in,
-                "reply_thread_linked": False,
+                "reply_thread_linked": bool(thread_link),
+                "gmail_thread_id": thread_link.thread_id if thread_link else "",
                 "diagnosis_claimed": False,
                 "treatment_changed": False,
                 "precise_location_disclosed": False,
@@ -256,16 +287,16 @@ class GuardianEmailDispatcher:
 
         recovered = bool(outcome and outcome.recovered_existing)
         thread_id = str((outcome.data if outcome else {}).get("threadId") or "").strip()
-        thread_link = None
-        if reply_opt_in and thread_id:
-            thread_link = save_guardian_email_thread_link(
-                self.thread_store,
-                patient_id=state.profile.id,
-                mission_id=mission_id,
-                thread_id=thread_id,
-                provider_message_id=receipt.resource_id,
-                event_id=event_id,
-            )
+        if not thread_id:
+            thread_id = _thread_id_from_evidence(receipt.evidence_ids)
+        thread_link = self._persist_reply_thread(
+            state=state,
+            mission_id=mission_id,
+            event_id=event_id,
+            provider_message_id=receipt.resource_id,
+            thread_id=thread_id,
+            reply_opt_in=reply_opt_in,
+        )
         return {
             "status": "recovered_existing" if recovered else "sent",
             "sent": 0 if recovered else 1,
