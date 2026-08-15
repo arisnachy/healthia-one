@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
+from healthia_one.config import Settings
 from healthia_one.guardian_context import GuardianAssessment
 from healthia_one.guardian_notifications import plan_guardian_notification
 from healthia_one.models import ClinicalDocument, HealthResult, MissionStatus, ResultItem
 from healthia_one.result_guardian import MISSION_TYPE, reconcile_result_guardian
-from healthia_one.service import seed_state
+from healthia_one.service import HealthIAService, seed_state
 
 
 def _lab(filename: str, *items: ResultItem) -> tuple[HealthResult, ClinicalDocument]:
@@ -197,3 +200,57 @@ def test_result_guardian_email_copy_matches_gap_and_resolution_without_diagnosis
     assert "not a diagnosis" in gap_plan.email.body
     assert "No medication or treatment was changed" in resolved_plan.email.body
     assert "closed" in resolved_plan.email.subject.lower()
+
+
+@pytest.mark.asyncio
+async def test_healthia_service_persists_open_then_closed_result_guardian_mission() -> None:
+    service = HealthIAService(
+        Settings(
+            store_backend="memory",
+            llm_backend="mock",
+            data_path=".healthia-one/test-result-guardian-service.json",
+        )
+    )
+
+    first, first_document = _lab(
+        "service-renal.json",
+        ResultItem(name="Creatinine", value=0.9, unit="mg/dL"),
+    )
+    await service.add_result_evidence(first, first_document)
+
+    after_first = await service.snapshot()
+    mission = _mission(after_first)
+    assert mission.status == MissionStatus.WAITING_PATIENT
+    assert first.id in mission.evidence_ids
+    first_intents = [
+        event for event in after_first.audit_events
+        if event.action == "autopilot_event_intent"
+        and event.details.get("event", {}).get("payload", {}).get("guardian_domain") == "clinical_result"
+    ]
+    assert len(first_intents) == 1
+    assert first_intents[0].details["status"] == "emitted"
+
+    second, second_document = _lab(
+        "service-potassium.json",
+        ResultItem(name="Potassium", value=4.2, unit="mmol/L"),
+    )
+    await service.add_result_evidence(second, second_document)
+
+    after_second = await service.snapshot()
+    mission = _mission(after_second)
+    assert mission.status == MissionStatus.COMPLETED
+    assert first.id in mission.evidence_ids
+    assert second.id in mission.evidence_ids
+    assert first_document.id in mission.evidence_ids
+    assert second_document.id in mission.evidence_ids
+    receipt_id = next(item for item in mission.closure_evidence if item.startswith("audit_"))
+    receipt = next(event for event in after_second.audit_events if event.id == receipt_id)
+    assert receipt.details["resolution"] == "required_evidence_present"
+    assert receipt.details["treatment_changed"] is False
+    resolution_intents = [
+        event for event in after_second.audit_events
+        if event.action == "autopilot_event_intent"
+        and event.details.get("event", {}).get("payload", {}).get("result_guardian_event") == "resolved"
+    ]
+    assert len(resolution_intents) == 1
+    assert resolution_intents[0].details["status"] == "emitted"
