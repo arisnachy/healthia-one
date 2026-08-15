@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -116,7 +117,8 @@ def test_video_topic_drops_duration_modifier_after_about_clause():
 
 
 def test_healthia_explain_tts_uses_bounded_retries_and_smaller_chunks():
-    source = (ROOT / "healthia_one" / "education_video_google.py").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "healthia_one" / "education_video_google.py").read_text(encoding="utf-8")
     assert "max_bytes: int = 1800" in source
     assert "for attempt in range(3):" in source
     assert "await asyncio.sleep(2 * (attempt + 1))" in source
