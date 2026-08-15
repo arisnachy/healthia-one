@@ -45,6 +45,30 @@ def _first_name(state: PatientState) -> str:
 
 def _email_body(state: PatientState, assessment: GuardianAssessment) -> tuple[str, str]:
     first = _first_name(state)
+    if assessment.classification == "appointment_preparation_gap":
+        return (
+            "HealthIA is preparing your upcoming appointment",
+            (
+                f"Hi {first},\n\n"
+                "HealthIA checked the preparation items listed for your upcoming appointment against the health record you authorized. "
+                "Some items are not yet verifiable, so I opened a preparation mission and will keep it active until the missing evidence is present.\n\n"
+                "I did not book, cancel, or change your appointment, and this message contains no diagnosis or treatment change. "
+                "Open HealthIA when convenient to review exactly what is still missing.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
+    if assessment.classification == "appointment_preparation_resolved":
+        return (
+            "HealthIA completed your appointment preparation mission",
+            (
+                f"Hi {first},\n\n"
+                "HealthIA matched the evidence in your record to every preparation item listed for your upcoming appointment. "
+                "The preparation mission is now closed automatically because those items are verifiable in HealthIA.\n\n"
+                "This does not guarantee that a provider will accept a document or mean the clinical visit is complete. "
+                "No appointment, diagnosis, medication, or treatment was changed.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
     if assessment.classification == "result_monitoring_context_gap":
         return (
             "HealthIA found a follow-up item in your record",
