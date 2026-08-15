@@ -12,20 +12,16 @@ PATIENT_STATE_COLLECTION = "healthia_one_patients"
 
 
 def _prepare_autonomous_state(state: PatientState) -> bool:
-    """Reconcile state-only autonomous work before the canonical commit.
-
-    Guardians at this boundary may create/update/resolve durable missions and
-    stage outbox intents, but they may not perform network calls or provider
-    mutations. The canonical PatientState is committed first; only then can
-    Eventarc observe and deliver the staged intent.
-    """
+    """Reconcile state-only autonomous work before the canonical commit."""
     from healthia_one.appointment_guardian import reconcile_appointment_guardian
+    from healthia_one.bp_followup_guardian import reconcile_bp_followup_guardian
     from healthia_one.postvisit_guardian import reconcile_postvisit_guardian
     from healthia_one.result_guardian import reconcile_result_guardian
 
     result_report = reconcile_result_guardian(state)
     appointment_report = reconcile_appointment_guardian(state)
     postvisit_report = reconcile_postvisit_guardian(state)
+    bp_report = reconcile_bp_followup_guardian(state)
     result_changed = bool(
         result_report.get("opened")
         or result_report.get("resolved")
@@ -39,15 +35,15 @@ def _prepare_autonomous_state(state: PatientState) -> bool:
         postvisit_report.get(key)
         for key in ("created", "waiting", "completed")
     )
-    return result_changed or appointment_changed or postvisit_changed
+    bp_changed = any(
+        bp_report.get(key)
+        for key in ("created", "waiting", "completed", "safety_handoff")
+    )
+    return result_changed or appointment_changed or postvisit_changed or bp_changed
 
 
 async def _flush_post_commit_intents(state: PatientState) -> bool:
-    """Flush staged Autopilot work only after PatientState is durable.
-
-    The import is intentionally lazy so normal state operations do not initialize
-    the Opportunity runtime unless a pending intent actually exists.
-    """
+    """Flush staged Autopilot work only after PatientState is durable."""
     from healthia_one.autopilot_event_intents import flush_event_intents, pending_event_intents
 
     if not pending_event_intents(state):
