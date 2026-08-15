@@ -1,4 +1,4 @@
-final-comprehensive-devpost-2026-08-14-attempt-5
+final-comprehensive-devpost-2026-08-14-attempt-6
 voice=gemini-2.5-pro-tts-charon-male
 ui-locale=system-auto
 content-locale=user-language
@@ -10,3 +10,4 @@ cloud=run-firestore-gcs-adk-gemini
 playwright-arg=keyword-fixed
 document-proof=reuse-taskmaster-original-evidence
 rate-limit-proof=correlated-recovered-bootstrap-429-only
+healthia-explain-tts=smaller-chunks-bounded-retries
