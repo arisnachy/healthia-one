@@ -1,0 +1,25 @@
+HealthIA ONE is not a chatbot with a medical skin. It is a patient-owned health continuity operating system. The promise is simple: your health never starts over.
+
+This is the exact candidate running privately on Google Cloud with Gemini 3.5 Flash, Google ADK, Firestore for durable state, and private Cloud Storage for original evidence. The interface localizes automatically from the patient's system language, and the clinical conversation can follow the language the patient actually writes.
+
+Before the hero workflow, look at the breadth of the same product. The patient record keeps confirmed conditions, treatment, allergies, authorized signals, and longitudinal counts together. The family genogram organizes maternal and paternal history across generations. It is context for preventive questions, not an automatic diagnosis.
+
+The document archive keeps clinical files with category, provenance, status, and the original bytes. When HealthIA cannot safely read something, it preserves the source instead of inventing findings.
+
+Treatment is handled with a hard safety boundary. HealthIA can show the recorded plan and document whether a dose was taken, late, or skipped. It does not autonomously double, stop, or change medication. Appointment preparation carries the patient's conditions, treatment, required documents, family context, and priority questions into the next visit.
+
+The unified health timeline connects measurements, activity, documents, treatment, appointments, results, and missions in one chronology. And the patient remains in control: permissions can be changed by signal class, quiet hours can be set, non-urgent follow-up can be snoozed or muted, urgent safety has an explicit rule, audit events are visible, and the patient can export structured data. Operational actions are auditable; private chain-of-thought is not exposed.
+
+Now the Taskmaster core. A synthetic laboratory result enters HealthIA as original evidence. The original file is preserved first in private Google Cloud Storage. Gemini then extracts what can be read, while Firestore stores patient-scoped state and provenance.
+
+The patient asks HealthIA to explain that exact result. HealthIA resolves the current evidence, creates a durable health mission, and links the answer to the persisted result and original document. The mission does not close because a model stopped talking. It closes because the evidence-backed outcome exists and remains verifiable.
+
+Then comes HealthIA Explain. The patient asks for a short private video about the glucose result. HealthIA builds a structured educational plan, keeps exact patient facts on deterministic controlled cards, and uses Gemini 2.5 Pro Text-to-Speech for natural narration. Veo 3.1 Fast is allowed only for generic, PHI-free visual enrichment. The educational video follows the patient's content language rather than blindly copying the interface language.
+
+This is important: HealthIA can adapt the user interface to the operating system while independently responding and teaching in the language the patient uses. That separation matters in real multilingual care.
+
+Finally, continuity survives the session. After logout and login, the result, original evidence, family context, appointment, and completed mission are still there. This is durable patient state, not chat memory theater.
+
+The same exact candidate is running on Cloud Run, with Gemini, Google ADK, Firestore, and private Cloud Storage behind the visible experience.
+
+A chatbot answers a question. HealthIA ONE preserves the patient's authorized health story, organizes the work around it, acts within explicit safety boundaries, and carries each health mission forward until there is a durable, evidence-backed next step. Your health never starts over.
