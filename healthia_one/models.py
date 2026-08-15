@@ -172,14 +172,7 @@ class PatientConsent(BaseModel):
 
     @model_validator(mode="after")
     def normalize_guardian_email_permissions(self):
-        """Keep increasingly powerful Guardian email capabilities explicitly nested.
-
-        ``guardian_email`` permits drafting/preparing patient email updates.
-        ``guardian_email_auto_send`` permits those bounded updates to be sent without
-        approving each message. ``guardian_email_replies`` additionally permits a
-        mission-linked Gmail thread to accept supported structured replies. A child
-        capability cannot remain enabled after its parent is revoked.
-        """
+        """Keep increasingly powerful Guardian email capabilities explicitly nested."""
         signals = list(dict.fromkeys(str(item) for item in self.signal_types if str(item).strip()))
         if "guardian_email" not in signals:
             signals = [item for item in signals if item not in {"guardian_email_auto_send", "guardian_email_replies"}]
@@ -191,13 +184,36 @@ class PatientConsent(BaseModel):
 
 class AuditEvent(BaseModel):
     id: str = Field(default_factory=lambda: new_id("audit"))
+    patient_id: str = "patient_demo"
+    created_at: datetime = Field(default_factory=utc_now)
     actor: str
     action: str
     resource_type: str
     resource_id: str = ""
     outcome: Literal["success", "blocked", "failed"] = "success"
     details: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=utc_now)
+
+
+class FamilyCondition(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    age_at_diagnosis: int | None = Field(default=None, ge=0, le=120)
+    confirmed: bool = False
+    notes: str = Field(default="", max_length=500)
+
+
+class FamilyMember(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("family"))
+    display_name: str = Field(min_length=1, max_length=120)
+    relation: str = Field(min_length=2, max_length=80)
+    generation: Literal[-2, -1, 0, 1, 2] = 0
+    lineage: Literal["maternal", "paternal", "both", "unknown"] = "unknown"
+    sex_at_birth: Literal["female", "male", "unknown"] = "unknown"
+    biological_relative: bool = True
+    alive: bool | None = None
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+    death_year: int | None = Field(default=None, ge=1900, le=2100)
+    conditions: list[FamilyCondition] = Field(default_factory=list)
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="patient_report", source_id="family_form"))
 
 
 class ClinicalDocument(BaseModel):
@@ -318,6 +334,7 @@ class WeightRecord(BaseModel):
 class ActivityRecord(BaseModel):
     id: str = Field(default_factory=lambda: new_id("activity"))
     patient_id: str = "patient_demo"
+    measured_at: datetime = Field(default_factory=utc_now)
     steps: int = Field(default=0, ge=0)
     active_minutes: int = Field(default=0, ge=0)
     note: str = ""
