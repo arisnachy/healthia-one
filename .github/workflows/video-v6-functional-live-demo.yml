@@ -78,7 +78,7 @@ jobs:
           HEALTHIA_ACCOUNTS_PATH: /tmp/healthia-v6/accounts.json
           HEALTHIA_AUTH_REQUIRED: "true"
           HEALTHIA_ALLOW_REGISTRATION: "true"
-          HEALTHIA_COST_MODE: hackathon
+          HEALTHIA_COST_MODE: cloud_demo
           HEALTHIA_AI_REQUEST_LIMIT: "6"
           HEALTHIA_COST_GUARD_START_ENABLED: "true"
           HEALTHIA_PROACTIVE_ENABLED: "false"
