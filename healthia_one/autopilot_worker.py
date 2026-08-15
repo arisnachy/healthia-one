@@ -12,6 +12,7 @@ from healthia_one.autopilot_events import EventOutboxStore
 from healthia_one.autopilot_runtime import OpportunityAutopilot
 from healthia_one.autopilot_scheduler import enqueue_scheduled_refreshes, load_firestore_patient_states
 from healthia_one.config import Settings, settings
+from healthia_one.guardian_delivery import GuardianPushDispatcher
 from healthia_one.models import PatientState
 from healthia_one.opportunity_integration import autopilot, outbox, radar_permissions
 from healthia_one.opportunity_permissions import RadarPermissionStore
@@ -54,6 +55,15 @@ def _network_policy(event, permissions) -> tuple[bool, bool]:
     return False, False
 
 
+def _is_guardian_event(record) -> bool:
+    payload = dict(record.event.payload or {})
+    return (
+        record.event.event_type == "patient_state_changed"
+        and str(payload.get("source") or "") == "guardian_context"
+        and bool(payload.get("mission_id"))
+    )
+
+
 async def load_patient_state(settings_value: Settings, patient_id: str) -> PatientState:
     service = HealthIAService(settings_value)
     with patient_scope(patient_id):
@@ -67,6 +77,7 @@ async def process_outbox_event(
     engine: OpportunityAutopilot,
     state_loader: Callable[[str], Awaitable[PatientState]],
     permission_store: RadarPermissionStore | None = None,
+    guardian_dispatcher: GuardianPushDispatcher | None = None,
 ) -> dict:
     record = outbox_store.get(event_id)
     if record is None:
@@ -98,6 +109,29 @@ async def process_outbox_event(
                 "duplicate": False,
                 "report": report.model_dump(mode="json"),
             }
+
+        guardian_delivery = None
+        if _is_guardian_event(record):
+            payload = dict(record.event.payload or {})
+            mission_id = str(payload.get("mission_id") or "")
+            if guardian_dispatcher is not None and bool(payload.get("notification_requested")):
+                # External delivery happens after durable Autopilot processing. If
+                # FCM fails, Eventarc retries the outbox event. The Autopilot claim
+                # then returns duplicate-completed while Guardian reuses the same
+                # delivery/proof id, preventing a second visible Android alert.
+                guardian_delivery = await asyncio.to_thread(
+                    guardian_dispatcher.dispatch,
+                    state,
+                    event_id=record.event.id,
+                    mission_id=mission_id,
+                )
+            else:
+                guardian_delivery = {
+                    "status": "skipped_not_requested",
+                    "sent": 0,
+                    "recovered": 0,
+                }
+
         outbox_store.mark_processed(event_id)
         return {
             "event_id": event_id,
@@ -107,6 +141,7 @@ async def process_outbox_event(
                 "scientific": allow_science,
                 "paid_resource": allow_paid,
             },
+            "guardian_delivery": guardian_delivery,
             "report": report.model_dump(mode="json"),
         }
     except Exception as exc:
@@ -120,11 +155,13 @@ def create_worker_app(
     outbox_store: EventOutboxStore | None = None,
     engine: OpportunityAutopilot | None = None,
     permission_store: RadarPermissionStore | None = None,
+    guardian_dispatcher: GuardianPushDispatcher | None = None,
 ) -> FastAPI:
     app = FastAPI(title="HealthIA Opportunity Autopilot Worker", docs_url=None, redoc_url=None)
     worker_outbox = outbox_store or outbox()
     worker_engine = engine or autopilot()
     worker_permissions = permission_store or radar_permissions()
+    worker_guardian_dispatcher = guardian_dispatcher or GuardianPushDispatcher(settings_value)
 
     async def state_loader(patient_id: str) -> PatientState:
         return await load_patient_state(settings_value, patient_id)
@@ -139,6 +176,8 @@ def create_worker_app(
             "iam_boundary_required": settings_value.env != "local",
             "scientific_schedule": "weekly_opt_in",
             "resource_schedule": "monthly_opt_in",
+            "guardian_eventarc": True,
+            "guardian_push": "explicit_opt_in_only",
         }
 
     @app.post("/events/firestore")
@@ -159,6 +198,7 @@ def create_worker_app(
                 engine=worker_engine,
                 state_loader=state_loader,
                 permission_store=worker_permissions,
+                guardian_dispatcher=worker_guardian_dispatcher,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Autopilot outbox event not found") from exc
