@@ -33,8 +33,6 @@ def _lab(filename: str, *items: ResultItem) -> tuple[HealthResult, ClinicalDocum
 
 
 def _append_new(state, result: HealthResult, document: ClinicalDocument) -> None:
-    # Result Guardian uses the previous durable state timestamp as its change
-    # boundary. Make that relationship explicit in this unit-level fixture.
     result.uploaded_at = state.updated_at + timedelta(seconds=1)
     document.uploaded_at = result.uploaded_at
     state.results.append(result)
@@ -83,7 +81,6 @@ def test_same_result_cannot_create_duplicate_guardian_mission() -> None:
     _append_new(state, result, document)
 
     reconcile_result_guardian(state)
-    # Simulate the successful durable commit. The same result is now historical.
     state.updated_at = result.uploaded_at + timedelta(seconds=1)
     reconcile_result_guardian(state)
 
@@ -208,6 +205,7 @@ async def test_healthia_service_persists_open_then_closed_result_guardian_missio
         Settings(
             store_backend="memory",
             llm_backend="mock",
+            proactive_enabled=True,
             data_path=".healthia-one/test-result-guardian-service.json",
         )
     )
