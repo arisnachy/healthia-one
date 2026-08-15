@@ -23,6 +23,7 @@ from healthia_one.guardian_email_reply import (
     build_guardian_email_thread_store,
     save_guardian_email_thread_link,
 )
+from healthia_one.guardian_email_watch import GuardianReplyWatchStatus, ensure_guardian_reply_watch
 from healthia_one.guardian_notifications import GuardianEmailDraft, plan_guardian_notification
 from healthia_one.models import MissionStatus, PatientState
 
@@ -44,19 +45,10 @@ def _thread_id_from_evidence(evidence_ids: list[str]) -> str:
 class GuardianEmailDispatcher:
     """Send one bounded Guardian update to the patient through connected Gmail.
 
-    The standing patient consent flags are the product-level authorization to
-    communicate proactively. Each actual Gmail mutation is still narrowed to one
-    patient + one Guardian mission + one exact recipient/subject/body by a durable
-    GoogleActionAuthorization before it reaches the existing guarded connector.
-
-    This dispatcher intentionally sends only to ``state.profile.email``. It cannot
-    contact a clinician, family member, provider or arbitrary third party. Those
-    actions continue to require their existing mission-scoped human authorization.
-
-    If the patient separately opts into ``guardian_email_replies``, the exact Gmail
-    thread returned by the send operation is bound to the HealthIA mission. That
-    permits the Gmail push worker to accept narrow patient replies without reading
-    or interpreting unrelated mailbox traffic.
+    Reply instructions are included only when the patient explicitly opted in AND
+    the event-driven Gmail return channel is operational. A one-way email may still
+    be sent when the watch is unavailable, but HealthIA never promises that a reply
+    will be processed unless the watch was actually established.
     """
 
     def __init__(
@@ -65,10 +57,12 @@ class GuardianEmailDispatcher:
         *,
         constellation=None,
         thread_store: GuardianEmailThreadStore | None = None,
+        reply_watch_ensurer=None,
     ) -> None:
         self.settings = settings
         self.constellation = constellation or get_google_constellation_service(settings)
         self.thread_store = thread_store or build_guardian_email_thread_store(settings)
+        self.reply_watch_ensurer = reply_watch_ensurer or ensure_guardian_reply_watch
 
     @staticmethod
     def _validate_patient_boundary(
@@ -120,15 +114,19 @@ class GuardianEmailDispatcher:
         return grant
 
     @staticmethod
-    def _replyable_body(state: PatientState, assessment: GuardianAssessment, draft: GuardianEmailDraft) -> tuple[str, bool]:
-        reply_opt_in = GUARDIAN_EMAIL_REPLY_CONSENT in set(state.consent.signal_types)
-        if not reply_opt_in:
+    def _replyable_body(
+        assessment: GuardianAssessment,
+        draft: GuardianEmailDraft,
+        *,
+        reply_ready: bool,
+    ) -> tuple[str, bool]:
+        if not reply_ready:
             return draft.body, False
         if assessment.classification == "bp_followup_due":
             return (
                 draft.body
                 + "\n\nIf you want to complete this measurement mission by email, reply in this same thread using exactly this format: BP 128/80. "
-                "HealthIA will treat only an explicit BP systolic/diastolic pattern in this mission-linked thread as a patient-reported measurement; ordinary email text is not converted into a vital sign.",
+                "HealthIA will treat only an explicit BP systolic/diastolic pattern at the start of your new reply in this mission-linked thread as a patient-reported measurement; ordinary inbox text and quoted email are not converted into a vital sign.",
                 True,
             )
         return draft.body, True
@@ -153,6 +151,20 @@ class GuardianEmailDispatcher:
             provider_message_id=provider_message_id,
             event_id=event_id,
         )
+
+    def _reply_watch_status(self, state: PatientState) -> GuardianReplyWatchStatus:
+        if GUARDIAN_EMAIL_REPLY_CONSENT not in set(state.consent.signal_types):
+            return GuardianReplyWatchStatus(ready=False, status="not_consented")
+        try:
+            return self.reply_watch_ensurer(self.settings, self.constellation, state)
+        except Exception as exc:
+            # Delivery remains one-way rather than falsely advertising a reply
+            # route. The concrete failure class is safe operational evidence; no
+            # token, mailbox contents or secret material is returned.
+            return GuardianReplyWatchStatus(
+                ready=False,
+                status=f"watch_not_ready:{type(exc).__name__}",
+            )
 
     def dispatch(
         self,
@@ -203,7 +215,12 @@ class GuardianEmailDispatcher:
             }
 
         self._ensure_mission_gmail_grant(state, mission_id)
-        email_body, reply_opt_in = self._replyable_body(state, assessment, draft)
+        reply_watch = self._reply_watch_status(state)
+        email_body, reply_opt_in = self._replyable_body(
+            assessment,
+            draft,
+            reply_ready=reply_watch.ready,
+        )
         consent_basis = list(draft.consent_basis)
         if reply_opt_in and GUARDIAN_EMAIL_REPLY_CONSENT not in consent_basis:
             consent_basis.append(GUARDIAN_EMAIL_REPLY_CONSENT)
@@ -246,7 +263,9 @@ class GuardianEmailDispatcher:
                 "authorization_id": prior_receipt.authorization_id,
                 "recipient_is_patient_profile": True,
                 "sender_is_connected_google_account": True,
+                "reply_requested": GUARDIAN_EMAIL_REPLY_CONSENT in set(state.consent.signal_types),
                 "reply_opt_in": reply_opt_in,
+                "reply_watch_status": reply_watch.status,
                 "reply_thread_linked": bool(thread_link),
                 "gmail_thread_id": thread_link.thread_id if thread_link else "",
                 "diagnosis_claimed": False,
@@ -307,7 +326,9 @@ class GuardianEmailDispatcher:
             "authorization_id": receipt.authorization_id,
             "recipient_is_patient_profile": True,
             "sender_is_connected_google_account": True,
+            "reply_requested": GUARDIAN_EMAIL_REPLY_CONSENT in set(state.consent.signal_types),
             "reply_opt_in": reply_opt_in,
+            "reply_watch_status": reply_watch.status,
             "reply_thread_linked": bool(thread_link),
             "gmail_thread_id": thread_link.thread_id if thread_link else "",
             "diagnosis_claimed": False,
