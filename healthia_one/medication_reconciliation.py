@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 from healthia_one.control import audit
 from healthia_one.medication_followup_guardian import CONSENT_SIGNAL as MEDICATION_FOLLOWUP_CONSENT
 from healthia_one.medication_followup_guardian import MISSION_TYPE as MEDICATION_FOLLOWUP_MISSION_TYPE
+from healthia_one.medication_followup_guardian import medication_action_or_error_context, medication_adverse_context
 from healthia_one.models import AgentStep, ChatMessage, HealthMission, MissionStatus, PatientState, RiskLevel
+from healthia_one.safety import assess_text
 
 
 MISSION_TYPE = "medication_reconciliation_verification"
@@ -90,7 +92,7 @@ def _record_copy(plan) -> str:
     if plan.strength:
         pieces.append(plan.strength)
     if plan.route:
-        pieces.append(f"route: {plan.route}")
+        pieces.append(f"route on record: {plan.route}")
     if plan.schedule:
         pieces.append(f"schedule on record: {plan.schedule}")
     if plan.instructions:
@@ -169,7 +171,6 @@ def _open_reconciliation(
             "source_release_receipt_id": source_release.id,
             "document_ids": document_ids,
             "plan_snapshot_hash": snapshot_hash,
-            "plan_snapshot": _plan_payload(plan),
             "document_regimen_extracted": False,
             "dose_instruction_given": False,
             "medication_plan_changed": False,
@@ -265,6 +266,28 @@ def _opening_audit(state: PatientState, mission_id: str):
     )
 
 
+def _force_review_from_note(note: str) -> tuple[str, RiskLevel, str] | None:
+    value = str(note or "").strip()
+    if not value:
+        return None
+    safety = assess_text(value)
+    if safety.must_stop_normal_flow:
+        return "urgent_language", RiskLevel.URGENT, safety.message
+    if medication_action_or_error_context(value):
+        return (
+            "dose_change_or_medication_error_context",
+            RiskLevel.WATCH,
+            "The reconciliation note contains medication-change or medication-error context that requires human review.",
+        )
+    if medication_adverse_context(value):
+        return (
+            "adverse_effect_context",
+            RiskLevel.WATCH,
+            "The reconciliation note contains possible adverse-effect context that requires human review.",
+        )
+    return None
+
+
 async def record_medication_reconciliation_response(
     service,
     *,
@@ -301,7 +324,44 @@ async def record_medication_reconciliation_response(
         before = _plan_payload(plan)
         current = utc_now()
         response_note = str(note or "").strip()
-        if choice == CHOICE_UNCHANGED:
+        forced_review = _force_review_from_note(response_note)
+        if forced_review is not None:
+            reason, risk_level, guidance = forced_review
+            mission.status = MissionStatus.WAITING_PROFESSIONAL
+            mission.risk_level = risk_level
+            mission.updated_at = current
+            mission.next_action = (
+                "The free-text reconciliation response triggered safety or medication-review precedence. "
+                "Keep the existing medication record unchanged and obtain human clinical or pharmacy review."
+            )
+            receipt = audit(
+                state,
+                actor="patient",
+                action="handoff_medication_reconciliation_response",
+                resource_type="health_mission",
+                resource_id=mission.id,
+                details={
+                    "medication_id": medication_id,
+                    "source_release_receipt_id": source_release_receipt_id,
+                    "structured_choice": choice,
+                    "note": response_note,
+                    "reason": reason,
+                    "risk_level": risk_level.value,
+                    "structured_choice_overridden_by_safety": True,
+                    "new_regimen_inferred": False,
+                    "dose_instruction_given": False,
+                    "medication_plan_changed": False,
+                    "treatment_changed": False,
+                },
+            )
+            if receipt.id not in mission.closure_evidence:
+                mission.closure_evidence.append(receipt.id)
+            message = (
+                f"I recorded your reconciliation response. {guidance} "
+                "The safety/review signal takes precedence over the structured choice, so I am keeping this mission open for human review. "
+                "HealthIA did not infer a new regimen and did not change medication or dose."
+            )
+        elif choice == CHOICE_UNCHANGED:
             mission.status = MissionStatus.COMPLETED
             mission.risk_level = RiskLevel.INFO
             mission.updated_at = current
