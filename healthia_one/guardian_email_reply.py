@@ -15,7 +15,7 @@ from healthia_one.models import ChatMessage, MissionStatus, RiskLevel, SourceRef
 
 GUARDIAN_EMAIL_REPLY_CONSENT = "guardian_email_replies"
 _BP_REPLY = re.compile(
-    r"(?i)\b(?:bp|blood\s*pressure|presi[oó]n(?:\s*arterial)?)\s*[:=\-]?\s*(\d{2,3})\s*/\s*(\d{2,3})\b"
+    r"(?i)^\s*(?:bp|blood\s*pressure|presi[oó]n(?:\s*arterial)?)\s*[:=\-]?\s*(\d{2,3})\s*/\s*(\d{2,3})\b"
 )
 
 
@@ -152,12 +152,13 @@ def _snippet(message: dict[str, Any]) -> str:
 
 
 def _parse_bp_reply(text: str) -> tuple[int, int] | None:
-    match = _BP_REPLY.search(str(text or ""))
+    # The structured value must begin the patient's new reply. This fail-closed
+    # anchor prevents a quoted copy of HealthIA's own example ("BP 128/80") from
+    # being mistaken for a measurement when the patient only replies "thanks".
+    match = _BP_REPLY.match(str(text or ""))
     if not match:
         return None
     systolic, diastolic = int(match.group(1)), int(match.group(2))
-    # VitalRecord performs the final canonical validation. These bounds are only
-    # a cheap fail-closed prefilter so dates/order numbers cannot become vitals.
     if not (40 <= systolic <= 300 and 20 <= diastolic <= 200 and systolic > diastolic):
         return None
     return systolic, diastolic
@@ -268,7 +269,7 @@ class GuardianEmailReplyHandler:
         mission = next((item for item in state.missions if item.id == link.mission_id), None)
         if mission is None or mission.patient_id != patient_id:
             raise PermissionError("Guardian email thread references a missing or foreign mission")
-        if mission.status == MissionStatus.CANCELLED:
+        if mission.status in {MissionStatus.COMPLETED, MissionStatus.CANCELLED}:
             return None
 
         text = _snippet(message)
