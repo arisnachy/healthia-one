@@ -528,7 +528,35 @@ class HealthIAService:
         return await self._append_and_publish("medication_checkins", checkin, "medications", action="record_medication_checkin")
 
     async def add_appointment(self, appointment: Appointment) -> Appointment:
-        return await self._append_and_publish("appointments", appointment, "appointments", action="add_appointment")
+        """Create or update one patient appointment by stable appointment ID."""
+        async with self._mutation_lock:
+            state = await self.store.load()
+            appointment.patient_id = state.profile.id
+            existing_index = next(
+                (index for index, item in enumerate(state.appointments) if item.id == appointment.id),
+                None,
+            )
+            if existing_index is None:
+                state.appointments.append(appointment)
+                action = "add_appointment"
+            else:
+                previous = state.appointments[existing_index]
+                if previous.patient_id != state.profile.id:
+                    raise PermissionError("Appointment does not belong to the authenticated patient")
+                state.appointments[existing_index] = appointment
+                action = "update_appointment"
+            state.appointments.sort(key=SORT_KEYS["appointments"])
+            audit(
+                state,
+                actor="patient",
+                action=action,
+                resource_type="appointments",
+                resource_id=appointment.id,
+                details={"status": appointment.status, "upsert": True},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "appointments"})
+        return appointment
 
     async def add_goal(self, goal: HealthGoal) -> HealthGoal:
         return await self._append_and_publish("goals", goal, "goals", action="add_health_goal")

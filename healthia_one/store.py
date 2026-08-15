@@ -20,10 +20,12 @@ def _prepare_autonomous_state(state: PatientState) -> bool:
     Eventarc observe and deliver the staged intent.
     """
     from healthia_one.appointment_guardian import reconcile_appointment_guardian
+    from healthia_one.postvisit_guardian import reconcile_postvisit_guardian
     from healthia_one.result_guardian import reconcile_result_guardian
 
     result_report = reconcile_result_guardian(state)
     appointment_report = reconcile_appointment_guardian(state)
+    postvisit_report = reconcile_postvisit_guardian(state)
     result_changed = bool(
         result_report.get("opened")
         or result_report.get("resolved")
@@ -33,7 +35,11 @@ def _prepare_autonomous_state(state: PatientState) -> bool:
         appointment_report.get(key)
         for key in ("created", "waiting", "completed", "cancelled")
     )
-    return result_changed or appointment_changed
+    postvisit_changed = any(
+        postvisit_report.get(key)
+        for key in ("created", "waiting", "completed")
+    )
+    return result_changed or appointment_changed or postvisit_changed
 
 
 async def _flush_post_commit_intents(state: PatientState) -> bool:
@@ -54,9 +60,6 @@ async def _flush_post_commit_intents(state: PatientState) -> bool:
 
 class StateStore(ABC):
     def __init__(self, *, autonomous_enabled: bool = True) -> None:
-        # Runtime kill switch. Patient consent remains a separate check inside
-        # each Guardian; both boundaries must be open before autonomous work can
-        # create a mission or stage a notification.
         self.autonomous_enabled = bool(autonomous_enabled)
 
     def _reconcile_if_enabled(self, state: PatientState) -> bool:
@@ -91,9 +94,6 @@ class MemoryStore(StateStore):
         patient_id = current_patient_id()
         async with self._lock:
             state.profile.id = patient_id
-            # Reconciliation happens while updated_at still represents the
-            # previous durable commit. Result Guardian uses that boundary to
-            # distinguish newly-arrived result evidence from history.
             self._reconcile_if_enabled(state)
             state.updated_at = utc_now()
             self._states[patient_id] = state.model_copy(deep=True)
