@@ -64,7 +64,7 @@ def activate(page: Page, view: str) -> None:
     page.locator(selector).click()
     page.wait_for_function(
         """view => document.getElementById(`view-${view}`)?.classList.contains('is-active') === true""",
-        view,
+        arg=view,
         timeout=15_000,
     )
     page.wait_for_timeout(350)
