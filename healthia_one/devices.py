@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from healthia_one.guardian_context import apply_guardian_autonomy, assess_guardian_batch, guardian_pattern_summary
+from healthia_one.guardian_investigation import investigate_guardian_context
 from healthia_one.guardian_notifications import plan_guardian_notification
 from healthia_one.integrations import health_data_provider_catalog
 from healthia_one.safety import assess_vital
@@ -179,12 +180,17 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         accepted_records,
         history=prior_device_observations,
     )
+    guardian_investigations = [
+        investigate_guardian_context(state, assessment, history=prior_device_observations)
+        for assessment in guardian_assessments
+    ]
+    investigation_by_observation = {
+        item.observation_id: item.model_dump(mode="json") for item in guardian_investigations
+    }
     guardian_autonomy = apply_guardian_autonomy(state, guardian_assessments)
 
     notification_plans = []
     for assessment in guardian_assessments:
-        if not assessment.notify_patient:
-            continue
         mission_type = f"guardian_{assessment.classification}"
         mission = next(
             (
@@ -196,6 +202,19 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
             None,
         )
         if mission is None:
+            continue
+
+        # Persist the investigation beside the in-app Guardian handoff. This lets
+        # the patient and the autonomous worker see what HealthIA already checked
+        # before it asks the human for missing context.
+        for message in reversed(state.messages):
+            if message.mission_id == mission.id and message.metadata.get("autonomous_guardian"):
+                investigation = investigation_by_observation.get(assessment.observation_id)
+                if investigation:
+                    message.metadata["guardian_investigation"] = investigation
+                break
+
+        if not assessment.notify_patient:
             continue
         plan = plan_guardian_notification(state, assessment, mission_id=mission.id)
         payload = plan.model_dump(mode="json")
@@ -215,6 +234,7 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         "clinical_source_verified": False,
         "safety_alerts": safety_alerts,
         "guardian_assessments": [item.model_dump(mode="json") for item in guardian_assessments],
+        "guardian_investigations": [item.model_dump(mode="json") for item in guardian_investigations],
         "guardian_summary": guardian_pattern_summary(guardian_assessments),
         "guardian_autonomy": guardian_autonomy,
         "guardian_notifications": notification_plans,
