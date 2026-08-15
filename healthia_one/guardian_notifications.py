@@ -45,6 +45,30 @@ def _first_name(state: PatientState) -> str:
 
 def _email_body(state: PatientState, assessment: GuardianAssessment) -> tuple[str, str]:
     first = _first_name(state)
+    if assessment.classification == "result_monitoring_context_gap":
+        return (
+            "HealthIA found a follow-up item in your record",
+            (
+                f"Hi {first},\n\n"
+                "HealthIA stored a new laboratory result and compared the evidence visible in your record with the treatment context you authorized. "
+                "I found a monitoring-context gap and opened a HealthIA mission so it does not get lost.\n\n"
+                "This is a record-completeness follow-up, not a diagnosis. It does not mean your treatment is unsafe, and no medication or treatment was changed. "
+                "If you already have the missing laboratory evidence, open HealthIA and upload or confirm it so I can resolve the mission.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
+    if assessment.classification == "result_monitoring_context_resolved":
+        return (
+            "HealthIA closed a follow-up mission with new evidence",
+            (
+                f"Hi {first},\n\n"
+                "HealthIA matched newly available laboratory evidence to a follow-up mission that was waiting for it. "
+                "The requested monitoring context is now present in your HealthIA record, so I closed that mission automatically.\n\n"
+                "This is a continuity update, not a diagnosis. No medication or treatment was changed. "
+                "You can open HealthIA to review the evidence and the mission receipt.\n\n"
+                "— HealthIA Guardian"
+            ),
+        )
     if assessment.classification == "recurring_context_pattern":
         return (
             "HealthIA noticed a pattern worth reviewing",
