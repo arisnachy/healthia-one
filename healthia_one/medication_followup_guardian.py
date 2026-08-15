@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -54,9 +53,8 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _normalize(value: str) -> str:
-    text = unicodedata.normalize("NFKD", str(value).lower())
-    return "".join(char for char in text if not unicodedata.combining(char)).strip()
+def _mission_type(medication_id: str) -> str:
+    return f"{MISSION_TYPE}:{medication_id}"
 
 
 def medication_action_or_error_context(note: str) -> bool:
@@ -93,12 +91,12 @@ def _checkins(state: PatientState, medication_id: str) -> list[MedicationCheckIn
 
 
 def _open_mission(state: PatientState, medication_id: str) -> HealthMission | None:
+    expected_type = _mission_type(medication_id)
     return next(
         (
             mission
             for mission in reversed(state.missions)
-            if mission.mission_type == MISSION_TYPE
-            and mission.metadata.get("medication_id") == medication_id
+            if mission.mission_type == expected_type
             and mission.status in {
                 MissionStatus.ACTIVE,
                 MissionStatus.WAITING_PATIENT,
@@ -210,7 +208,7 @@ def _open_due_mission(
     mission = HealthMission(
         patient_id=state.profile.id,
         title=f"Medication check-in: {plan.name}",
-        mission_type=MISSION_TYPE,
+        mission_type=_mission_type(plan.id),
         status=MissionStatus.WAITING_PATIENT,
         risk_level=RiskLevel.INFO,
         created_at=now,
@@ -220,11 +218,6 @@ def _open_due_mission(
             "Do not change or compensate the prescribed dose based on this mission."
         ),
         evidence_ids=[latest.id],
-        metadata={
-            "medication_id": plan.id,
-            "tracking_due_hours": FOLLOWUP_DUE_HOURS,
-            "tracking_interval_not_prescription_schedule": True,
-        },
         agent_plan=[
             AgentStep(
                 agent="MEDSAFE",
@@ -264,6 +257,8 @@ def _open_due_mission(
                 "medication_followup_due": True,
                 "medication_id": plan.id,
                 "previous_checkin_id": latest.id,
+                "tracking_due_hours": FOLLOWUP_DUE_HOURS,
+                "tracking_interval_not_prescription_schedule": True,
                 "dose_instruction_given": False,
             },
         )
@@ -286,6 +281,7 @@ def _open_due_mission(
         details={
             "medication_id": plan.id,
             "previous_checkin_id": latest.id,
+            "tracking_due_hours": FOLLOWUP_DUE_HOURS,
             "tracking_interval_not_prescription_schedule": True,
             "dose_instruction_given": False,
             "adherence_claimed": False,
