@@ -9,7 +9,7 @@ def test_guardian_semantic_geofence_dependency_permissions_and_private_receiver(
     gradle = (BRIDGE / "app/build.gradle.kts").read_text(encoding="utf-8")
     manifest = (BRIDGE / "app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
 
-    assert 'com.google.android.gms:play-services-location:21.4.0' in gradle
+    assert 'com.google.android.gms:play-services-location:21.3.0' in gradle
     for permission in (
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
