@@ -263,10 +263,11 @@ async def test_service_path_opens_then_closes_appointment_preparation_mission() 
         Settings(
             store_backend="memory",
             llm_backend="mock",
+            proactive_enabled=True,
             data_path=".healthia-one/test-appointment-guardian.json",
         )
     )
-    service.store = MemoryStore(state)
+    service.store = MemoryStore(state, autonomous_enabled=service.settings.proactive_enabled)
     appointment = Appointment(
         title="Service integration appointment",
         scheduled_at=datetime.now(timezone.utc) + timedelta(hours=36),
