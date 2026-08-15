@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from healthia_one.guardian_context import assess_guardian_batch, guardian_pattern_summary
+from healthia_one.guardian_context import apply_guardian_autonomy, assess_guardian_batch, guardian_pattern_summary
 from healthia_one.integrations import health_data_provider_catalog
 from healthia_one.safety import assess_vital
 from healthia_one.models import (
@@ -177,6 +177,7 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         accepted_records,
         history=prior_device_observations,
     )
+    guardian_autonomy = apply_guardian_autonomy(state, guardian_assessments)
 
     return {
         "accepted": accepted,
@@ -189,6 +190,7 @@ def ingest_health_connect_batch(state: PatientState, batch: HealthConnectSyncBat
         "safety_alerts": safety_alerts,
         "guardian_assessments": [item.model_dump(mode="json") for item in guardian_assessments],
         "guardian_summary": guardian_pattern_summary(guardian_assessments),
+        "guardian_autonomy": guardian_autonomy,
     }
 
 
