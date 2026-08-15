@@ -10,6 +10,7 @@ import androidx.health.connect.client.permission.HealthPermission.Companion.PERM
 import androidx.health.connect.client.records.*
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
+import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -45,12 +46,23 @@ class HealthConnectRepository(private val context: Context) {
             "menstruation_period" to HealthPermission.getReadPermission(MenstruationPeriodRecord::class),
         )
 
+    // These records are context for an authorized signal, not standalone
+    // HealthIA clinical measurements. They are requested explicitly from Health
+    // Connect and only used when the user granted their record permission.
+    private val contextPermissions: Map<String, String>
+        get() = linkedMapOf(
+            "exercise_session" to HealthPermission.getReadPermission(ExerciseSessionRecord::class),
+            "hrv_rmssd" to HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class),
+            "sleep_session" to HealthPermission.getReadPermission(SleepSessionRecord::class),
+        )
+
     val dataPermissions: Set<String>
         get() = metricPermissions.values.toSet()
 
     val permissions: Set<String>
         get() = buildSet {
             addAll(dataPermissions)
+            addAll(contextPermissions.values)
             if (supportsBackgroundRead) add(PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
         }
 
@@ -82,6 +94,11 @@ class HealthConnectRepository(private val context: Context) {
         return metricPermissions.filterValues { it in granted }.keys.toList()
     }
 
+    suspend fun grantedContextNames(): List<String> {
+        val granted = grantedPermissions()
+        return contextPermissions.filterValues { it in granted }.keys.toList()
+    }
+
     suspend fun readSince(start: Instant = Instant.now().minus(24, ChronoUnit.HOURS)): List<HealthRecordDto> {
         requireAvailable()
         val granted = grantedPermissions()
@@ -92,12 +109,69 @@ class HealthConnectRepository(private val context: Context) {
         val end = Instant.now()
         val range = TimeRangeFilter.between(start, end)
         val output = mutableListOf<HealthRecordDto>()
+
+        val exerciseSessions = if (contextPermissions.getValue("exercise_session") in granted) {
+            read<ExerciseSessionRecord>(range)
+        } else {
+            emptyList()
+        }
+        val hrvRecords = if (contextPermissions.getValue("hrv_rmssd") in granted) {
+            read<HeartRateVariabilityRmssdRecord>(range)
+        } else {
+            emptyList()
+        }
+        val sleepSessions = if (contextPermissions.getValue("sleep_session") in granted) {
+            read<SleepSessionRecord>(range)
+        } else {
+            emptyList()
+        }
+
+        fun contextAt(time: Instant): Map<String, Any> {
+            val metadata = linkedMapOf<String, Any>()
+            val exercise = exerciseSessions
+                .filter { !time.isBefore(it.startTime) && !time.isAfter(it.endTime) }
+                .maxByOrNull { it.startTime }
+            if (exercise != null) {
+                metadata["exercise_session_active"] = true
+                metadata["activity_type"] = exerciseTypeLabel(exercise.exerciseType)
+                metadata["exercise_type_code"] = exercise.exerciseType
+                metadata["exercise_started_at"] = exercise.startTime.toString()
+                metadata["exercise_ended_at"] = exercise.endTime.toString()
+            }
+
+            val latestHrv = hrvRecords
+                .filter { !it.time.isAfter(time) }
+                .filter { Duration.between(it.time, time).toMinutes() in 0..360 }
+                .maxByOrNull { it.time }
+            if (latestHrv != null) {
+                metadata["hrv_rmssd_ms"] = latestHrv.heartRateVariabilityMillis
+                metadata["hrv_observed_at"] = latestHrv.time.toString()
+            }
+
+            val recentSleep = sleepSessions
+                .filter { !it.endTime.isAfter(time) }
+                .filter { Duration.between(it.endTime, time).toHours() in 0..24 }
+                .maxByOrNull { it.endTime }
+            if (recentSleep != null) {
+                metadata["sleep_minutes"] = Duration.between(recentSleep.startTime, recentSleep.endTime).toMinutes()
+                metadata["sleep_ended_at"] = recentSleep.endTime.toString()
+            }
+            return metadata
+        }
+
         if (metricPermissions.getValue("steps") in granted) read<StepsRecord>(range).forEach { record ->
             output += record.dto("steps", record.count.toDouble(), "count", record.startTime)
         }
         if (metricPermissions.getValue("heart_rate") in granted) read<HeartRateRecord>(range).forEach { record ->
             record.samples.forEachIndexed { index, sample ->
-                output += record.dto("heart_rate", sample.beatsPerMinute.toDouble(), "bpm", sample.time, suffix = index.toString())
+                output += record.dto(
+                    "heart_rate",
+                    sample.beatsPerMinute.toDouble(),
+                    "bpm",
+                    sample.time,
+                    suffix = index.toString(),
+                    guardianMetadata = contextAt(sample.time),
+                )
             }
         }
         if (metricPermissions.getValue("blood_pressure") in granted) read<BloodPressureRecord>(range).forEach { record ->
@@ -107,6 +181,7 @@ class HealthConnectRepository(private val context: Context) {
                 "mmHg",
                 record.time,
                 secondary = record.diastolic.inMillimetersOfMercury,
+                guardianMetadata = contextAt(record.time),
             )
         }
         if (metricPermissions.getValue("weight") in granted) read<WeightRecord>(range).forEach { record ->
@@ -133,6 +208,15 @@ class HealthConnectRepository(private val context: Context) {
         return output
     }
 
+    private fun exerciseTypeLabel(type: Int): String = when (type) {
+        ExerciseSessionRecord.EXERCISE_TYPE_RUNNING,
+        ExerciseSessionRecord.EXERCISE_TYPE_RUNNING_TREADMILL -> "running"
+        ExerciseSessionRecord.EXERCISE_TYPE_WALKING -> "walking"
+        ExerciseSessionRecord.EXERCISE_TYPE_BIKING,
+        ExerciseSessionRecord.EXERCISE_TYPE_BIKING_STATIONARY -> "cycling"
+        else -> "exercise"
+    }
+
     private fun requireAvailable() {
         check(isAvailable) { availabilityMessage() }
     }
@@ -147,6 +231,7 @@ class HealthConnectRepository(private val context: Context) {
         time: Instant,
         secondary: Double? = null,
         suffix: String = "",
+        guardianMetadata: Map<String, Any> = emptyMap(),
     ): HealthRecordDto {
         val metadata = metadata
         val device = metadata.device
@@ -163,6 +248,7 @@ class HealthConnectRepository(private val context: Context) {
             model = device?.model.orEmpty(),
             deviceType = device?.type?.toString().orEmpty(),
             recordingMethod = metadata.recordingMethod.toString(),
+            metadata = guardianMetadata,
         )
     }
 }
@@ -180,4 +266,5 @@ data class HealthRecordDto(
     val model: String,
     val deviceType: String,
     val recordingMethod: String,
+    val metadata: Map<String, Any> = emptyMap(),
 )

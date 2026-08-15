@@ -226,12 +226,16 @@ class HealthIAService:
         self._mutation_lock = asyncio.Lock()
 
     def _build_store(self) -> StateStore:
+        autonomous_enabled = bool(self.settings.proactive_enabled)
         if self.settings.store_backend == "memory":
-            return MemoryStore(seed_state())
+            return MemoryStore(seed_state(), autonomous_enabled=autonomous_enabled)
         if self.settings.store_backend == "firestore":
             import os
-            return FirestoreStore(project=os.getenv("GOOGLE_CLOUD_PROJECT"))
-        return JsonStore(Path(self.settings.data_path))
+            return FirestoreStore(
+                project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+                autonomous_enabled=autonomous_enabled,
+            )
+        return JsonStore(Path(self.settings.data_path), autonomous_enabled=autonomous_enabled)
 
     async def initialize(self) -> None:
         state = await self.store.load()
@@ -258,7 +262,6 @@ class HealthIAService:
             state = seed_state()
             patient_id = current_patient_id()
             if patient_id != "patient_demo":
-                # Authenticated users must never switch to the synthetic demo identity.
                 existing = await self.store.load()
                 state.profile = existing.profile
                 for collection in (
@@ -280,7 +283,6 @@ class HealthIAService:
 
     async def start_new_consultation(self) -> ChatMessage:
         """Open a new chat boundary without replacing the longitudinal record."""
-
         async with self._mutation_lock:
             state = await self.store.load()
             conversation_id = new_id("consultation")
@@ -526,7 +528,35 @@ class HealthIAService:
         return await self._append_and_publish("medication_checkins", checkin, "medications", action="record_medication_checkin")
 
     async def add_appointment(self, appointment: Appointment) -> Appointment:
-        return await self._append_and_publish("appointments", appointment, "appointments", action="add_appointment")
+        """Create or update one patient appointment by stable appointment ID."""
+        async with self._mutation_lock:
+            state = await self.store.load()
+            appointment.patient_id = state.profile.id
+            existing_index = next(
+                (index for index, item in enumerate(state.appointments) if item.id == appointment.id),
+                None,
+            )
+            if existing_index is None:
+                state.appointments.append(appointment)
+                action = "add_appointment"
+            else:
+                previous = state.appointments[existing_index]
+                if previous.patient_id != state.profile.id:
+                    raise PermissionError("Appointment does not belong to the authenticated patient")
+                state.appointments[existing_index] = appointment
+                action = "update_appointment"
+            state.appointments.sort(key=SORT_KEYS["appointments"])
+            audit(
+                state,
+                actor="patient",
+                action=action,
+                resource_type="appointments",
+                resource_id=appointment.id,
+                details={"status": appointment.status, "upsert": True},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "appointments"})
+        return appointment
 
     async def add_goal(self, goal: HealthGoal) -> HealthGoal:
         return await self._append_and_publish("goals", goal, "goals", action="add_health_goal")
@@ -576,8 +606,6 @@ class HealthIAService:
             findings = evaluate_state(state)
             created: list[ChatMessage] = []
             for finding in findings:
-                # A deterministic finding is emitted once for its evidence key.
-                # New evidence must produce a new key before HealthIA speaks again.
                 if finding.key in state.emitted_rule_keys:
                     continue
                 allowed, permission_reason = finding_allowed(

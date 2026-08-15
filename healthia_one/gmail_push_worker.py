@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -11,11 +12,11 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from healthia_one.config import Settings
+from healthia_one.gmail_composite_bridge import GmailCompositeEventBridge
 from healthia_one.gmail_mission_events import (
     FirestoreMissionResolver,
     GeminiAdministrativeReplyInterpreter,
     GmailHistoryReader,
-    GmailMissionEventBridge,
     decode_gmail_pubsub_push,
 )
 from healthia_one.gmail_watch_runtime import (
@@ -27,6 +28,11 @@ from healthia_one.google_constellation_runtime import (
     build_google_constellation_service,
 )
 from healthia_one.google_oauth_credentials import SecretManagerOAuthTokenProvider
+from healthia_one.guardian_email_reply import (
+    GuardianEmailReplyHandler,
+    build_guardian_email_thread_store,
+)
+from healthia_one.service import HealthIAService
 
 
 # Uvicorn owns the configured stdout/stderr handlers in Cloud Run. Reuse its
@@ -44,7 +50,7 @@ class GmailWorkerRuntime:
     constellation: GoogleConstellationService
     watch_store: FirestoreGmailWatchDirectory
     watch_manager: GmailWatchManager
-    bridge: GmailMissionEventBridge
+    bridge: object
 
 
 def build_live_runtime(settings: Settings | None = None) -> GmailWorkerRuntime:
@@ -65,12 +71,18 @@ def build_live_runtime(settings: Settings | None = None) -> GmailWorkerRuntime:
     )
     resolver = FirestoreMissionResolver(project=project)
     interpreter = GeminiAdministrativeReplyInterpreter(resolved)
-    bridge = GmailMissionEventBridge(
+    health_service = HealthIAService(resolved)
+    guardian_handler = GuardianEmailReplyHandler(
+        service=health_service,
+        thread_store=build_guardian_email_thread_store(resolved),
+    )
+    bridge = GmailCompositeEventBridge(
         watch_store=watch_store,
         mission_resolver=resolver,
         coordinator=constellation.coordinator,
         history_reader_factory=lambda patient_id: GmailHistoryReader(patient_id, token_provider),
         interpreter=interpreter,
+        guardian_reply_handler=guardian_handler,
     )
     manager = GmailWatchManager(
         constellation=constellation,
@@ -89,7 +101,7 @@ def build_live_runtime(settings: Settings | None = None) -> GmailWorkerRuntime:
 def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_runtime) -> FastAPI:
     app = FastAPI(
         title="HealthIA Gmail Mission Worker",
-        version="1.1",
+        version="1.2",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -103,7 +115,11 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
-        return {"status": "ok", "service": "healthia-gmail-worker"}
+        return {
+            "status": "ok",
+            "service": "healthia-gmail-worker",
+            "guardian_email_replies": "mission_linked_opt_in_only",
+        }
 
     @app.post("/events/gmail-push")
     async def gmail_push(envelope: dict[str, Any]) -> Any:
@@ -125,7 +141,8 @@ def create_app(runtime_factory: Callable[[], GmailWorkerRuntime] = build_live_ru
             return Response(status_code=204)
 
         try:
-            missions = worker.bridge.process(watch.patient_id, envelope)
+            result = worker.bridge.process(watch.patient_id, envelope)
+            missions = await result if inspect.isawaitable(result) else result
         except PermissionError:
             return Response(status_code=204)
         except Exception as exc:

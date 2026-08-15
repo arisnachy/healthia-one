@@ -7,6 +7,8 @@ import com.google.firebase.FirebaseOptions
 object FirebaseRuntime {
     private const val PREFS = "healthia"
     private const val NOTIFICATIONS_ENABLED = "fcm_notifications_enabled"
+    private const val SHOWN_PROOF_IDS = "fcm_shown_proof_ids"
+    private const val MAX_SHOWN_PROOFS = 64
 
     fun configured(): Boolean = listOf(
         BuildConfig.FIREBASE_APP_ID,
@@ -51,5 +53,26 @@ object FirebaseRuntime {
         if (!notificationsEnabled(context)) return
         if (proofId.length !in 8..128 || proofId.any { !(it.isLetterOrDigit() || it in "._:-") }) return
         FcmDeliveryAckWorker.enqueue(context.applicationContext, proofId, notificationShown)
+    }
+
+    @Synchronized
+    fun deliveryProofAlreadyShown(context: Context, proofId: String): Boolean {
+        if (proofId.isBlank()) return false
+        val values = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getStringSet(SHOWN_PROOF_IDS, emptySet())
+            .orEmpty()
+        return proofId in values
+    }
+
+    @Synchronized
+    fun markDeliveryProofShown(context: Context, proofId: String) {
+        if (proofId.isBlank()) return
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = LinkedHashSet(preferences.getStringSet(SHOWN_PROOF_IDS, emptySet()).orEmpty())
+        values.add(proofId)
+        while (values.size > MAX_SHOWN_PROOFS) {
+            values.remove(values.firstOrNull() ?: break)
+        }
+        preferences.edit().putStringSet(SHOWN_PROOF_IDS, values).apply()
     }
 }

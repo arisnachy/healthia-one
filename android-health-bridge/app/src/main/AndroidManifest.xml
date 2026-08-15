@@ -11,7 +11,16 @@
     <uses-permission android:name="android.permission.health.READ_BODY_TEMPERATURE" />
     <uses-permission android:name="android.permission.health.READ_BLOOD_GLUCOSE" />
     <uses-permission android:name="android.permission.health.READ_MENSTRUATION" />
+    <!-- Guardian health context is separately permissioned. Exercise routes / raw GPS are intentionally not requested. -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+
+    <!-- Guardian semantic-place context is a second, explicit opt-in boundary. Coordinates remain device-local. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
@@ -30,6 +39,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".GuardianGeofenceReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
         <service
             android:name=".HealthiaFirebaseMessagingService"

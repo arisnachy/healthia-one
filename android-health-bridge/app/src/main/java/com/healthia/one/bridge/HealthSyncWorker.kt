@@ -22,7 +22,10 @@ class HealthSyncWorker(appContext: Context, params: WorkerParameters) : Coroutin
         val token = preferences.getString("access_token", "").orEmpty()
         if (baseUrl.isBlank() || token.isBlank()) return Result.success()
 
-        val records = repository.readSince()
+        val healthRecords = repository.readSince()
+        // Raw geofence coordinates never enter the API model. Only an explicitly
+        // authorized semantic label is attached to the already authorized signal.
+        val records = GuardianSemanticLocation.enrich(applicationContext, healthRecords)
         HealthiaApi.sync(baseUrl, token, deviceId(), records, background = true, grantedMetrics = grantedMetrics)
         Result.success()
     }.getOrElse { Result.retry() }

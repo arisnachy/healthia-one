@@ -40,6 +40,9 @@ object HealthiaApi {
                         put("device_model", record.model)
                         put("device_type", record.deviceType)
                         put("recording_method", record.recordingMethod)
+                        if (record.metadata.isNotEmpty()) {
+                            put("metadata", JSONObject(record.metadata))
+                        }
                     })
                 }
             })

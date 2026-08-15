@@ -120,7 +120,11 @@ def test_android_fcm_registration_delivery_and_ack_contract_is_wired_end_to_end(
     assert 'message.data["proof_id"]' in service
     assert 'kind != "healthia_update"' in service
     assert "showNeutralNotification(): Boolean" in service
-    assert "notificationShown = showNeutralNotification()" in service
+    assert "val notificationShown = if (alreadyShown)" in service
+    assert "FirebaseRuntime.deliveryProofAlreadyShown" in service
+    assert "FirebaseRuntime.markDeliveryProofShown" in service
+    assert "showNeutralNotification().also" in service
+    assert "FirebaseRuntime.acknowledgeDelivery" in service
     assert 'setContentTitle("HealthIA")' in service
     assert 'setContentText("Tienes una actualización disponible en HealthIA.")' in service
 
@@ -151,7 +155,7 @@ def test_repository_compiles_android_but_only_publishes_fcm_ready_apk() -> None:
     assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_B64" in workflow
     assert "HEALTHIA_FIREBASE_ANDROID_CONFIG_JSON" in workflow
     assert "scripts/extract_firebase_android_config.py" in workflow
-    assert "--format base64" in workflow
+    assert 'parser.add_argument("--format", choices=("base64", "json"), required=True)' in extractor
     assert "base64.b64decode" in extractor
     assert "com.healthia.one.bridge" in workflow
     assert "GOOGLE_SERVICES_JSON_BASE64_SECRET" in workflow
