@@ -1,0 +1,288 @@
+name: Guardian Wave 14 Eventarc phase 3 live proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/guardian-wave14-eventarc-phase3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave14-eventarc-phase3
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-prove:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/guardian-wave14-eventarc-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      PRODUCT_SHA: f9a3906484095460916218623a919a01b4f87e30
+      CLEAN_IMAGE: us-central1-docker.pkg.dev/healthia-6088a/cloud-run-source-deploy/healthia-wave14-clean:f9a3906484095460916218623a919a01b4f87e30
+      GMAIL_WORKER: healthia-gmail-worker
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      AUTOPILOT_TRIGGER: healthia-opportunity-events
+      EVENTARC_SA_NAME: healthia-autopilot-eventarc
+    steps:
+      - name: Checkout exact merged Wave 14 source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCT_SHA }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Discover live topology
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/guardian-wave14-eventarc-phase3
+          [[ "$(git rev-parse HEAD)" == "$PRODUCT_SHA" ]]
+          digest="$(gcloud artifacts docker images describe "$CLEAN_IMAGE" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+          test -n "$digest"
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail.json
+          runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail.json)"
+          gmail_topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail.json)"
+          firestore_location="$(gcloud firestore databases describe --database='(default)' --project "$PROJECT_ID" --format='value(locationId)')"
+          test -n "$runtime_sa" && test -n "$firestore_location"
+          [[ "$gmail_topic" == projects/*/topics/* ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "gmail_topic=$gmail_topic" >> "$GITHUB_OUTPUT"
+          echo "firestore_location=$firestore_location" >> "$GITHUB_OUTPUT"
+          {
+            echo "# HealthIA Wave 14 Eventarc phase 3"
+            echo "Product SHA: $PRODUCT_SHA"
+            echo "Clean image digest: $digest"
+            echo "Firestore location: $firestore_location"
+          } > dist/guardian-wave14-eventarc-phase3/report.md
+
+      - name: Verify actually needed APIs are enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(run.googleapis.com firestore.googleapis.com eventarc.googleapis.com pubsub.googleapis.com secretmanager.googleapis.com)
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          missing=()
+          for api in "${required[@]}"; do
+            grep -Fxq "$api" <<<"$enabled" || missing+=("$api")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing API(s): %s\n' "${missing[*]}" >&2
+            exit 42
+          fi
+          echo "Required runtime APIs are already enabled. eventarcpublishing.googleapis.com is intentionally not required by this probe." >> dist/guardian-wave14-eventarc-phase3/report.md
+
+      - name: Select existing user-managed trigger identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          dedicated="${EVENTARC_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+          runtime_sa="${{ steps.discover.outputs.runtime_sa }}"
+          if gcloud iam service-accounts describe "$dedicated" --project "$PROJECT_ID" >/dev/null 2>&1; then
+            selected="$dedicated"
+            mode="existing_dedicated"
+          else
+            selected="$runtime_sa"
+            mode="existing_runtime_identity"
+          fi
+          gcloud iam service-accounts describe "$selected" --project "$PROJECT_ID" >/dev/null
+          echo "service_account=$selected" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Eventarc identity mode: $mode" >> dist/guardian-wave14-eventarc-phase3/report.md
+
+      - name: Ensure trigger identity can receive Eventarc events
+        shell: bash
+        run: |
+          set -euo pipefail
+          sa="${{ steps.identity.outputs.service_account }}"
+          gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member "serviceAccount:$sa" \
+            --role roles/eventarc.eventReceiver \
+            --condition=None --quiet >/dev/null
+
+      - name: Deploy private Autopilot worker
+        id: service
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_sa="${{ steps.discover.outputs.runtime_sa }}"
+          topic="${{ steps.discover.outputs.gmail_topic }}"
+          gcloud run deploy "$AUTOPILOT_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "$CLEAN_IMAGE" \
+            --service-account "$runtime_sa" \
+            --no-allow-unauthenticated \
+            --command uvicorn \
+            --args healthia_one.autopilot_worker:app,--host,0.0.0.0,--port,8080 \
+            --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_COST_MODE=guarded,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${topic}" \
+            --min 0 --max 1 --concurrency 1 --quiet
+          gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/autopilot.json
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/autopilot.json)"
+          url="$(jq -r '.status.url // empty' /tmp/autopilot.json)"
+          test -n "$revision" && test -n "$url"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+          if [[ -z "$code" || "$code" =~ ^2 ]]; then
+            echo "Autopilot worker unexpectedly public: ${code:-empty}" >&2
+            exit 1
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Grant Eventarc identity run.invoker
+        shell: bash
+        run: |
+          set -euo pipefail
+          sa="${{ steps.identity.outputs.service_account }}"
+          gcloud run services add-iam-policy-binding "$AUTOPILOT_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --member "serviceAccount:$sa" --role roles/run.invoker --quiet >/dev/null
+
+      - name: Create or verify Firestore Eventarc trigger
+        id: trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          location="${{ steps.discover.outputs.firestore_location }}"
+          sa="${{ steps.identity.outputs.service_account }}"
+          if ! gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json 2>/dev/null; then
+            gcloud eventarc triggers create "$AUTOPILOT_TRIGGER" \
+              --project "$PROJECT_ID" --location "$location" \
+              --destination-run-service "$AUTOPILOT_SERVICE" \
+              --destination-run-region "$REGION" \
+              --destination-run-path "/events/firestore" \
+              --event-filters "type=google.cloud.firestore.document.v1.created" \
+              --event-filters "database=(default)" \
+              --event-filters-path-pattern "document=healthia_autopilot_events/{eventId}" \
+              --event-data-content-type application/protobuf \
+              --service-account "$sa" --quiet
+            gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json
+          fi
+          [[ "$(jq -r '.destination.cloudRun.service // empty' /tmp/trigger.json)" == "$AUTOPILOT_SERVICE" ]]
+          [[ "$(jq -r '.destination.cloudRun.region // empty' /tmp/trigger.json)" == "$REGION" ]]
+          [[ "$(jq -r '.destination.cloudRun.path // empty' /tmp/trigger.json)" == "/events/firestore" ]]
+          [[ "$(jq -r '.eventFilters.type // empty' /tmp/trigger.json)" == "google.cloud.firestore.document.v1.created" ]]
+          [[ "$(jq -r '.eventFilters.database // empty' /tmp/trigger.json)" == "(default)" ]]
+          [[ "$(jq -r '.eventFilters.document // empty' /tmp/trigger.json)" == "healthia_autopilot_events/{eventId}" ]]
+          echo "location=$location" >> "$GITHUB_OUTPUT"
+
+      - name: Install exact product package for probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip >/dev/null
+          python -m pip install -e . >/dev/null
+
+      - name: Create isolated Firestore outbox event
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+          python - <<'PY' > /tmp/probe.json
+          import json, os
+          from google.cloud import firestore
+          from healthia_one.autopilot_events import FirestoreEventOutboxStore
+          from healthia_one.autopilot_runtime import AutopilotEvent
+          from healthia_one.models import PatientState
+          from healthia_one.store import PATIENT_STATE_COLLECTION
+          project=os.environ['GOOGLE_CLOUD_PROJECT']
+          patient_id=f"patient_eventarc_phase3_{os.environ['GITHUB_RUN_ID']}"
+          state=PatientState(); state.profile.id=patient_id; state.profile.display_name='HealthIA Eventarc Synthetic Probe'; state.profile.email=''; state.consent.proactive_enabled=False; state.consent.signal_types=[]
+          client=firestore.Client(project=project)
+          client.collection(PATIENT_STATE_COLLECTION).document(patient_id).set(state.model_dump(mode='json'))
+          event=AutopilotEvent(patient_id=patient_id,event_type='patient_state_changed',subject_id='eventarc_probe',payload={'source':'eventarc_live_probe','notification_requested':False})
+          record=FirestoreEventOutboxStore(project=project).put(event)
+          print(json.dumps({'patient_id':patient_id,'event_id':record.id,'status':record.status}))
+          PY
+          echo "patient_id=$(jq -r '.patient_id' /tmp/probe.json)" >> "$GITHUB_OUTPUT"
+          echo "event_id=$(jq -r '.event_id' /tmp/probe.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for autonomous Eventarc processing
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+          event_id="${{ steps.probe.outputs.event_id }}"
+          status=pending; attempts=0; last_error=''
+          for _ in $(seq 1 80); do
+            readarray -t values < <(EVENT_ID="$event_id" python - <<'PY'
+          import os
+          from healthia_one.autopilot_events import FirestoreEventOutboxStore
+          r=FirestoreEventOutboxStore(project=os.environ['GOOGLE_CLOUD_PROJECT']).get(os.environ['EVENT_ID'])
+          print(r.status if r else 'missing'); print(r.attempts if r else 0); print((r.last_error if r else 'missing').replace('\n',' ')[:200])
+          PY
+            )
+            status="${values[0]:-missing}"; attempts="${values[1]:-0}"; last_error="${values[2]:-}"
+            [[ "$status" == processed ]] && break
+            if [[ "$status" == failed ]]; then echo "Worker failed: $last_error" >&2; exit 1; fi
+            sleep 3
+          done
+          [[ "$status" == processed ]]
+          [[ "$attempts" -ge 1 ]]
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
+
+      - name: Record Eventarc LIVE PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo ""
+            echo "## LIVE PASS"
+            echo "Autopilot revision: ${{ steps.service.outputs.revision }}"
+            echo "Autopilot private: yes"
+            echo "Eventarc trigger: $AUTOPILOT_TRIGGER"
+            echo "Eventarc location: ${{ steps.trigger.outputs.location }}"
+            echo "Eventarc identity mode: ${{ steps.identity.outputs.mode }}"
+            echo "Outbox final status: ${{ steps.verify.outputs.status }}"
+            echo "Processing attempts: ${{ steps.verify.outputs.attempts }}"
+            echo "Proven path: Firestore create -> Eventarc -> IAM -> private Cloud Run /events/firestore -> durable processed"
+            echo "Truth boundary: no direct call to the worker; no Gmail, push, model, paid network, treatment or clinical action requested by the probe."
+          } >> dist/guardian-wave14-eventarc-phase3/report.md
+          cat dist/guardian-wave14-eventarc-phase3/report.md
+
+      - name: Cleanup isolated probe
+        if: always() && steps.probe.outputs.event_id != ''
+        shell: bash
+        run: |
+          set +e
+          export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+          PATIENT_ID="${{ steps.probe.outputs.patient_id }}" EVENT_ID="${{ steps.probe.outputs.event_id }}" python - <<'PY'
+          import os
+          from google.cloud import firestore
+          from healthia_one.autopilot_runtime import event_key
+          from healthia_one.autopilot_events import FirestoreEventOutboxStore
+          from healthia_one.store import PATIENT_STATE_COLLECTION
+          project=os.environ['GOOGLE_CLOUD_PROJECT']; patient_id=os.environ['PATIENT_ID']; event_id=os.environ['EVENT_ID']; c=firestore.Client(project=project)
+          r=FirestoreEventOutboxStore(project=project).get(event_id)
+          if r:
+              claim_id=event_key(r.event)
+              c.collection('healthia_autopilot_claims').document(patient_id).collection('claims').document(claim_id).delete()
+              c.collection('healthia_autopilot_receipts').document(patient_id).collection('receipts').document(claim_id).delete()
+          c.collection('healthia_autopilot_events').document(event_id).delete(); c.collection(PATIENT_STATE_COLLECTION).document(patient_id).delete(); c.collection('healthia_opportunity_vaults').document(patient_id).delete()
+          PY
+
+      - name: Upload sanitized phase 3 proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave14-Eventarc-PHASE3-LIVE-proof
+          path: dist/guardian-wave14-eventarc-phase3
+          if-no-files-found: warn
+          retention-days: 30
