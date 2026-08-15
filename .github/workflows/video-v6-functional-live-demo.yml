@@ -1,15 +1,11 @@
-name: HealthIA V9 comprehensive live demo
+name: HealthIA V9 master comprehensive live demo
 
 on:
   push:
-    branches:
-      - kira/video-v6-demo-final
+    branches: [kira/video-v6-demo-final]
     paths:
-      - "scripts/record_v6_functional_demo.py"
-      - "scripts/record_v6_functional_demo_final.py"
-      - "scripts/record_v7_functional_demo.py"
-      - "scripts/record_v8_functional_demo.py"
       - "scripts/record_v9_master_demo.py"
+      - "scripts/record_v9_master_demo_entry.py"
       - ".github/workflows/video-v6-functional-live-demo.yml"
   workflow_dispatch:
 
@@ -17,12 +13,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: healthia-v9-comprehensive-demo
+  group: healthia-v9-master
   cancel-in-progress: true
 
 env:
   PROJECT_ID: healthia-6088a
-  REGION: us-central1
   MAPS_SECRET_NAME: healthia-google-maps-api-key
   HEALTHIA_DEMO_BASE_URL: http://127.0.0.1:8000
   HEALTHIA_DEMO_OUTPUT: dist/v9-master-demo
@@ -37,14 +32,12 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Authenticate to controlled Google Cloud project
-        uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
           create_credentials_file: true
 
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
 
@@ -52,27 +45,25 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install HealthIA, Chromium and FFmpeg
+      - name: Install runtime and video tools
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
           python -m playwright install --with-deps chromium
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg
-          ffmpeg -version | head -n 1
-          ffprobe -version | head -n 1
 
-      - name: Load Maps key without exposing it
+      - name: Load Google Maps key
         shell: bash
         run: |
           set -euo pipefail
-          maps_key="$(gcloud secrets versions access latest --secret "$MAPS_SECRET_NAME" --project "$PROJECT_ID")"
-          maps_key="$(printf '%s' "$maps_key" | sed 's/^﻿//' | tr -d '\r\n')"
-          test -n "$maps_key"
-          echo "::add-mask::$maps_key"
-          echo "GOOGLE_MAPS_API_KEY=$maps_key" >> "$GITHUB_ENV"
+          key="$(gcloud secrets versions access latest --secret "$MAPS_SECRET_NAME" --project "$PROJECT_ID")"
+          key="$(printf '%s' "$key" | sed 's/^﻿//' | tr -d '\r\n')"
+          test -n "$key"
+          echo "::add-mask::$key"
+          echo "GOOGLE_MAPS_API_KEY=$key" >> "$GITHUB_ENV"
 
-      - name: Start real HealthIA browser application
+      - name: Start HealthIA ONE
         shell: bash
         env:
           GOOGLE_GENAI_USE_VERTEXAI: "true"
@@ -93,54 +84,44 @@ jobs:
         run: |
           mkdir -p /tmp/healthia-v9 dist/v9-master-demo
           nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > dist/v9-master-demo/server.log 2>&1 &
-          echo $! > dist/v9-master-demo/server.pid
           for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null; then exit 0; fi
+            curl -fsS http://127.0.0.1:8000/healthz >/dev/null && exit 0
             sleep 1
           done
           cat dist/v9-master-demo/server.log
           exit 1
 
-      - name: Record comprehensive working HealthIA product behavior
-        shell: bash
+      - name: Record complete product story
         env:
           GOOGLE_GENAI_USE_VERTEXAI: "true"
           GOOGLE_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           GOOGLE_CLOUD_LOCATION: global
-        run: |
-          set -euo pipefail
-          python scripts/record_v9_master_demo.py
+        run: python scripts/record_v9_master_demo_entry.py
 
-      - name: Generate Charon comprehensive narration
+      - name: Generate comprehensive Charon narration
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
-          text = "HealthIA ONE began with a simple problem: a patient's health story is fragmented across conversations, laboratory files, devices, family history, treatments, appointments and follow-up tasks. The goal is not another chatbot. It is continuity that belongs to the patient. Here a real patient account is created and the working HealthIA application opens. The longitudinal record connects confirmed conditions, a professional-confirmed Losartan plan, family context and care history. In chat, the patient speaks naturally about dizziness. HealthIA uses the context it already has and routes the conversation through its adaptive clinical workflow instead of restarting a fixed questionnaire every time. Gemini and Google ADK support adaptive reasoning, while safety rules and state transitions remain bounded by deterministic code. Next comes evidence. A synthetic laboratory file is uploaded through HealthIA. The original file is preserved, supported values are parsed, an educational explanation is generated, and the evidence is linked back to the living clinical twin. HealthIA keeps provenance before interpretation: when evidence is uncertain, it should fail closed rather than invent a value. The same patient record can receive authorized measurements and Health Connect data such as activity, heart rate and weight. Device identity, granted metrics and revocation matter because background data is not unlimited consent. HealthIA also turns needs into durable health missions. A family autism need becomes a real resource-navigation mission in Santiago. Before location is used, the mission is blocked at a mission-scoped consent boundary. After permission, the shipped HealthIA navigation engine executes Google Places and returns locality-validated candidates with addresses, Maps links, and phone or website data when available. When the patient says, the second one, HealthIA selects that exact verified candidate. Flexible reasoning is allowed; identity and external actions are exact. Opportunity Autopilot extends continuity beyond the current chat. HealthIA can watch authorized patient and family topics, keep discoveries quiet until relevant, and compare new evidence with the current record. In this demo the scientific radar queries PubMed, Europe PMC and ClinicalTrials.gov, chooses evidence relevant to hypertension, and compares it with the recorded Losartan treatment. It does not claim that a paper changes this patient's therapy or predict an outcome. Professional review remains the next boundary. A missing creatinine study becomes another actionable mission, and HealthIA finds real local places where that next step can be completed. Patient controls remain visible: permissions, quiet hours, snooze and mute, audit history, export, device revocation and Google mission connections are part of the product, not hidden behind the agent. Finally, the patient signs out and signs back in. The treatment, uploaded evidence, family context and longitudinal record are still there. That is the core promise carried from the first HealthIA demo through the system shown now: one patient-owned continuity layer, adaptive when reasoning matters, deterministic when exactness matters, and paused for human consent when the decision is human. Your health never starts over."
-          payload = {
-            "input": {"text": text},
-            "voice": {"languageCode": "en-US", "name": "en-US-Chirp3-HD-Charon"},
-            "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.05, "pitch": 0.0}
-          }
+          text = "HealthIA ONE began with one problem: a patient's health story is fragmented across conversations, laboratory files, devices, family history, treatments, appointments and follow-up tasks. The goal is not another chatbot. It is patient-owned continuity. This recording stays inside the real working HealthIA application. A patient account is created and a longitudinal record connects hypertension, a professional-confirmed Losartan plan, family context and care history. The patient then speaks naturally about dizziness. HealthIA uses the context it already has and runs its adaptive clinical conversation instead of restarting a fixed questionnaire. Gemini and Google ADK support adaptive reasoning, while deterministic code protects safety, identity and state transitions. Next, a synthetic laboratory file is uploaded through the real Results workflow. HealthIA preserves the original evidence, parses supported values, links them to the living clinical twin and keeps provenance before interpretation. If evidence is uncertain, the system is designed to fail closed instead of inventing a value. The same record can receive authorized Health Connect measurements such as activity, heart rate and weight. Device identity, allowed metrics and revocation matter because background data is not unlimited consent. HealthIA also turns needs into durable missions. A family autism need becomes a resource-navigation mission in Santiago. Before location is used, the mission stops at a mission-scoped consent boundary. Only after permission does the shipped navigation engine execute Google Places. It returns locality-validated candidates with addresses, Google Maps links, and phone or website information when available. When the patient chooses the second one, HealthIA selects that exact verified candidate. Reasoning can be flexible; identity and external actions remain exact. Opportunity Autopilot extends continuity beyond one conversation. HealthIA can watch authorized patient and family topics, keep discoveries quiet until they matter, and compare new scientific evidence with the current record. In this demo, the scientific radar queries PubMed, Europe PMC and ClinicalTrials.gov and compares relevant hypertension evidence with the recorded Losartan treatment. A publication never changes this patient's treatment by itself, and HealthIA does not fabricate an outcome prediction. Professional review remains the boundary. A missing creatinine study then becomes another actionable mission, and HealthIA finds real local places where the patient can complete that next step. The product also exposes patient controls for permissions, quiet hours, snooze and mute, audit history, export, device revocation and Google mission connections. Finally, the patient signs out and signs back in. The treatment, uploaded evidence, family context and longitudinal record are still attached to the same patient account. That continuity is the promise carried from the first HealthIA ONE video through the system shown now: one patient-owned health layer, adaptive when reasoning matters, deterministic when exactness matters, and paused for human consent when the decision is human. Your health never starts over."
+          payload = {"input":{"text":text},"voice":{"languageCode":"en-US","name":"en-US-Chirp3-HD-Charon"},"audioConfig":{"audioEncoding":"MP3","speakingRate":1.05,"pitch":0.0}}
           open('dist/v9-master-demo/tts-request.json','w',encoding='utf-8').write(json.dumps(payload))
           PY
           token="$(gcloud auth print-access-token)"
           curl -fsS -X POST "https://texttospeech.googleapis.com/v1/text:synthesize" \
             -H "Authorization: Bearer $token" \
             -H "Content-Type: application/json" \
-            --data-binary @dist/v9-master-demo/tts-request.json \
-            > dist/v9-master-demo/tts-response.json
+            --data-binary @dist/v9-master-demo/tts-request.json > dist/v9-master-demo/tts-response.json
           python - <<'PY'
           import base64, json
           data=json.load(open('dist/v9-master-demo/tts-response.json',encoding='utf-8'))
-          audio=data.get('audioContent')
-          if not audio:
-              raise SystemExit(f'TTS failed: {data}')
-          open('dist/v9-master-demo/charon.mp3','wb').write(base64.b64decode(audio))
+          if not data.get('audioContent'):
+              raise SystemExit(data)
+          open('dist/v9-master-demo/charon.mp3','wb').write(base64.b64decode(data['audioContent']))
           PY
 
-      - name: Build master MP4 under four minutes
+      - name: Build final MP4
         shell: bash
         run: |
           set -euo pipefail
@@ -149,34 +130,29 @@ jobs:
           test -s "$raw" && test -s "$audio"
           raw_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$raw")"
           audio_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio")"
-          echo "Raw browser duration: $raw_dur"
-          echo "Narration duration: $audio_dur"
           read speed pad <<<"$(python - <<PY
           raw=float('$raw_dur'); audio=float('$audio_dur')
-          target=min(236.0, max(audio + 1.5, raw))
+          target=min(236.0, max(audio + 1.0, raw))
           speed=max(1.0, raw/target)
           adjusted=raw/speed
-          pad=max(0.0, audio + 1.0 - adjusted)
+          pad=max(0.0, audio + 0.8 - adjusted)
           print(speed, pad)
           PY
           )"
-          vf="setpts=PTS/$speed,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,tpad=stop_mode=clone:stop_duration=$pad"
           ffmpeg -y -i "$raw" -i "$audio" \
-            -filter:v "$vf" -filter:a "apad=pad_dur=3" \
-            -map 0:v:0 -map 1:a:0 \
+            -filter:v "setpts=PTS/$speed,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,tpad=stop_mode=clone:stop_duration=$pad" \
+            -filter:a "apad=pad_dur=2" -map 0:v:0 -map 1:a:0 \
             -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
             -c:a aac -b:a 160k -ar 48000 -movflags +faststart -shortest \
             dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4
-          final_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4)"
-          echo "Final duration: $final_dur"
+          duration="$(ffprobe -v error -show_entries format=duration -of csv=p=0 dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4)"
           python - <<PY
-          d=float('$final_dur')
-          assert d < 240.0, f'final video exceeds four minutes: {d}'
-          assert d > 150.0, f'comprehensive video is unexpectedly short: {d}'
+          d=float('$duration')
+          assert 150.0 < d < 240.0, d
           PY
           sha256sum dist/v9-master-demo/HealthIA_ONE_V9_MASTER_COMPREHENSIVE_LIVE_DEMO.mp4 | tee dist/v9-master-demo/sha256.txt
 
-      - name: Upload comprehensive demo evidence
+      - name: Upload V9 master demo
         if: always()
         uses: actions/upload-artifact@v4
         with:
