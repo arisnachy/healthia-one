@@ -310,9 +310,10 @@ def run() -> dict:
         page.locator('#documentForm input[name="title"]').fill("Synthetic care note")
         page.locator('#documentForm select[name="category"]').select_option("consultation")
         page.locator('#documentForm button[type="submit"]').click()
+        page.wait_for_selector("#documentDialog", state="hidden", timeout=60_000)
         page.wait_for_function(
             """() => document.querySelector('#documentsRoot')?.textContent?.includes('Synthetic care note') === true""",
-            timeout=15_000,
+            timeout=30_000,
         )
         page.wait_for_timeout(700)
         overlay(page, "Patient document archive", "Clinical files keep category, source, status and the original bytes. If HealthIA cannot read something, it preserves the source instead of inventing content.", 4.5)
