@@ -226,12 +226,16 @@ class HealthIAService:
         self._mutation_lock = asyncio.Lock()
 
     def _build_store(self) -> StateStore:
+        autonomous_enabled = bool(self.settings.proactive_enabled)
         if self.settings.store_backend == "memory":
-            return MemoryStore(seed_state())
+            return MemoryStore(seed_state(), autonomous_enabled=autonomous_enabled)
         if self.settings.store_backend == "firestore":
             import os
-            return FirestoreStore(project=os.getenv("GOOGLE_CLOUD_PROJECT"))
-        return JsonStore(Path(self.settings.data_path))
+            return FirestoreStore(
+                project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+                autonomous_enabled=autonomous_enabled,
+            )
+        return JsonStore(Path(self.settings.data_path), autonomous_enabled=autonomous_enabled)
 
     async def initialize(self) -> None:
         state = await self.store.load()
@@ -258,7 +262,6 @@ class HealthIAService:
             state = seed_state()
             patient_id = current_patient_id()
             if patient_id != "patient_demo":
-                # Authenticated users must never switch to the synthetic demo identity.
                 existing = await self.store.load()
                 state.profile = existing.profile
                 for collection in (
@@ -280,7 +283,6 @@ class HealthIAService:
 
     async def start_new_consultation(self) -> ChatMessage:
         """Open a new chat boundary without replacing the longitudinal record."""
-
         async with self._mutation_lock:
             state = await self.store.load()
             conversation_id = new_id("consultation")
@@ -576,8 +578,6 @@ class HealthIAService:
             findings = evaluate_state(state)
             created: list[ChatMessage] = []
             for finding in findings:
-                # A deterministic finding is emitted once for its evidence key.
-                # New evidence must produce a new key before HealthIA speaks again.
                 if finding.key in state.emitted_rule_keys:
                     continue
                 allowed, permission_reason = finding_allowed(
