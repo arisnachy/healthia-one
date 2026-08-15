@@ -1,4 +1,4 @@
-name: HealthIA V7 functional live demo
+name: HealthIA V8 functional live demo
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
       - "scripts/record_v6_functional_demo.py"
       - "scripts/record_v6_functional_demo_final.py"
       - "scripts/record_v7_functional_demo.py"
+      - "scripts/record_v8_functional_demo.py"
       - ".github/workflows/video-v6-functional-live-demo.yml"
   workflow_dispatch:
 
@@ -15,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: healthia-v7-functional-demo
+  group: healthia-v8-functional-demo
   cancel-in-progress: true
 
 env:
@@ -23,7 +24,7 @@ env:
   REGION: us-central1
   MAPS_SECRET_NAME: healthia-google-maps-api-key
   HEALTHIA_DEMO_BASE_URL: http://127.0.0.1:8000
-  HEALTHIA_DEMO_OUTPUT: dist/v7-functional-demo
+  HEALTHIA_DEMO_OUTPUT: dist/v8-functional-demo
 
 jobs:
   record:
@@ -80,8 +81,8 @@ jobs:
           HEALTHIA_MODEL: gemini-3.5-flash
           HEALTHIA_LLM_BACKEND: gemini_api
           HEALTHIA_STORE_BACKEND: json
-          HEALTHIA_DATA_PATH: /tmp/healthia-v7/state.json
-          HEALTHIA_ACCOUNTS_PATH: /tmp/healthia-v7/accounts.json
+          HEALTHIA_DATA_PATH: /tmp/healthia-v8/state.json
+          HEALTHIA_ACCOUNTS_PATH: /tmp/healthia-v8/accounts.json
           HEALTHIA_AUTH_REQUIRED: "true"
           HEALTHIA_ALLOW_REGISTRATION: "true"
           HEALTHIA_COST_MODE: cloud_demo
@@ -89,14 +90,14 @@ jobs:
           HEALTHIA_COST_GUARD_START_ENABLED: "true"
           HEALTHIA_PROACTIVE_ENABLED: "false"
         run: |
-          mkdir -p /tmp/healthia-v7 dist/v7-functional-demo
-          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > dist/v7-functional-demo/server.log 2>&1 &
-          echo $! > dist/v7-functional-demo/server.pid
+          mkdir -p /tmp/healthia-v8 dist/v8-functional-demo
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > dist/v8-functional-demo/server.log 2>&1 &
+          echo $! > dist/v8-functional-demo/server.pid
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8000/healthz >/dev/null; then exit 0; fi
             sleep 1
           done
-          cat dist/v7-functional-demo/server.log
+          cat dist/v8-functional-demo/server.log
           exit 1
 
       - name: Record only working HealthIA product behavior
@@ -107,7 +108,7 @@ jobs:
           GOOGLE_CLOUD_LOCATION: global
         run: |
           set -euo pipefail
-          python scripts/record_v7_functional_demo.py
+          python scripts/record_v8_functional_demo.py
 
       - name: Generate Charon narration
         shell: bash
@@ -115,35 +116,35 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import json
-          text = """This is HealthIA ONE running as a real patient application, not a slide deck. A family autism need becomes a durable resource-navigation mission in Santiago. After mission-scoped location permission, HealthIA executes Google Places and shows real local addresses, phone numbers, websites, and Maps links. The second verified option can be selected exactly. Next, HealthIA's scientific radar queries current PubMed, Europe PMC, and ClinicalTrials.gov sources, filters for evidence relevant to essential hypertension, and compares the selected evidence with the Losartan plan already stored in the living clinical twin. HealthIA shows two care-planning paths: continuing the current plan with monitoring, or taking the new evidence through professional applicability review before any clinician-approved change. These are not fabricated patient-outcome predictions. Finally, a missing creatinine test becomes another real local mission, returning medical places in Santiago where the patient can complete the study. One patient-owned system connects longitudinal health context, current evidence, family support, and real-world care navigation. Your health never starts over."""
+          text = """This is HealthIA ONE running as a real patient application, not a slide deck. A family autism need becomes a real resource-navigation mission in Santiago. HealthIA stops at a mission-scoped location-consent boundary before searching. After permission, the shipped navigation engine executes Google Places and shows local addresses, phone numbers, websites, and Maps links. The second verified option can be selected exactly. Next, HealthIA's scientific radar queries current PubMed, Europe PMC, and ClinicalTrials.gov sources, filters for evidence relevant to essential hypertension, and compares the selected evidence with the Losartan plan already stored in the living clinical twin. HealthIA shows two care-planning paths: continuing the current plan with monitoring, or taking the new evidence through professional applicability review before any clinician-approved change. These are not fabricated patient-outcome predictions. Finally, a missing creatinine test becomes another real local mission, returning medical places in Santiago where the patient can complete the study. One patient-owned system connects longitudinal health context, current evidence, family support, and real-world care navigation. Your health never starts over."""
           payload = {
             "input": {"text": text},
             "voice": {"languageCode": "en-US", "name": "en-US-Chirp3-HD-Charon"},
             "audioConfig": {"audioEncoding": "MP3", "speakingRate": 1.06, "pitch": 0.0}
           }
-          open('dist/v7-functional-demo/tts-request.json','w',encoding='utf-8').write(json.dumps(payload))
+          open('dist/v8-functional-demo/tts-request.json','w',encoding='utf-8').write(json.dumps(payload))
           PY
           token="$(gcloud auth print-access-token)"
           curl -fsS -X POST "https://texttospeech.googleapis.com/v1/text:synthesize" \
             -H "Authorization: Bearer $token" \
             -H "Content-Type: application/json" \
-            --data-binary @dist/v7-functional-demo/tts-request.json \
-            > dist/v7-functional-demo/tts-response.json
+            --data-binary @dist/v8-functional-demo/tts-request.json \
+            > dist/v8-functional-demo/tts-response.json
           python - <<'PY'
           import base64, json
-          data=json.load(open('dist/v7-functional-demo/tts-response.json',encoding='utf-8'))
+          data=json.load(open('dist/v8-functional-demo/tts-response.json',encoding='utf-8'))
           audio=data.get('audioContent')
           if not audio:
               raise SystemExit(f'TTS failed: {data}')
-          open('dist/v7-functional-demo/charon.mp3','wb').write(base64.b64decode(audio))
+          open('dist/v8-functional-demo/charon.mp3','wb').write(base64.b64decode(audio))
           PY
 
       - name: Build judge-ready MP4 under four minutes
         shell: bash
         run: |
           set -euo pipefail
-          raw="dist/v7-functional-demo/healthia-v6-functional-live.webm"
-          audio="dist/v7-functional-demo/charon.mp3"
+          raw="dist/v8-functional-demo/healthia-v6-functional-live.webm"
+          audio="dist/v8-functional-demo/charon.mp3"
           test -s "$raw" && test -s "$audio"
           raw_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$raw")"
           audio_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio")"
@@ -164,25 +165,25 @@ jobs:
             -map 0:v:0 -map 1:a:0 \
             -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
             -c:a aac -b:a 160k -ar 48000 -movflags +faststart -shortest \
-            dist/v7-functional-demo/HealthIA_ONE_V7_FUNCTIONAL_LIVE_DEMO.mp4
-          final_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 dist/v7-functional-demo/HealthIA_ONE_V7_FUNCTIONAL_LIVE_DEMO.mp4)"
+            dist/v8-functional-demo/HealthIA_ONE_V8_FUNCTIONAL_LIVE_DEMO.mp4
+          final_dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 dist/v8-functional-demo/HealthIA_ONE_V8_FUNCTIONAL_LIVE_DEMO.mp4)"
           echo "Final duration: $final_dur"
           python - <<PY
           d=float('$final_dur')
           assert d < 240.0, f'final video exceeds four minutes: {d}'
           PY
-          sha256sum dist/v7-functional-demo/HealthIA_ONE_V7_FUNCTIONAL_LIVE_DEMO.mp4 | tee dist/v7-functional-demo/sha256.txt
+          sha256sum dist/v8-functional-demo/HealthIA_ONE_V8_FUNCTIONAL_LIVE_DEMO.mp4 | tee dist/v8-functional-demo/sha256.txt
 
       - name: Upload functional demo evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-ONE-V7-FUNCTIONAL-LIVE-DEMO
+          name: HealthIA-ONE-V8-FUNCTIONAL-LIVE-DEMO
           path: |
-            dist/v7-functional-demo/HealthIA_ONE_V7_FUNCTIONAL_LIVE_DEMO.mp4
-            dist/v7-functional-demo/healthia-v6-functional-live.webm
-            dist/v7-functional-demo/report.json
-            dist/v7-functional-demo/server.log
-            dist/v7-functional-demo/sha256.txt
+            dist/v8-functional-demo/HealthIA_ONE_V8_FUNCTIONAL_LIVE_DEMO.mp4
+            dist/v8-functional-demo/healthia-v6-functional-live.webm
+            dist/v8-functional-demo/report.json
+            dist/v8-functional-demo/server.log
+            dist/v8-functional-demo/sha256.txt
           if-no-files-found: warn
           retention-days: 7
