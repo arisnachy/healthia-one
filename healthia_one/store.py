@@ -53,6 +53,17 @@ async def _flush_post_commit_intents(state: PatientState) -> bool:
 
 
 class StateStore(ABC):
+    def __init__(self, *, autonomous_enabled: bool = True) -> None:
+        # Runtime kill switch. Patient consent remains a separate check inside
+        # each Guardian; both boundaries must be open before autonomous work can
+        # create a mission or stage a notification.
+        self.autonomous_enabled = bool(autonomous_enabled)
+
+    def _reconcile_if_enabled(self, state: PatientState) -> bool:
+        if not self.autonomous_enabled:
+            return False
+        return _prepare_autonomous_state(state)
+
     @abstractmethod
     async def load(self) -> PatientState:
         raise NotImplementedError
@@ -63,7 +74,8 @@ class StateStore(ABC):
 
 
 class MemoryStore(StateStore):
-    def __init__(self, initial: PatientState | None = None) -> None:
+    def __init__(self, initial: PatientState | None = None, *, autonomous_enabled: bool = True) -> None:
+        super().__init__(autonomous_enabled=autonomous_enabled)
         state = initial or PatientState()
         patient_id = state.profile.id or "patient_demo"
         self._states: dict[str, PatientState] = {patient_id: state.model_copy(deep=True)}
@@ -82,7 +94,7 @@ class MemoryStore(StateStore):
             # Reconciliation happens while updated_at still represents the
             # previous durable commit. Result Guardian uses that boundary to
             # distinguish newly-arrived result evidence from history.
-            _prepare_autonomous_state(state)
+            self._reconcile_if_enabled(state)
             state.updated_at = utc_now()
             self._states[patient_id] = state.model_copy(deep=True)
             if await _flush_post_commit_intents(state):
@@ -91,7 +103,8 @@ class MemoryStore(StateStore):
 
 
 class JsonStore(StateStore):
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, autonomous_enabled: bool = True) -> None:
+        super().__init__(autonomous_enabled=autonomous_enabled)
         self.path = path
         self._lock = asyncio.Lock()
 
@@ -127,7 +140,7 @@ class JsonStore(StateStore):
             path = self._patient_path()
             patient_id = current_patient_id()
             state.profile.id = patient_id
-            _prepare_autonomous_state(state)
+            self._reconcile_if_enabled(state)
             state.updated_at = utc_now()
             path.parent.mkdir(parents=True, exist_ok=True)
             await self._write(path, state)
@@ -139,7 +152,8 @@ class JsonStore(StateStore):
 class FirestoreStore(StateStore):
     """Patient-scoped Firestore adapter selected from the authenticated principal."""
 
-    def __init__(self, project: str | None = None) -> None:
+    def __init__(self, project: str | None = None, *, autonomous_enabled: bool = True) -> None:
+        super().__init__(autonomous_enabled=autonomous_enabled)
         from google.cloud import firestore
 
         self.client = firestore.AsyncClient(project=project)
@@ -161,7 +175,7 @@ class FirestoreStore(StateStore):
     async def save(self, state: PatientState) -> None:
         patient_id = current_patient_id()
         state.profile.id = patient_id
-        _prepare_autonomous_state(state)
+        self._reconcile_if_enabled(state)
         state.updated_at = utc_now()
         await self._ref().set(state.model_dump(mode="json"))
         if await _flush_post_commit_intents(state):
