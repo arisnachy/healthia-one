@@ -1,0 +1,51 @@
+name: Harden HealthIA Explain TTS retries
+
+on:
+  push:
+    branches:
+      - feature/patient-education-video-20260813
+    paths:
+      - ".github/workflows/harden-healthia-explain-tts-retries.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patient-education-video-20260813
+      - name: Split TTS more finely and retry transient generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('healthia_one/education_video_google.py')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace(
+              'def _split_for_tts(text: str, max_bytes: int = 3600) -> list[str]:',
+              'def _split_for_tts(text: str, max_bytes: int = 1800) -> list[str]:',
+              1,
+          )
+          old = '''            receipt, outcome = await asyncio.to_thread(self.constellation.runtime.guarded_executor.execute, request)\n            if receipt.status != "completed" or outcome is None:\n                raise RuntimeError("Gemini Text-to-Speech did not produce an authorized narration")\n            encoded = str(outcome.data.get("audio_content_base64") or "")\n            if not encoded:\n                raise RuntimeError("Gemini Text-to-Speech returned no narration bytes")\n            wav_parts.append(base64.b64decode(encoded))\n'''
+          new = '''            encoded = ""\n            last_error: Exception | None = None\n            for attempt in range(3):\n                try:\n                    receipt, outcome = await asyncio.to_thread(self.constellation.runtime.guarded_executor.execute, request)\n                    if receipt.status == "completed" and outcome is not None:\n                        encoded = str(outcome.data.get("audio_content_base64") or "")\n                        if encoded:\n                            break\n                except Exception as exc:  # transport/runtime failures remain fail-closed after bounded retries\n                    last_error = exc\n                if attempt < 2:\n                    await asyncio.sleep(2 * (attempt + 1))\n            if not encoded:\n                if last_error is not None:\n                    raise RuntimeError("Gemini Text-to-Speech did not produce narration after bounded retries") from last_error\n                raise RuntimeError("Gemini Text-to-Speech did not produce an authorized narration after bounded retries")\n            wav_parts.append(base64.b64decode(encoded))\n'''
+          if old not in text:
+              raise SystemExit('expected TTS execution block not found')
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_education_video_core.py')
+          test_text = test.read_text(encoding='utf-8')
+          addition = '''\n\ndef test_healthia_explain_tts_uses_bounded_retries_and_smaller_chunks():\n    source = (ROOT / "healthia_one" / "education_video_google.py").read_text(encoding="utf-8")\n    assert "max_bytes: int = 1800" in source\n    assert "for attempt in range(3):" in source\n    assert "await asyncio.sleep(2 * (attempt + 1))" in source\n    assert "after bounded retries" in source\n'''
+          if 'test_healthia_explain_tts_uses_bounded_retries_and_smaller_chunks' not in test_text:
+              test.write_text(test_text + addition, encoding='utf-8')
+          PY
+          python -m py_compile healthia_one/education_video_google.py
+          git config user.name "healthia-recorder-bot"
+          git config user.email "healthia-recorder-bot@users.noreply.github.com"
+          git add healthia_one/education_video_google.py tests/test_education_video_core.py
+          git commit -m "Harden HealthIA Explain Gemini TTS retries"
+          git push origin HEAD:feature/patient-education-video-20260813
