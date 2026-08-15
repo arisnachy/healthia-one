@@ -4,12 +4,14 @@ import hashlib
 import os
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
+from urllib import parse
 
 from pydantic import BaseModel, Field
 
 from healthia_one.config import Settings
 from healthia_one.fcm_registration import FCMRegistrationStore, build_fcm_registration_store
 from healthia_one.google_clinical_cloud_connectors import FCMConnector
+from healthia_one.google_connector_runtime import ConnectorResult, GoogleConnectorError
 from healthia_one.google_constellation import GoogleAction
 from healthia_one.models import PatientState
 
@@ -84,6 +86,58 @@ def _proof_id(receipt_id: str) -> str:
     return "guardian:" + hashlib.sha256(receipt_id.encode("utf-8")).hexdigest()[:32]
 
 
+class GuardianFCMConnector(FCMConnector):
+    """FCM data-message variant aligned with the controlled Android bridge.
+
+    It sends no clinical copy. Android renders the neutral local notification and
+    acknowledges the stable proof id. This preserves the existing controlled-device
+    proof contract and lets the client suppress a repeated visible notification.
+    """
+
+    def execute(self, action: GoogleAction, payload: dict[str, Any], *, idempotency_key: str) -> ConnectorResult:
+        if action != GoogleAction.FCM_SEND_MISSION_NOTIFICATION:
+            raise GoogleConnectorError(f"Unsupported Guardian FCM action: {action}")
+        if not self.project_id:
+            raise GoogleConnectorError("GOOGLE_CLOUD_PROJECT is required for Guardian FCM")
+        token = str(payload.get("device_token") or "").strip()
+        mission_id = str(payload.get("mission_id") or "").strip()
+        proof_id = str(payload.get("proof_id") or "").strip()
+        event_type = str(payload.get("event_type") or "guardian_update").strip()[:80]
+        if not token or not mission_id or not proof_id:
+            raise GoogleConnectorError("Guardian FCM requires device token, mission id and proof id")
+        if len(proof_id) not in range(8, 129) or any(not (ch.isalnum() or ch in "._:-") for ch in proof_id):
+            raise GoogleConnectorError("Guardian FCM proof id is invalid")
+
+        body = {
+            "message": {
+                "token": token,
+                "data": {
+                    "kind": "healthia_update",
+                    "proof_id": proof_id,
+                    "mission_id": mission_id,
+                    "event_type": event_type,
+                    "open_view": "missions",
+                },
+                "android": {"priority": "HIGH"},
+            }
+        }
+        result = self.transport.call(
+            "POST",
+            f"https://fcm.googleapis.com/v1/projects/{parse.quote(self.project_id, safe='')}/messages:send",
+            headers=self._headers(fcm=True),
+            body=body,
+        )
+        name = str(result.get("name") or "")
+        if not name:
+            raise GoogleConnectorError("FCM provider did not return a message resource")
+        return ConnectorResult(
+            resource_id=name,
+            safe_summary="Sent one PHI-neutral Guardian data notification through FCM.",
+            data={"message_name": name, "proof_id": proof_id},
+            external_mutation=True,
+        )
+
+
 class GuardianPushDispatcher:
     """Deliver one PHI-neutral Guardian wake-up notification per active device.
 
@@ -105,7 +159,7 @@ class GuardianPushDispatcher:
         self.settings = settings
         self.registrations = registrations or build_fcm_registration_store(settings)
         self.receipts = receipts or build_guardian_delivery_store(settings)
-        self.connector = connector or FCMConnector(project_id=os.getenv("GOOGLE_CLOUD_PROJECT") or "")
+        self.connector = connector or GuardianFCMConnector(project_id=os.getenv("GOOGLE_CLOUD_PROJECT") or "")
 
     def dispatch(self, state: PatientState, *, event_id: str, mission_id: str) -> dict[str, Any]:
         signals = set(state.consent.signal_types)
