@@ -11,6 +11,22 @@ from healthia_one.models import PatientState, utc_now
 PATIENT_STATE_COLLECTION = "healthia_one_patients"
 
 
+async def _flush_post_commit_intents(state: PatientState) -> bool:
+    """Flush staged Autopilot work only after PatientState is durable.
+
+    The import is intentionally lazy so normal state operations do not initialize
+    the Opportunity runtime unless a pending intent actually exists.
+    """
+    from healthia_one.autopilot_event_intents import flush_event_intents, pending_event_intents
+
+    if not pending_event_intents(state):
+        return False
+    from healthia_one.opportunity_integration import outbox
+
+    report = await asyncio.to_thread(flush_event_intents, state, outbox())
+    return bool(report.get("state_changed"))
+
+
 class StateStore(ABC):
     @abstractmethod
     async def load(self) -> PatientState:
@@ -39,7 +55,13 @@ class MemoryStore(StateStore):
         async with self._lock:
             state.profile.id = patient_id
             state.updated_at = utc_now()
+            # Commit the mission/context/intents first.
             self._states[patient_id] = state.model_copy(deep=True)
+            # Then expose the event to the outbox. If the intent status changes,
+            # persist that bookkeeping as a second commit.
+            if await _flush_post_commit_intents(state):
+                state.updated_at = utc_now()
+                self._states[patient_id] = state.model_copy(deep=True)
 
 
 class JsonStore(StateStore):
@@ -68,6 +90,12 @@ class JsonStore(StateStore):
                 raise ValueError("Stored patient identity does not match authenticated principal")
             return state
 
+    async def _write(self, path: Path, state: PatientState) -> None:
+        payload = state.model_dump_json(indent=2)
+        temp = path.with_suffix(path.suffix + ".tmp")
+        await asyncio.to_thread(temp.write_text, payload, "utf-8")
+        await asyncio.to_thread(temp.replace, path)
+
     async def save(self, state: PatientState) -> None:
         async with self._lock:
             path = self._patient_path()
@@ -75,10 +103,10 @@ class JsonStore(StateStore):
             state.profile.id = patient_id
             state.updated_at = utc_now()
             path.parent.mkdir(parents=True, exist_ok=True)
-            payload = state.model_dump_json(indent=2)
-            temp = path.with_suffix(path.suffix + ".tmp")
-            await asyncio.to_thread(temp.write_text, payload, "utf-8")
-            await asyncio.to_thread(temp.replace, path)
+            await self._write(path, state)
+            if await _flush_post_commit_intents(state):
+                state.updated_at = utc_now()
+                await self._write(path, state)
 
 
 class FirestoreStore(StateStore):
@@ -107,4 +135,8 @@ class FirestoreStore(StateStore):
         patient_id = current_patient_id()
         state.profile.id = patient_id
         state.updated_at = utc_now()
+        # Persist canonical patient state before Eventarc can observe the event.
         await self._ref().set(state.model_dump(mode="json"))
+        if await _flush_post_commit_intents(state):
+            state.updated_at = utc_now()
+            await self._ref().set(state.model_dump(mode="json"))
