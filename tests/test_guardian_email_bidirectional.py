@@ -9,11 +9,7 @@ import pytest
 from healthia_one.bp_followup_guardian import CONSENT_SIGNAL as BP_CONSENT, MISSION_TYPE as BP_MISSION_TYPE
 from healthia_one.config import Settings
 from healthia_one.gmail_composite_bridge import GmailCompositeEventBridge
-from healthia_one.gmail_mission_events import (
-    GmailMessageChange,
-    GmailWatchState,
-    MemoryGmailWatchStore,
-)
+from healthia_one.gmail_mission_events import GmailMessageChange, GmailWatchState, MemoryGmailWatchStore
 from healthia_one.google_constellation import GoogleAction, GoogleService
 from healthia_one.google_constellation_runtime import build_google_constellation_service
 from healthia_one.google_connector_runtime import ConnectorResult
@@ -27,6 +23,7 @@ from healthia_one.guardian_email_reply import (
     MemoryGuardianEmailThreadStore,
     save_guardian_email_thread_link,
 )
+from healthia_one.guardian_email_watch import GuardianReplyWatchStatus
 from healthia_one.models import HealthMission, MissionStatus, PatientConsent, PatientState, RiskLevel, VitalRecord
 from healthia_one.service import HealthIAService
 from healthia_one.store import MemoryStore
@@ -100,7 +97,6 @@ async def _open_bp_mission() -> tuple[HealthIAService, MemoryGuardianEmailThread
 async def test_exact_patient_reply_records_bp_through_canonical_service_and_closes_mission() -> None:
     service, threads, mission_id = await _open_bp_mission()
     handler = GuardianEmailReplyHandler(service=service, thread_store=threads)
-
     outcome = await handler.handle(
         PATIENT_ID,
         _gmail_thread(_gmail_message("m1", "BP 128/80")),
@@ -108,7 +104,6 @@ async def test_exact_patient_reply_records_bp_through_canonical_service_and_clos
         history_id="101",
         thread_id="thread_guardian_bp",
     )
-
     assert outcome is not None
     assert outcome.action == "blood_pressure_recorded_from_email"
     final = await service.snapshot()
@@ -126,7 +121,6 @@ async def test_exact_patient_reply_records_bp_through_canonical_service_and_clos
 async def test_priority_bp_email_reply_uses_existing_safety_handoff_and_later_safe_reply_cannot_release_it() -> None:
     service, threads, mission_id = await _open_bp_mission()
     handler = GuardianEmailReplyHandler(service=service, thread_store=threads)
-
     first = await handler.handle(
         PATIENT_ID,
         _gmail_thread(_gmail_message("m_high", "BP 170/105")),
@@ -139,13 +133,9 @@ async def test_priority_bp_email_reply_uses_existing_safety_handoff_and_later_sa
     mission = next(item for item in after_high.missions if item.id == mission_id)
     assert mission.status == MissionStatus.WAITING_PROFESSIONAL
     assert mission.risk_level == RiskLevel.PRIORITY
-
     second = await handler.handle(
         PATIENT_ID,
-        _gmail_thread(
-            _gmail_message("m_high", "BP 170/105"),
-            _gmail_message("m_safe", "BP 128/80"),
-        ),
+        _gmail_thread(_gmail_message("m_high", "BP 170/105"), _gmail_message("m_safe", "BP 128/80")),
         message_id="m_safe",
         history_id="102",
         thread_id="thread_guardian_bp",
@@ -163,23 +153,9 @@ async def test_redelivered_same_gmail_message_is_exactly_once_for_clinical_data(
     service, threads, _ = await _open_bp_mission()
     handler = GuardianEmailReplyHandler(service=service, thread_store=threads)
     thread = _gmail_thread(_gmail_message("m_once", "BP 128/80"))
-
-    first = await handler.handle(
-        PATIENT_ID,
-        thread,
-        message_id="m_once",
-        history_id="101",
-        thread_id="thread_guardian_bp",
-    )
+    first = await handler.handle(PATIENT_ID, thread, message_id="m_once", history_id="101", thread_id="thread_guardian_bp")
     count_after_first = len((await service.snapshot()).vitals)
-    second = await handler.handle(
-        PATIENT_ID,
-        thread,
-        message_id="m_once",
-        history_id="101",
-        thread_id="thread_guardian_bp",
-    )
-
+    second = await handler.handle(PATIENT_ID, thread, message_id="m_once", history_id="101", thread_id="thread_guardian_bp")
     assert first is not None
     assert second is None
     assert len((await service.snapshot()).vitals) == count_after_first
@@ -190,7 +166,6 @@ async def test_wrong_sender_unlinked_thread_or_missing_reply_consent_cannot_crea
     service, threads, mission_id = await _open_bp_mission()
     handler = GuardianEmailReplyHandler(service=service, thread_store=threads)
     before = len((await service.snapshot()).vitals)
-
     wrong_sender = await handler.handle(
         PATIENT_ID,
         _gmail_thread(_gmail_message("m_wrong", "BP 128/80", sender="other@example.com")),
@@ -199,7 +174,6 @@ async def test_wrong_sender_unlinked_thread_or_missing_reply_consent_cannot_crea
         thread_id="thread_guardian_bp",
     )
     assert wrong_sender is None
-
     unlinked = await handler.handle(
         PATIENT_ID,
         {"id": "other_thread", "messages": [_gmail_message("m_unlinked", "BP 128/80")]},
@@ -208,7 +182,6 @@ async def test_wrong_sender_unlinked_thread_or_missing_reply_consent_cannot_crea
         thread_id="other_thread",
     )
     assert unlinked is None
-
     state = await service.snapshot()
     state.consent.signal_types = [item for item in state.consent.signal_types if item != GUARDIAN_EMAIL_REPLY_CONSENT]
     await service.store.save(state)
@@ -230,20 +203,13 @@ async def test_quoted_example_or_free_text_is_captured_but_never_inferred_as_bp(
     service, threads, mission_id = await _open_bp_mission()
     handler = GuardianEmailReplyHandler(service=service, thread_store=threads)
     before = len((await service.snapshot()).vitals)
-
     outcome = await handler.handle(
         PATIENT_ID,
-        _gmail_thread(
-            _gmail_message(
-                "m_quote",
-                "Thanks, I will do it later. On the previous message HealthIA said: BP 128/80",
-            )
-        ),
+        _gmail_thread(_gmail_message("m_quote", "Thanks, I will do it later. On the previous message HealthIA said: BP 128/80")),
         message_id="m_quote",
         history_id="101",
         thread_id="thread_guardian_bp",
     )
-
     assert outcome is not None
     assert outcome.action == "reply_captured_no_clinical_inference"
     final = await service.snapshot()
@@ -265,7 +231,6 @@ async def test_completed_mission_rejects_stale_thread_measurement() -> None:
         thread_id="thread_guardian_bp",
     )
     before = len((await service.snapshot()).vitals)
-
     stale = await handler.handle(
         PATIENT_ID,
         _gmail_thread(_gmail_message("m_stale", "BP 126/78")),
@@ -273,7 +238,6 @@ async def test_completed_mission_rejects_stale_thread_measurement() -> None:
         history_id="102",
         thread_id="thread_guardian_bp",
     )
-
     assert stale is None
     final = await service.snapshot()
     assert len(final.vitals) == before
@@ -283,35 +247,17 @@ async def test_completed_mission_rejects_stale_thread_measurement() -> None:
 def test_guardian_email_reply_permission_is_nested_under_email_and_auto_send() -> None:
     replies_only = PatientConsent(signal_types=[GUARDIAN_EMAIL_REPLY_CONSENT])
     assert GUARDIAN_EMAIL_REPLY_CONSENT not in replies_only.signal_types
-
     base_and_reply = PatientConsent(signal_types=["guardian_email", GUARDIAN_EMAIL_REPLY_CONSENT])
     assert base_and_reply.signal_types == ["guardian_email"]
-
-    fully_authorized = PatientConsent(
-        signal_types=["guardian_email", "guardian_email_auto_send", GUARDIAN_EMAIL_REPLY_CONSENT]
-    )
+    fully_authorized = PatientConsent(signal_types=["guardian_email", "guardian_email_auto_send", GUARDIAN_EMAIL_REPLY_CONSENT])
     assert GUARDIAN_EMAIL_REPLY_CONSENT in fully_authorized.signal_types
 
 
 def test_thread_binding_cannot_be_reassigned_to_another_mission() -> None:
     store = MemoryGuardianEmailThreadStore()
-    save_guardian_email_thread_link(
-        store,
-        patient_id=PATIENT_ID,
-        mission_id="mission_1",
-        thread_id="thread_1",
-        provider_message_id="sent_1",
-        event_id="event_1",
-    )
+    save_guardian_email_thread_link(store, patient_id=PATIENT_ID, mission_id="mission_1", thread_id="thread_1", provider_message_id="sent_1", event_id="event_1")
     with pytest.raises(PermissionError):
-        save_guardian_email_thread_link(
-            store,
-            patient_id=PATIENT_ID,
-            mission_id="mission_2",
-            thread_id="thread_1",
-            provider_message_id="sent_2",
-            event_id="event_2",
-        )
+        save_guardian_email_thread_link(store, patient_id=PATIENT_ID, mission_id="mission_2", thread_id="thread_1", provider_message_id="sent_2", event_id="event_2")
 
 
 class _Reader:
@@ -368,32 +314,11 @@ def _envelope(history: str = "101") -> dict:
 async def test_composite_bridge_advances_one_shared_cursor_after_guardian_success() -> None:
     watches = MemoryGmailWatchStore()
     watches.save(GmailWatchState(patient_id=PATIENT_ID, email_address=PATIENT_EMAIL, history_id="100"))
-    outcome = GuardianEmailReplyOutcome(
-        id="mission_bp",
-        mission_id="mission_bp",
-        thread_id="thread_guardian_bp",
-        message_id="m1",
-        action="blood_pressure_recorded_from_email",
-        mission_status="completed",
-        evidence_id="vital_1",
-    )
+    outcome = GuardianEmailReplyOutcome(id="mission_bp", mission_id="mission_bp", thread_id="thread_guardian_bp", message_id="m1", action="blood_pressure_recorded_from_email", mission_status="completed", evidence_id="vital_1")
     guardian = _GuardianHandler(outcome=outcome)
-    reader = _Reader(
-        change=GmailMessageChange(message_id="m1", thread_id="thread_guardian_bp", history_id="101"),
-        latest="103",
-        thread=_gmail_thread(_gmail_message("m1", "BP 128/80")),
-    )
-    bridge = GmailCompositeEventBridge(
-        watch_store=watches,
-        mission_resolver=_Resolver(None),
-        coordinator=_Coordinator(),
-        history_reader_factory=lambda patient_id: reader,
-        interpreter=_Interpreter(),
-        guardian_reply_handler=guardian,
-    )
-
+    reader = _Reader(change=GmailMessageChange(message_id="m1", thread_id="thread_guardian_bp", history_id="101"), latest="103", thread=_gmail_thread(_gmail_message("m1", "BP 128/80")))
+    bridge = GmailCompositeEventBridge(watch_store=watches, mission_resolver=_Resolver(None), coordinator=_Coordinator(), history_reader_factory=lambda patient_id: reader, interpreter=_Interpreter(), guardian_reply_handler=guardian)
     resumed = await bridge.process(PATIENT_ID, _envelope("102"))
-
     assert resumed == [outcome]
     assert guardian.calls == 1
     assert watches.load(PATIENT_ID).history_id == "103"
@@ -404,20 +329,8 @@ async def test_composite_bridge_failure_keeps_old_cursor_for_pubsub_retry() -> N
     watches = MemoryGmailWatchStore()
     watches.save(GmailWatchState(patient_id=PATIENT_ID, email_address=PATIENT_EMAIL, history_id="100"))
     guardian = _GuardianHandler(error=RuntimeError("synthetic guardian failure"))
-    reader = _Reader(
-        change=GmailMessageChange(message_id="m1", thread_id="thread_guardian_bp", history_id="101"),
-        latest="105",
-        thread=_gmail_thread(_gmail_message("m1", "BP 128/80")),
-    )
-    bridge = GmailCompositeEventBridge(
-        watch_store=watches,
-        mission_resolver=_Resolver(None),
-        coordinator=_Coordinator(),
-        history_reader_factory=lambda patient_id: reader,
-        interpreter=_Interpreter(),
-        guardian_reply_handler=guardian,
-    )
-
+    reader = _Reader(change=GmailMessageChange(message_id="m1", thread_id="thread_guardian_bp", history_id="101"), latest="105", thread=_gmail_thread(_gmail_message("m1", "BP 128/80")))
+    bridge = GmailCompositeEventBridge(watch_store=watches, mission_resolver=_Resolver(None), coordinator=_Coordinator(), history_reader_factory=lambda patient_id: reader, interpreter=_Interpreter(), guardian_reply_handler=guardian)
     with pytest.raises(RuntimeError, match="synthetic guardian failure"):
         await bridge.process(PATIENT_ID, _envelope("105"))
     assert watches.load(PATIENT_ID).history_id == "100"
@@ -428,9 +341,11 @@ class _ReplyableGmailConnector:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.payloads = []
 
     def execute(self, action, payload, *, idempotency_key):
         self.calls += 1
+        self.payloads.append(dict(payload))
         assert action == GoogleAction.GMAIL_SEND
         return ConnectorResult(
             resource_id="gmail_message_1",
@@ -442,33 +357,20 @@ class _ReplyableGmailConnector:
 
 
 def _bp_due_assessment() -> GuardianAssessment:
-    return GuardianAssessment(
-        observation_id="bp_old",
-        metric="blood_pressure_followup",
-        classification="bp_followup_due",
-        risk_level=RiskLevel.WATCH,
-        summary="A blood-pressure follow-up measurement is due.",
-        notify_patient=True,
-    )
+    return GuardianAssessment(observation_id="bp_old", metric="blood_pressure_followup", classification="bp_followup_due", risk_level=RiskLevel.WATCH, summary="A blood-pressure follow-up measurement is due.", notify_patient=True)
 
 
 def _email_dispatch_state() -> PatientState:
     state = _authorized_bp_state()
-    state.missions = [
-        HealthMission(
-            id="mission_guardian_email",
-            patient_id=PATIENT_ID,
-            title="Capture blood pressure",
-            mission_type=BP_MISSION_TYPE,
-            status=MissionStatus.WAITING_PATIENT,
-            risk_level=RiskLevel.WATCH,
-            next_action="Capture a new blood-pressure measurement.",
-        )
-    ]
+    state.missions = [HealthMission(id="mission_guardian_email", patient_id=PATIENT_ID, title="Capture blood pressure", mission_type=BP_MISSION_TYPE, status=MissionStatus.WAITING_PATIENT, risk_level=RiskLevel.WATCH, next_action="Capture a new blood-pressure measurement.")]
     return state
 
 
-def test_completed_gmail_receipt_can_rebuild_reply_thread_link_without_resend() -> None:
+def _watch_ready(settings, constellation, state) -> GuardianReplyWatchStatus:
+    return GuardianReplyWatchStatus(ready=True, status="unchanged", mailbox="healthia-connected@example.com", history_id="100", expiration_ms=9999999999999)
+
+
+def _reply_dispatch_fixture(*, watch_ready: bool):
     settings = Settings(store_backend="memory", data_path=".healthia-one/test-wave14-email.json")
     constellation = build_google_constellation_service(settings)
     connector = _ReplyableGmailConnector()
@@ -482,40 +384,37 @@ def test_completed_gmail_receipt_can_rebuild_reply_thread_link_without_resend() 
             secret_version_resource="projects/test/secrets/oauth/versions/1",
         )
     )
-    first_store = MemoryGuardianEmailThreadStore()
-    first_dispatcher = GuardianEmailDispatcher(
-        settings,
-        constellation=constellation,
-        thread_store=first_store,
-    )
-    state = _email_dispatch_state()
+    kwargs = {"reply_watch_ensurer": _watch_ready} if watch_ready else {}
+    return settings, constellation, connector, kwargs
 
-    first = first_dispatcher.dispatch(
-        state,
-        _bp_due_assessment(),
-        event_id="event_bp_email_same",
-        mission_id="mission_guardian_email",
-    )
+
+def test_reply_instruction_is_not_advertised_when_operational_watch_is_unavailable() -> None:
+    settings, constellation, connector, kwargs = _reply_dispatch_fixture(watch_ready=False)
+    dispatcher = GuardianEmailDispatcher(settings, constellation=constellation, thread_store=MemoryGuardianEmailThreadStore(), **kwargs)
+    result = dispatcher.dispatch(_email_dispatch_state(), _bp_due_assessment(), event_id="event_one_way", mission_id="mission_guardian_email")
+    assert result["status"] == "sent"
+    assert result["reply_requested"] is True
+    assert result["reply_opt_in"] is False
+    assert result["reply_thread_linked"] is False
+    assert result["reply_watch_status"] == "gmail_read_scope_missing"
+    assert "reply in this same thread" not in connector.payloads[0]["body"]
+
+
+def test_completed_gmail_receipt_can_rebuild_reply_thread_link_without_resend() -> None:
+    settings, constellation, connector, kwargs = _reply_dispatch_fixture(watch_ready=True)
+    first_store = MemoryGuardianEmailThreadStore()
+    first_dispatcher = GuardianEmailDispatcher(settings, constellation=constellation, thread_store=first_store, **kwargs)
+    state = _email_dispatch_state()
+    first = first_dispatcher.dispatch(state, _bp_due_assessment(), event_id="event_bp_email_same", mission_id="mission_guardian_email")
     assert first["status"] == "sent"
+    assert first["reply_opt_in"] is True
     assert first["reply_thread_linked"] is True
+    assert "reply in this same thread" in connector.payloads[0]["body"]
     assert connector.calls == 1
 
-    # Simulate a process restart/crash where the action receipt is durable but the
-    # thread-link write must be reconstructed. A new empty store represents that
-    # missing side effect; the same event must not send Gmail again.
     recovered_store = MemoryGuardianEmailThreadStore()
-    second_dispatcher = GuardianEmailDispatcher(
-        settings,
-        constellation=constellation,
-        thread_store=recovered_store,
-    )
-    second = second_dispatcher.dispatch(
-        state,
-        _bp_due_assessment(),
-        event_id="event_bp_email_same",
-        mission_id="mission_guardian_email",
-    )
-
+    second_dispatcher = GuardianEmailDispatcher(settings, constellation=constellation, thread_store=recovered_store, **kwargs)
+    second = second_dispatcher.dispatch(state, _bp_due_assessment(), event_id="event_bp_email_same", mission_id="mission_guardian_email")
     assert second["status"] == "recovered_existing"
     assert second["reply_thread_linked"] is True
     assert second["gmail_thread_id"] == "thread_guardian_bp"
