@@ -17,6 +17,8 @@ from healthia_one.config import Settings, settings
 from healthia_one.guardian_context import GuardianAssessment
 from healthia_one.guardian_delivery import GuardianPushDispatcher
 from healthia_one.guardian_email_delivery import GuardianEmailDispatcher
+from healthia_one.medication_followup_guardian import MISSION_TYPE as MEDICATION_FOLLOWUP_MISSION_TYPE
+from healthia_one.medication_followup_guardian import medication_followup_due
 from healthia_one.models import PatientState
 from healthia_one.opportunity_integration import autopilot, outbox, radar_permissions
 from healthia_one.opportunity_permissions import RadarPermissionStore
@@ -68,7 +70,11 @@ def _is_guardian_event(record) -> bool:
 def care_continuity_due(state: PatientState, *, runtime_enabled: bool = True) -> bool:
     if not runtime_enabled:
         return False
-    return appointment_guardian_due(state) or bp_followup_due(state)
+    return (
+        appointment_guardian_due(state)
+        or bp_followup_due(state)
+        or medication_followup_due(state)
+    )
 
 
 async def load_patient_state(settings_value: Settings, patient_id: str) -> PatientState:
@@ -105,12 +111,18 @@ async def reconcile_care_patient(settings_value: Settings, patient_id: str) -> d
             for mission in persisted.missions
             if mission.mission_type == "bp_followup_guardian_measurement"
         ]
+        medication_missions = [
+            mission
+            for mission in persisted.missions
+            if mission.mission_type.startswith(f"{MEDICATION_FOLLOWUP_MISSION_TYPE}:")
+        ]
         return {
             "patient_id": patient_id,
             "status": "reconciled",
             "changed": before_missions != after_missions,
             "appointment_missions": len(appointment_missions),
             "bp_followup_missions": len(bp_missions),
+            "medication_followup_missions": len(medication_missions),
         }
 
 
@@ -231,7 +243,10 @@ def create_worker_app(
             "iam_boundary_required": settings_value.env != "local",
             "scientific_schedule": "weekly_opt_in",
             "resource_schedule": "monthly_opt_in",
+            # Keep the established field stable for deployed probes; medication
+            # follow-up is declared separately below and uses the same daily path.
             "care_continuity_schedule": "daily_appointment_and_bp_followup",
+            "medication_followup_schedule": "daily_explicit_opt_in_same_care_scheduler",
             "guardian_eventarc": True,
             "guardian_push": "explicit_opt_in_only",
             "guardian_email": "standing_patient_opt_in_plus_connected_gmail",
@@ -315,8 +330,8 @@ def create_worker_app(
             "network_calls_for_clinical_reasoning": 0,
             "reports": reports,
             "note": (
-                "Daily care reconciliation covers consented appointment preparation and explicitly opted-in blood-pressure follow-up. "
-                "Clinical reasoning remains deterministic and zero-model in this scheduler path."
+                "Daily care reconciliation covers consented appointment preparation, explicitly opted-in blood-pressure follow-up, "
+                "and explicitly opted-in medication check-in continuity. Clinical reasoning remains deterministic and zero-model in this scheduler path."
             ),
         }
 
