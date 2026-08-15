@@ -12,7 +12,9 @@ from healthia_one.autopilot_events import EventOutboxStore
 from healthia_one.autopilot_runtime import OpportunityAutopilot
 from healthia_one.autopilot_scheduler import enqueue_scheduled_refreshes, load_firestore_patient_states
 from healthia_one.config import Settings, settings
+from healthia_one.guardian_context import GuardianAssessment
 from healthia_one.guardian_delivery import GuardianPushDispatcher
+from healthia_one.guardian_email_delivery import GuardianEmailDispatcher
 from healthia_one.models import PatientState
 from healthia_one.opportunity_integration import autopilot, outbox, radar_permissions
 from healthia_one.opportunity_permissions import RadarPermissionStore
@@ -78,6 +80,7 @@ async def process_outbox_event(
     state_loader: Callable[[str], Awaitable[PatientState]],
     permission_store: RadarPermissionStore | None = None,
     guardian_dispatcher: GuardianPushDispatcher | None = None,
+    guardian_email_dispatcher: GuardianEmailDispatcher | None = None,
 ) -> dict:
     record = outbox_store.get(event_id)
     if record is None:
@@ -114,11 +117,13 @@ async def process_outbox_event(
         if _is_guardian_event(record):
             payload = dict(record.event.payload or {})
             mission_id = str(payload.get("mission_id") or "")
-            if guardian_dispatcher is not None and bool(payload.get("notification_requested")):
+            notification_requested = bool(payload.get("notification_requested"))
+
+            if guardian_dispatcher is not None and notification_requested:
                 # External delivery happens after durable Autopilot processing. If
-                # FCM fails, Eventarc retries the outbox event. The Autopilot claim
-                # then returns duplicate-completed while Guardian reuses the same
-                # delivery/proof id, preventing a second visible Android alert.
+                # FCM fails, Eventarc retries the outbox event. The FCM dispatcher
+                # reuses the same delivery/proof id, preventing duplicate visible
+                # Android alerts.
                 guardian_delivery = await asyncio.to_thread(
                     guardian_dispatcher.dispatch,
                     state,
@@ -131,6 +136,24 @@ async def process_outbox_event(
                     "sent": 0,
                     "recovered": 0,
                 }
+
+            # Email is a second patient-contact channel, not a replacement for the
+            # in-app/push safety path. It is allowed only when the event contains a
+            # valid Guardian assessment and the patient's standing email + auto-send
+            # consent remains active at delivery time.
+            if guardian_email_dispatcher is not None and notification_requested:
+                assessment_raw = payload.get("guardian_assessment")
+                if not isinstance(assessment_raw, dict):
+                    raise ValueError("Guardian event is missing its durable assessment")
+                assessment = GuardianAssessment.model_validate(assessment_raw)
+                email_delivery = await asyncio.to_thread(
+                    guardian_email_dispatcher.dispatch,
+                    state,
+                    assessment,
+                    event_id=record.event.id,
+                    mission_id=mission_id,
+                )
+                guardian_delivery = {**guardian_delivery, "email": email_delivery}
 
         outbox_store.mark_processed(event_id)
         return {
@@ -156,12 +179,14 @@ def create_worker_app(
     engine: OpportunityAutopilot | None = None,
     permission_store: RadarPermissionStore | None = None,
     guardian_dispatcher: GuardianPushDispatcher | None = None,
+    guardian_email_dispatcher: GuardianEmailDispatcher | None = None,
 ) -> FastAPI:
     app = FastAPI(title="HealthIA Opportunity Autopilot Worker", docs_url=None, redoc_url=None)
     worker_outbox = outbox_store or outbox()
     worker_engine = engine or autopilot()
     worker_permissions = permission_store or radar_permissions()
     worker_guardian_dispatcher = guardian_dispatcher or GuardianPushDispatcher(settings_value)
+    worker_guardian_email_dispatcher = guardian_email_dispatcher or GuardianEmailDispatcher(settings_value)
 
     async def state_loader(patient_id: str) -> PatientState:
         return await load_patient_state(settings_value, patient_id)
@@ -178,6 +203,7 @@ def create_worker_app(
             "resource_schedule": "monthly_opt_in",
             "guardian_eventarc": True,
             "guardian_push": "explicit_opt_in_only",
+            "guardian_email": "standing_patient_opt_in_plus_connected_gmail",
         }
 
     @app.post("/events/firestore")
@@ -199,6 +225,7 @@ def create_worker_app(
                 state_loader=state_loader,
                 permission_store=worker_permissions,
                 guardian_dispatcher=worker_guardian_dispatcher,
+                guardian_email_dispatcher=worker_guardian_email_dispatcher,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Autopilot outbox event not found") from exc
