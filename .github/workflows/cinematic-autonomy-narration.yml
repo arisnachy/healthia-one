@@ -1,0 +1,97 @@
+name: Judge-first cinematic narration
+
+on:
+  push:
+    branches: [kira/wave14-autonomous-live-recorder]
+    paths:
+      - ".github/workflows/cinematic-autonomy-narration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Synthesize judge-first premium Studio narration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/judge-narration
+          cat > /tmp/narration.txt <<'TEXT'
+          Health information should not reset every time a conversation ends.
+
+          HealthIA One is a patient-owned continuity agent built to carry unfinished health work forward.
+
+          It starts with evidence, not invention. When a patient uploads a clinical result, HealthIA preserves the original source before Gemini structures only what the evidence supports. The result becomes part of a longitudinal record, not a disposable chat answer.
+
+          HealthIA turns needs into durable missions. When the next step requires a human decision, autonomy stops. The patient gives consent, and the same mission resumes. When an exact choice is needed, deterministic logic replaces model guessing.
+
+          Now watch the part that matters most.
+
+          The conversation is already over. No one sends a new prompt.
+
+          In this live capture, Guardian detects that Ana's blood-pressure follow-up is overdue and creates a durable mission on its own. The browser is not touched.
+
+          HealthIA reaches outside the chat. A real Gmail request is sent. Ana replies: one twenty-eight over eighty.
+
+          Gmail Pub/Sub wakes HealthIA automatically. That patient-provided reading is written into the canonical clinical record, and the same mission closes exactly once.
+
+          No new prompt. No manual processing button. No fabricated tool result. The agent identified a need, acted, waited, understood an external event, updated durable state, and completed the goal.
+
+          The proof ran on Google Cloud. Cloud Run hosted the private HealthIA surface and autonomous services. Firestore held patient and mission state. Eventarc carried durable events. Pub/Sub delivered the Gmail wake-up. The successful run verified a real Gmail thread, patient-email provenance, and the same mission completed.
+
+          This is the design principle behind HealthIA One: AI reasoning when interpretation matters, deterministic logic when exactness matters, and human consent when the decision belongs to the patient.
+
+          HealthIA is not an autonomous doctor. It does not diagnose, prescribe, or change treatment on its own. It is an agent for continuity: preserving evidence, carrying goals across time, acting where it is authorized, and stopping where human authority begins.
+
+          HealthIA One. Your health never starts over.
+          TEXT
+          python - <<'PY'
+          import json
+          text=open('/tmp/narration.txt').read().strip()
+          req={
+            'input': {'text': text},
+            'voice': {'languageCode':'en-US','name':'en-US-Studio-Q'},
+            'audioConfig': {'audioEncoding':'LINEAR16','speakingRate':0.98,'volumeGainDb':1.0,'pitch':-1.0}
+          }
+          open('/tmp/request.json','w').write(json.dumps(req))
+          PY
+          token="$(gcloud auth print-access-token)"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            --data-binary @/tmp/request.json \
+            "https://texttospeech.googleapis.com/v1/text:synthesize" > /tmp/response.json
+          jq -e '.audioContent and (.audioContent | length > 1000)' /tmp/response.json >/dev/null
+          jq -r '.audioContent' /tmp/response.json | base64 -d > dist/judge-narration/HealthIA_JUDGE_FIRST_STUDIO_Q.wav
+          sha256sum dist/judge-narration/HealthIA_JUDGE_FIRST_STUDIO_Q.wav > dist/judge-narration/voice.sha256
+          python - <<'PY'
+          import wave, json, os
+          p='dist/judge-narration/HealthIA_JUDGE_FIRST_STUDIO_Q.wav'
+          with wave.open(p,'rb') as w:
+              d={'duration': w.getnframes()/w.getframerate(), 'sample_rate': w.getframerate(), 'channels': w.getnchannels(), 'size': os.path.getsize(p)}
+          open('dist/judge-narration/voice-probe.json','w').write(json.dumps(d, indent=2))
+          print(d)
+          PY
+
+      - name: Upload judge-first narration
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-judge-first-narration
+          path: dist/judge-narration/
+          if-no-files-found: error
+          retention-days: 7
