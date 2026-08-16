@@ -87,10 +87,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # This service contains only synthetic/read-only evidence.  Ingress is
+          # explicit so an older private service configuration can never leave a
+          # seemingly successful deployment that returns infrastructure 404s.
           gcloud run deploy "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --image "${{ steps.build.outputs.image }}" \
+            --ingress all \
             --no-invoker-iam-check \
             --min 0 \
             --max 1 \
@@ -102,19 +106,21 @@ jobs:
             --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${GITHUB_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=pending-exact-head-proof" \
             --quiet
 
-          revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/judge-service.json
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/judge-service.json)"
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
           canonical="https://${SERVICE}-${project_number}.${REGION}.run.app"
           test -n "$revision" && test -n "$project_number"
 
-          # The load-bearing proof of public access is the anonymous request itself,
-          # not a metadata annotation whose representation varies across Run APIs.
+          # Fail closed unless the *anonymous external request* reaches the exact
+          # Judge Mode app.  A revision merely becoming Ready is not sufficient.
           url=''
           for attempt in $(seq 1 30); do
             code="$(curl -sS --max-time 10 -o /tmp/health.json -w '%{http_code}' "$canonical/healthz" || true)"
             mode="$(jq -r '.mode // empty' /tmp/health.json 2>/dev/null || true)"
-            echo "Judge Mode anonymous probe attempt=${attempt} code=${code} mode=${mode}"
-            if [[ "$code" == "200" && "$mode" == "judge_read_only_synthetic" ]]; then
+            source="$(jq -r '.source_sha // empty' /tmp/health.json 2>/dev/null || true)"
+            echo "Judge Mode anonymous probe attempt=${attempt} code=${code} mode=${mode} source=${source}"
+            if [[ "$code" == "200" && "$mode" == "judge_read_only_synthetic" && "$source" == "$GITHUB_SHA" ]]; then
               url="$canonical"
               break
             fi
@@ -160,6 +166,7 @@ jobs:
           - Cloud Build id: ${{ steps.build.outputs.build_id }}
           - Image digest: ${{ steps.build.outputs.digest }}
           - Cloud Run revision: ${{ steps.deploy.outputs.revision }}
+          - Ingress: all (Judge Mode only)
           - Anonymous GET /healthz: PASS
           - Mutation endpoints: NONE / POST checks return 405
           - Secrets embedded in surface: NONE
