@@ -20,7 +20,12 @@ def _prepare_autonomous_state(state: PatientState) -> bool:
 
 
 async def _flush_post_commit_intents(state: PatientState) -> bool:
-    """Flush staged work only after canonical PatientState is durable."""
+    """Flush already-staged work only after canonical PatientState is durable.
+
+    The runtime autonomy switch controls creation of new autonomous work. It must
+    not discard a durable intent that was already committed before the switch
+    changed or that was explicitly staged by another safe workflow.
+    """
     from healthia_one.autopilot_event_intents import flush_event_intents, pending_event_intents
 
     if not pending_event_intents(state):
@@ -78,7 +83,7 @@ class MemoryStore(StateStore):
             self._reconcile_if_enabled(state)
             state.updated_at = utc_now()
             self._states[patient_id] = state.model_copy(deep=True)
-            if self.autonomous_enabled and await _flush_post_commit_intents(state):
+            if await _flush_post_commit_intents(state):
                 state.updated_at = utc_now()
                 self._states[patient_id] = state.model_copy(deep=True)
 
@@ -125,7 +130,7 @@ class JsonStore(StateStore):
             state.updated_at = utc_now()
             path.parent.mkdir(parents=True, exist_ok=True)
             await self._write(path, state)
-            if self.autonomous_enabled and await _flush_post_commit_intents(state):
+            if await _flush_post_commit_intents(state):
                 state.updated_at = utc_now()
                 await self._write(path, state)
 
@@ -159,6 +164,6 @@ class FirestoreStore(StateStore):
         self._reconcile_if_enabled(state)
         state.updated_at = utc_now()
         await self._ref().set(state.model_dump(mode="json"))
-        if self.autonomous_enabled and await _flush_post_commit_intents(state):
+        if await _flush_post_commit_intents(state):
             state.updated_at = utc_now()
             await self._ref().set(state.model_dump(mode="json"))
