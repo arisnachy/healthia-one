@@ -15,10 +15,12 @@ on:
       - "tests/test_google_mission_location_consent.py"
       - "tests/test_google_mission_conversation_autonomy.py"
       - "tests/test_wave4_resource_ui.py"
+      - "tests/test_final_wave4_winner_demo_contract.py"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 concurrency:
   group: healthia-final-live-demo-${{ github.event.pull_request.number || github.ref }}
@@ -37,6 +39,8 @@ jobs:
       MAPS_SECRET_NAME: healthia-google-maps-api-key
       BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
       RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      RELEASE_TAG: healthia-one-wave4-winner-demo-2026
+      RELEASE_ASSET: HealthIA-ONE-Wave4-Taskmaster-winner.mp4
 
     steps:
       - name: Check out exact candidate head
@@ -118,7 +122,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install recorder and zero-cost media tools
+      - name: Install recorder and media tools
         shell: bash
         run: |
           set -euo pipefail
@@ -126,9 +130,8 @@ jobs:
           python -m pip install playwright
           python -m playwright install --with-deps chromium
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg flite
+          sudo apt-get install -y ffmpeg flite jq
           ffmpeg -version | head -n 1
-          flite --version || true
 
       - name: Record continuous Wave 4 live application demo
         env:
@@ -148,19 +151,52 @@ jobs:
           base=dist/final-live-english-demo
           mkdir -p "$base/audio" "$base/master"
 
-          # Zero-credit narration: synthesize locally on the runner. No HeyGen,
-          # Gemini, or other paid TTS call is needed for the voice track.
-          if flite -lv 2>&1 | grep -qw slt; then
-            voice=slt
-          else
-            voice=kal
+          # Prefer the already-enabled authenticated Google Cloud TTS path for a
+          # polished English voice. Never enable an API or mutate IAM here. If the
+          # API is unavailable, fall back to local flite so the evidence workflow
+          # remains deterministic and zero-purchase.
+          narration="$base/audio/narration.wav"
+          source_label="flite-fallback"
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          if grep -qx 'texttospeech.googleapis.com' <<<"$enabled"; then
+            access_token="$(gcloud auth print-access-token)"
+            request="$base/audio/tts-request.json"
+            response="$base/audio/tts-response.json"
+            python - "$request" <<'PY'
+          import json, pathlib, sys
+          text=pathlib.Path('scripts/final_wave4_winner_narration.txt').read_text(encoding='utf-8')
+          payload={
+              'input': {'text': text},
+              'voice': {'languageCode': 'en-US', 'ssmlGender': 'FEMALE'},
+              'audioConfig': {'audioEncoding': 'MP3', 'speakingRate': 0.98, 'pitch': 0.0},
+          }
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(payload), encoding='utf-8')
+          PY
+            status="$(curl -sS -o "$response" -w '%{http_code}' \
+              -X POST 'https://texttospeech.googleapis.com/v1/text:synthesize' \
+              -H "Authorization: Bearer ${access_token}" \
+              -H 'Content-Type: application/json' \
+              --data-binary "@$request")"
+            if [[ "$status" == "200" ]] && [[ -n "$(jq -r '.audioContent // empty' "$response")" ]]; then
+              jq -r '.audioContent' "$response" | base64 -d > "$base/audio/narration-google.mp3"
+              ffmpeg -hide_banner -loglevel error -y -i "$base/audio/narration-google.mp3" -c:a pcm_s16le "$narration"
+              source_label="google-cloud-tts"
+            fi
+            rm -f "$request" "$response"
           fi
-          flite -voice "$voice" -f scripts/final_wave4_winner_narration.txt -o "$base/audio/narration.wav"
+
+          if [[ ! -s "$narration" ]]; then
+            if flite -lv 2>&1 | grep -qw slt; then voice=slt; else voice=kal; fi
+            flite -voice "$voice" -f scripts/final_wave4_winner_narration.txt -o "$narration"
+            source_label="flite-fallback"
+          fi
+          printf '%s\n' "$source_label" > "$base/narration-source.txt"
+          echo "HEALTHIA_NARRATION_SOURCE=$source_label"
 
           raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"
           test -n "$raw"
           raw_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$raw")"
-          narration_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$base/audio/narration.wav")"
+          narration_duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$narration")"
 
           read video_factor audio_speed target < <(python - "$raw_duration" "$narration_duration" <<'PY'
           import sys
@@ -168,9 +204,6 @@ jobs:
           narration=float(sys.argv[2])
           if raw <= 0 or narration <= 0:
               raise SystemExit('invalid live-video or narration duration')
-          # Aim for a substantial, roughly 3–4 minute judge demo while avoiding
-          # excessive slow motion. Prefer the narration length, but keep the
-          # final master inside the competition-safe window.
           target=max(170.0, raw*1.22, narration+2.0)
           target=min(225.0, target)
           video_factor=target/raw
@@ -186,7 +219,7 @@ jobs:
           echo "WINNER_TIMING raw=${raw_duration}s narration=${narration_duration}s target=${target}s video_factor=${video_factor} audio_speed=${audio_speed}"
 
           ffmpeg -hide_banner -loglevel error -y \
-            -i "$base/audio/narration.wav" \
+            -i "$narration" \
             -af "atempo=${audio_speed},loudnorm=I=-16:LRA=7:TP=-1.5,apad" -t "$target" \
             -c:a aac -b:a 160k "$base/master/narration-master.m4a"
 
@@ -201,13 +234,13 @@ jobs:
             -i "$base/master/narration-master.m4a" \
             -map 0:v:0 -map 1:a:0 -c:v copy -c:a copy \
             -t "$target" -movflags +faststart \
-            "$base/HealthIA-ONE-Wave4-Taskmaster-winner.mp4"
+            "$base/$RELEASE_ASSET"
 
       - name: CUTLOCK — reject unsupported or weak winner demo
         shell: bash
         run: |
           set -euo pipefail
-          final=dist/final-live-english-demo/HealthIA-ONE-Wave4-Taskmaster-winner.mp4
+          final="dist/final-live-english-demo/$RELEASE_ASSET"
           report=dist/final-live-english-demo/report.json
           test -s "$final" && test -s "$report"
           duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$final")"
@@ -248,6 +281,58 @@ jobs:
           print(f'HEALTHIA_WINNER_CUTLOCK_PASS duration={duration:.2f}s candidates={report.get("candidate_count")} maps={report.get("google_maps_uri_count")}')
           PY
           sha256sum "$final" | tee dist/final-live-english-demo/final-video.sha256
+
+      - name: Publish winner video as stable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/final-live-english-demo
+          final="$base/$RELEASE_ASSET"
+          expected="$(awk '{print $1}' "$base/final-video.sha256")"
+          notes="Continuous live-app Wave 4 Taskmaster judge demo. Exact source SHA: ${SOURCE_SHA}. GitHub Actions run: ${GITHUB_RUN_ID}. Proven gates: no Google Places candidates before mission-scoped consent; same durable mission resumes after consent; real Google Places candidates with Maps URIs; exact deterministic selection of candidate #2; multimodal original evidence provenance; logout/login continuity; zero browser console/page errors. Video SHA-256: ${expected}. Synthetic patient data only."
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title 'HealthIA ONE — Wave 4 Taskmaster Winner Demo' \
+              --notes "$notes" \
+              --latest=false
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title 'HealthIA ONE — Wave 4 Taskmaster Winner Demo' \
+              --notes "$notes" \
+              --latest=false
+          fi
+          gh release upload "$RELEASE_TAG" "$final" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Prove public winner video is anonymous and byte-identical
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/final-live-english-demo
+          public_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${RELEASE_ASSET}"
+          expected="$(awk '{print $1}' "$base/final-video.sha256")"
+          curl --fail --location --silent --show-error "$public_url" -o /tmp/healthia-public-winner.mp4
+          actual="$(sha256sum /tmp/healthia-public-winner.mp4 | awk '{print $1}')"
+          test "$actual" = "$expected"
+          PUBLIC_VIDEO_URL="$public_url" EXPECTED="$expected" ACTUAL="$actual" python - <<'PY'
+          import json, os, pathlib
+          payload={
+              'status':'PASS',
+              'public_url':os.environ['PUBLIC_VIDEO_URL'],
+              'anonymous_access':True,
+              'byte_identical':os.environ['EXPECTED']==os.environ['ACTUAL'],
+              'video_sha256':os.environ['EXPECTED'],
+              'source_run_id':os.environ.get('GITHUB_RUN_ID',''),
+              'source_sha':os.environ.get('GITHUB_SHA',''),
+              'release_tag':os.environ.get('RELEASE_TAG',''),
+          }
+          pathlib.Path('dist/final-live-english-demo/public-video-proof.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          print(json.dumps(payload, indent=2))
+          PY
+          echo "HEALTHIA_PUBLIC_WINNER_VIDEO_PASS $public_url"
 
       - name: Upload exact-candidate Wave 4 winner evidence
         if: always()
