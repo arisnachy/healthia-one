@@ -1,0 +1,244 @@
+name: Guardian Wave 14 full autonomous loop live proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/guardian-wave14-full-loop-live-proof.yml"
+      - "scripts/guardian_wave14_stitch_proof.py"
+      - "Dockerfile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave14-full-loop-live-proof
+  cancel-in-progress: false
+
+jobs:
+  full-loop:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/guardian-wave14-full-loop-proof')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      PRODUCT_SHA: f9a3906484095460916218623a919a01b4f87e30
+      GMAIL_WORKER: healthia-gmail-worker
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      AUTOPILOT_TRIGGER: healthia-opportunity-events
+      PROOF_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+      PROOF_COLLECTION: healthia_wave14_stitch_proofs
+    steps:
+      - name: Checkout temporary proof harness
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify live clean product topology before proof
+        id: topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/guardian-wave14-full-loop
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail.json
+          gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/autopilot.json
+          runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail.json)"
+          gmail_url="$(jq -r '.status.url // empty' /tmp/gmail.json)"
+          auto_url="$(jq -r '.status.url // empty' /tmp/autopilot.json)"
+          auto_ready="$(jq -r '[.status.conditions[]? | select(.type=="Ready") | .status][0] // "False"' /tmp/autopilot.json)"
+          auto_revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/autopilot.json)"
+          test -n "$runtime_sa" && [[ "$topic" == projects/*/topics/* ]]
+          [[ "$auto_ready" == True ]] && test -n "$auto_revision"
+          for url in "$gmail_url" "$auto_url"; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+            if [[ -z "$code" || "$code" =~ ^2 ]]; then echo "A private worker unexpectedly allowed unauthenticated healthz" >&2; exit 1; fi
+          done
+          location="$(gcloud firestore databases describe --database='(default)' --project "$PROJECT_ID" --format='value(locationId)')"
+          gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json
+          [[ "$(jq -r '.destination.cloudRun.service // empty' /tmp/trigger.json)" == "$AUTOPILOT_SERVICE" ]]
+          [[ "$(jq -r '.destination.cloudRun.path // empty' /tmp/trigger.json)" == "/events/firestore" ]]
+          jq -e '.eventFilters[]? | select(.attribute=="type" and .value=="google.cloud.firestore.document.v1.created")' /tmp/trigger.json >/dev/null
+          jq -e '.eventFilters[]? | select(.attribute=="document" and .value=="healthia_autopilot_events/{eventId}")' /tmp/trigger.json >/dev/null
+          echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "topic=$topic" >> "$GITHUB_OUTPUT"
+          echo "autopilot_revision=$auto_revision" >> "$GITHUB_OUTPUT"
+          echo "eventarc_location=$location" >> "$GITHUB_OUTPUT"
+
+      - name: Build proof-only harness image
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_sha="$(git rev-parse HEAD)"
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-wave14-full-loop-proof:${proof_sha}"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=''
+          for _ in $(seq 1 90); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "proof_sha=$proof_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create reversible proof jobs
+        id: jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="healthia-stitch-${GITHUB_RUN_ID}"
+          image="${{ steps.build.outputs.image }}"
+          runtime_sa="${{ steps.topology.outputs.runtime_sa }}"
+          topic="${{ steps.topology.outputs.topic }}"
+          common="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${topic},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID}"
+          for phase in setup await-email reply verify restore; do
+            job="${prefix}-${phase}"
+            script_phase="${phase}"
+            [[ "$phase" == "await-email" ]] && script_phase="await_email"
+            timeout="240s"
+            [[ "$phase" == "verify" ]] && timeout="240s"
+            gcloud run jobs create "$job" \
+              --project "$PROJECT_ID" --region "$REGION" \
+              --image "$image" --service-account "$runtime_sa" \
+              --command python \
+              --args "scripts/guardian_wave14_stitch_proof.py,${script_phase}" \
+              --set-env-vars "$common" \
+              --max-retries 0 --task-timeout "$timeout" --quiet
+            key="${phase//-/_}_job"
+            echo "${key}=$job" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: SETUP one real Guardian mission and durable outbox
+        id: setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.setup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - name: WAIT for Eventarc to process Guardian event and send real Gmail
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No PROCESS job exists. This phase only polls durable state created by the clean Eventarc worker.
+          gcloud run jobs execute "${{ steps.jobs.outputs.await_email_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: REPLY BP 128/80 through the same real Gmail thread
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.reply_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: VERIFY Gmail PubSub resolves the same durable mission
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.verify_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Collect sanitized single-chain evidence before restore
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="dist/guardian-wave14-full-loop/report.md"
+          token="$(gcloud auth print-access-token)"
+          proof_url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}"
+          curl -fsS -H "Authorization: Bearer ${token}" "$proof_url" > /tmp/proof.json
+          unset token
+          status="$(jq -r '.fields.status.stringValue // empty' /tmp/proof.json)"
+          mission_status="$(jq -r '.fields.mission_status.stringValue // empty' /tmp/proof.json)"
+          source_type="$(jq -r '.fields.vital_source_type.stringValue // empty' /tmp/proof.json)"
+          outbox_status="$(jq -r '.fields.outbox_status.stringValue // empty' /tmp/proof.json)"
+          reply_count="$(jq -r '.fields.processed_reply_count.integerValue // "0"' /tmp/proof.json)"
+          eventarc_outbound="$(jq -r '.fields.eventarc_outbound.booleanValue // false' /tmp/proof.json)"
+          gmail_inbound="$(jq -r '.fields.gmail_pubsub_inbound.booleanValue // false' /tmp/proof.json)"
+          {
+            echo "# HealthIA Wave 14 — single-chain autonomous live proof"
+            echo
+            echo "Product source: $PRODUCT_SHA"
+            echo "Proof harness SHA: ${{ steps.build.outputs.proof_sha }}"
+            echo "Proof image digest: ${{ steps.build.outputs.digest }}"
+            echo "Clean Autopilot revision: ${{ steps.topology.outputs.autopilot_revision }}"
+            echo "Eventarc location: ${{ steps.topology.outputs.eventarc_location }}"
+            echo
+            echo "## Terminal evidence"
+            echo "- Status: ${status:-missing}"
+            echo "- Outbound processor: Eventarc/private Autopilot"
+            echo "- Outbox: ${outbox_status:-missing}"
+            echo "- Real Gmail sent and durable thread discovered: yes"
+            echo "- Controlled synthetic reply: BP 128/80"
+            echo "- Gmail watch/PubSub inbound: ${gmail_inbound}"
+            echo "- Same mission: ${mission_status:-missing}"
+            echo "- Persisted vital provenance: ${source_type:-missing}"
+            echo "- Reply processed exactly once: ${reply_count}"
+            echo "- Eventarc outbound flag: ${eventarc_outbound}"
+            echo
+            echo "## Proven single chain"
+            echo "Guardian condition -> durable mission/outbox -> Firestore create -> Eventarc -> authenticated private Autopilot -> real Gmail -> controlled same-thread reply -> Gmail users.watch/PubSub -> private Gmail worker -> canonical VitalRecord -> same mission COMPLETED."
+            echo
+            echo "## Truth boundary"
+            echo "Synthetic patient state and a controlled synthetic BP reply were used. No human authored the proof reply. No treatment or medication was changed. No secret, mailbox address, OAuth material, email body or precise location is included here."
+          } > "$report"
+          if [[ "$status" != full_loop_live_pass || "$mission_status" != completed || "$source_type" != patient_email_reply || "$outbox_status" != processed || "$reply_count" != 1 || "$eventarc_outbound" != true || "$gmail_inbound" != true ]]; then
+            cat "$report"
+            echo "Single-chain proof did not reach every terminal condition." >&2
+            exit 1
+          fi
+          echo "pass=true" >> "$GITHUB_OUTPUT"
+
+      - name: RESTORE original synthetic patient state
+        if: always() && steps.setup.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Delete proof metadata after evidence capture
+        if: always() && steps.setup.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set +e
+          token="$(gcloud auth print-access-token)"
+          curl -sS -X DELETE -H "Authorization: Bearer ${token}" \
+            "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}" >/dev/null
+          unset token
+
+      - name: Cleanup proof jobs
+        if: always() && steps.jobs.outputs.setup_job != ''
+        shell: bash
+        run: |
+          set +e
+          for job in \
+            "${{ steps.jobs.outputs.setup_job }}" \
+            "${{ steps.jobs.outputs.await_email_job }}" \
+            "${{ steps.jobs.outputs.reply_job }}" \
+            "${{ steps.jobs.outputs.verify_job }}" \
+            "${{ steps.jobs.outputs.restore_job }}"; do
+            [[ -n "$job" ]] && gcloud run jobs delete "$job" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
+          done
+
+      - name: Upload sanitized full-loop proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave14-FULL-AUTONOMOUS-LOOP-LIVE-proof
+          path: dist/guardian-wave14-full-loop
+          if-no-files-found: warn
+          retention-days: 30
