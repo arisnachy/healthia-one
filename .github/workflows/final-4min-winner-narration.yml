@@ -1,0 +1,104 @@
+name: Final 4-minute winner narration
+
+on:
+  push:
+    branches: [kira/final-4min-master]
+    paths:
+      - ".github/workflows/final-4min-winner-narration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Synthesize final competition narration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/final-4min-narration
+          cat > /tmp/narration.txt <<'TEXT'
+          Health information should not reset every time a conversation ends.
+
+          HealthIA ONE is a patient-owned continuity agent built to carry unfinished health work forward. It is not a chatbot wrapped around a medical prompt. It combines AI reasoning, deterministic control, durable state, and human consent so a patient need can become a real mission with a provable outcome.
+
+          The experience begins with a human-first conversation. Gemini 3.5 Flash, orchestrated through Google ADK, reasons over patient context, but HealthIA does not dump a rigid form. It asks one useful question at a time, keeps prior answers, accepts free text, and preserves uncertainty instead of forcing a guess.
+
+          Evidence comes before interpretation. When a synthetic clinical document is uploaded, HealthIA stores the original bytes first in private Google Cloud Storage. Only then does Gemini extract what the source supports. Firestore holds patient-scoped structured state, and the longitudinal record keeps provenance back to the original document. If the evidence is unreliable, HealthIA fails closed.
+
+          Now watch the Taskmaster behavior. The patient asks HealthIA to find real support nearby. HealthIA creates a durable mission, but because location belongs to the patient, it stops at a human boundary. Before consent, zero Google Places searches occur. After the patient authorizes location for that mission, the same mission resumes. Real Google Places discovery runs, real candidates appear with Google Maps links, and the patient can simply say, “The second one.” That bounded choice is resolved deterministically. No model is asked to guess what second means.
+
+          HealthIA is broader than this workflow. The same patient-owned state supports results, a longitudinal timeline, durable missions, evidence-linked explanations, selected resources, follow-up continuity, and Opportunity Autopilot. Autopilot can watch patient or family topics across PubMed, Europe PMC, ClinicalTrials.gov, and assistance-program sources while keeping eligibility as MATCHED, UNMET, or UNKNOWN until evidence supports a stronger conclusion.
+
+          HealthIA also preserves a separate live Google action-loop proof. In that verified chain, Google Places led to a real Gmail send. Gmail watch and authenticated Pub/Sub woke the system on reply. Gmail history recovered the exact thread. Calendar availability was checked, a Calendar event was created and reread, a Google Task was created and reread, and durable receipts closed the mission. Authorization is never execution evidence. HealthIA only claims an external action when the real connector returns a durable outcome.
+
+          A second, separate experimental autonomy proof goes even further. With no new patient chat prompt, Guardian detected an overdue blood-pressure follow-up and created a durable mission. Eventarc triggered the autonomous service. A real Gmail request was sent. The patient replied one twenty-eight over eighty. Gmail Pub/Sub woke HealthIA, the reading was written into the canonical record with patient-email provenance, and the same mission completed exactly once. This proof remains separate from the primary Wave Four submission lineage, but it demonstrates safe background continuity without pretending the agent has medical authority.
+
+          Underneath the experience is Google Cloud: Cloud Run, Vertex AI, Google ADK, Firestore, private Cloud Storage, Secret Manager, Google Places, Gmail, Calendar, Tasks, and Pub/Sub for event-driven continuation.
+
+          HealthIA is not an autonomous doctor. It does not diagnose, prescribe, or change treatment on its own. It is an agent for continuity: preserve the evidence, carry the goal across time, do every safe authorized step, stop where human authority begins, and resume without making the patient start over.
+
+          The mission is not complete because the model answered. It is complete because the outcome exists. HealthIA ONE. Your health never starts over.
+          TEXT
+
+          python - <<'PY'
+          import json
+          text=open('/tmp/narration.txt', encoding='utf-8').read().strip()
+          req={
+            'input': {'text': text},
+            'voice': {'languageCode':'en-US','name':'en-US-Studio-Q'},
+            'audioConfig': {'audioEncoding':'LINEAR16','speakingRate':1.06,'volumeGainDb':1.0,'pitch':-1.0}
+          }
+          open('/tmp/request.json','w').write(json.dumps(req))
+          PY
+          token="$(gcloud auth print-access-token)"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            --data-binary @/tmp/request.json \
+            "https://texttospeech.googleapis.com/v1/text:synthesize" > /tmp/response.json
+          jq -e '.audioContent and (.audioContent | length > 1000)' /tmp/response.json >/dev/null
+          jq -r '.audioContent' /tmp/response.json | base64 -d > dist/final-4min-narration/HealthIA_FINAL_4MIN_STUDIO_Q.wav
+          sha256sum dist/final-4min-narration/HealthIA_FINAL_4MIN_STUDIO_Q.wav > dist/final-4min-narration/voice.sha256
+          python - <<'PY'
+          import wave, json, os
+          p='dist/final-4min-narration/HealthIA_FINAL_4MIN_STUDIO_Q.wav'
+          with wave.open(p,'rb') as w:
+              d={'duration': w.getnframes()/w.getframerate(), 'sample_rate': w.getframerate(), 'channels': w.getnchannels(), 'size': os.path.getsize(p)}
+          open('dist/final-4min-narration/voice-probe.json','w').write(json.dumps(d, indent=2))
+          print(d)
+          PY
+
+      - name: Enforce four-minute voice budget
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          d=json.load(open('dist/final-4min-narration/voice-probe.json'))
+          duration=float(d['duration'])
+          if not 205 <= duration <= 235:
+              raise SystemExit(f'narration duration outside winner budget: {duration}')
+          print('HEALTHIA_FINAL_4MIN_NARRATION_PASS', duration)
+          PY
+
+      - name: Upload final narration
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-final-4min-winner-narration
+          path: dist/final-4min-narration/
+          if-no-files-found: error
+          retention-days: 14
