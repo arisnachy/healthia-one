@@ -11,6 +11,8 @@ COPY healthia_one ./healthia_one
 COPY healthia_agent ./healthia_agent
 COPY web ./web
 COPY demo ./demo
+# Proof-branch only. Never merge this harness into the product branch.
+COPY scripts ./scripts
 RUN pip install --no-cache-dir .
 
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
