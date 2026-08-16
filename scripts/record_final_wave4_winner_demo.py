@@ -23,6 +23,7 @@ CLOUD_IMAGE = os.getenv("HEALTHIA_CLOUD_IMAGE", "")
 CLOUD_PROJECT = os.getenv("HEALTHIA_CLOUD_PROJECT", "")
 CLOUD_REGION = os.getenv("HEALTHIA_CLOUD_REGION", "")
 JUDGE_URL = os.getenv("HEALTHIA_JUDGE_URL", "").rstrip("/")
+JUDGE_TOKEN = os.getenv("HEALTHIA_JUDGE_ID_TOKEN", "")
 
 
 def checkpoint(report: dict) -> None:
@@ -353,6 +354,8 @@ def run() -> dict:
 
         # 8. Exact-head autonomous continuity proof stays public, read-only and synthetic.
         require(JUDGE_URL.startswith("https://") and ".run.app" in JUDGE_URL, "exact-head Judge Mode URL is required")
+        require(bool(JUDGE_TOKEN), "private exact-head Judge Mode identity token is required")
+        page.set_extra_http_headers({"Authorization": f"Bearer {JUDGE_TOKEN}"})
         health_response = page.request.get(f"{JUDGE_URL}/judge-health")
         require(health_response.ok, f"Judge Mode health failed: {health_response.status}")
         judge_health = health_response.json()
