@@ -18,6 +18,10 @@ READY = OUTPUT / "browser-ready"
 MISSION_VISIBLE = OUTPUT / "mission-visible"
 REPORT = OUTPUT / "recorder-report.json"
 MISSION_TYPE = "bp_followup_guardian_measurement"
+# Cloud Run Jobs can spend several minutes provisioning before user code starts.
+# These are recorder synchronization bounds, not product timing claims.
+MISSION_WAIT_SECONDS = 480
+COMPLETION_WAIT_SECONDS = 900
 
 
 def require(condition: bool, message: str) -> None:
@@ -78,6 +82,10 @@ def main() -> None:
         "patient_id": PATIENT_ID,
         "checks": [],
         "timeline": {},
+        "recorder_sync_bounds": {
+            "mission_wait_seconds": MISSION_WAIT_SECONDS,
+            "completion_wait_seconds": COMPLETION_WAIT_SECONDS,
+        },
     }
     checkpoint(report)
     started = time.monotonic()
@@ -117,7 +125,10 @@ def main() -> None:
         page.wait_for_timeout(2200)
         READY.write_text("ready\n", encoding="utf-8")
 
-        deadline = time.monotonic() + 120
+        # The external workflow starts the real Cloud Run activation only after
+        # browser-ready. Provisioning can itself take >120 s, so the camera must
+        # remain patient rather than timing out before HealthIA actually runs.
+        deadline = time.monotonic() + MISSION_WAIT_SECONDS
         mission = None
         while time.monotonic() < deadline:
             current = bootstrap(page)
@@ -125,14 +136,14 @@ def main() -> None:
             if mission is not None:
                 break
             page.wait_for_timeout(450)
-        require(mission is not None, "autonomous BP mission did not appear")
+        require(mission is not None, "autonomous BP mission did not appear within recorder synchronization bound")
         require(str(mission.get("status") or "") == "waiting_patient", f"mission did not open WAITING_PATIENT: {mission}")
         report["mission_id"] = str(mission.get("id") or "")
         report["timeline"]["mission_created_s"] = round(time.monotonic() - started, 3)
         report["checks"].append("mission_created_without_chat_prompt")
         reload_view(page, "missions")
         page.wait_for_function(
-            """() => [...document.querySelectorAll('#missionList .data-card')].some(card => /waiting_patient/i.test(card.innerText))""",
+            """() => [...document.querySelectorAll('#missionList .data-card')].some(card => /Complete blood-pressure follow-up/i.test(card.innerText) && /waiting_patient/i.test(card.innerText))""",
             timeout=30_000,
         )
         page.wait_for_timeout(2800)
@@ -141,8 +152,9 @@ def main() -> None:
 
         # Hold the real product on the open mission while Eventarc -> Gmail ->
         # Gmail watch/PubSub completes outside the browser. No chat message or
-        # manual measurement is sent by this recorder.
-        deadline = time.monotonic() + 420
+        # manual measurement is sent by this recorder. The longer bound covers
+        # sequential Cloud Run cold starts; it does not alter the live chain.
+        deadline = time.monotonic() + COMPLETION_WAIT_SECONDS
         final_state = None
         final_mission = None
         gmail_vital = None
@@ -159,7 +171,7 @@ def main() -> None:
                     final_state, final_mission, gmail_vital = current, candidate, vitals[0]
                     break
             page.wait_for_timeout(700)
-        require(final_state is not None and final_mission is not None and gmail_vital is not None, "browser never observed the real Gmail-derived mission resolution")
+        require(final_state is not None and final_mission is not None and gmail_vital is not None, "browser never observed the real Gmail-derived mission resolution within recorder synchronization bound")
         require(str(final_mission.get("id") or "") == report["mission_id"], "a different mission was completed")
         report["timeline"]["mission_completed_s"] = round(time.monotonic() - started, 3)
         report["checks"].extend([
@@ -169,7 +181,7 @@ def main() -> None:
 
         reload_view(page, "missions")
         page.wait_for_function(
-            """() => [...document.querySelectorAll('#missionList .data-card')].some(card => /completed/i.test(card.innerText))""",
+            """() => [...document.querySelectorAll('#missionList .data-card')].some(card => /Complete blood-pressure follow-up/i.test(card.innerText) && /completed/i.test(card.innerText))""",
             timeout=30_000,
         )
         page.wait_for_timeout(2600)
