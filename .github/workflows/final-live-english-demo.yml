@@ -35,12 +35,13 @@ jobs:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       SERVICE_NAME: healthia-one-final-video
+      JUDGE_SERVICE_NAME: healthia-one-final-judge-video
       BUCKET_NAME: healthia-6088a-healthia-evidence
       MAPS_SECRET_NAME: healthia-google-maps-api-key
       BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
       RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
-      RELEASE_TAG: healthia-one-wave4-winner-demo-2026
-      RELEASE_ASSET: HealthIA-ONE-Wave4-Taskmaster-winner.mp4
+      RELEASE_TAG: healthia-one-autonomous-winner-demo-2026
+      RELEASE_ASSET: HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4
 
     steps:
       - name: Check out exact candidate head
@@ -118,6 +119,31 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
           echo "HEALTHIA_EXACT_REVISION_BOUND $revision"
 
+      - name: Deploy exact-head public read-only Judge Mode
+        id: judge
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$JUDGE_SERVICE_NAME" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --image "${{ steps.cloud.outputs.image }}" \
+            --command uvicorn \
+            --args "healthia_one.judge_mode:app,--host,0.0.0.0,--port,8080" \
+            --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${SOURCE_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=31972928348" \
+            --min 0 --max 1 --memory 256Mi --cpu 1 \
+            --ingress all --no-invoker-iam-check --quiet
+          url="$(gcloud run services describe "$JUDGE_SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          test -n "$url"
+          curl --fail --silent --show-error "$url/judge-health" > /tmp/judge-health.json
+          test "$(jq -r '.source_sha' /tmp/judge-health.json)" = "$SOURCE_SHA"
+          test "$(jq -r '.mode' /tmp/judge-health.json)" = "judge_read_only_synthetic"
+          test "$(jq -r '.mutations' /tmp/judge-health.json)" = "false"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_EXACT_HEAD_JUDGE_MODE_PASS $url"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -142,6 +168,7 @@ jobs:
           HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
           HEALTHIA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEALTHIA_JUDGE_URL: ${{ steps.judge.outputs.url }}
         run: python scripts/record_final_wave4_winner_demo.py
 
       - name: Build new narrated winner master
@@ -151,47 +178,64 @@ jobs:
           base=dist/final-live-english-demo
           mkdir -p "$base/audio" "$base/master"
 
-          # Prefer the already-enabled authenticated Google Cloud TTS path for a
-          # polished English voice. Never enable an API or mutate IAM here. If the
-          # API is unavailable, fall back to local flite so the evidence workflow
-          # remains deterministic and zero-purchase.
+          # The requested speaker is an exact Google Cloud voice. Fail closed:
+          # a different gender, unnamed voice, local fallback, or disabled API cannot pass.
           narration="$base/audio/narration.wav"
-          source_label="flite-fallback"
+          voice_name="en-US-Chirp3-HD-Charon"
           enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
-          if grep -qx 'texttospeech.googleapis.com' <<<"$enabled"; then
-            access_token="$(gcloud auth print-access-token)"
-            request="$base/audio/tts-request.json"
-            response="$base/audio/tts-response.json"
-            python - "$request" <<'PY'
+          grep -qx 'texttospeech.googleapis.com' <<<"$enabled"
+
+          access_token="$(gcloud auth print-access-token)"
+          voices="$base/audio/voices.json"
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${access_token}" \
+            "https://texttospeech.googleapis.com/v1/voices?languageCode=en-US" \
+            -o "$voices"
+          jq -e --arg voice "$voice_name" '.voices[] | select(.name == $voice and .ssmlGender == "MALE")' "$voices" >/dev/null
+
+          request="$base/audio/tts-request.json"
+          response="$base/audio/tts-response.json"
+          python - "$request" "$voice_name" <<'PY'
           import json, pathlib, sys
           text=pathlib.Path('scripts/final_wave4_winner_narration.txt').read_text(encoding='utf-8')
           payload={
               'input': {'text': text},
-              'voice': {'languageCode': 'en-US', 'ssmlGender': 'FEMALE'},
-              'audioConfig': {'audioEncoding': 'MP3', 'speakingRate': 0.98, 'pitch': 0.0},
+              'voice': {'languageCode': 'en-US', 'name': sys.argv[2]},
+              'audioConfig': {'audioEncoding': 'MP3', 'speakingRate': 0.98},
           }
           pathlib.Path(sys.argv[1]).write_text(json.dumps(payload), encoding='utf-8')
           PY
-            status="$(curl -sS -o "$response" -w '%{http_code}' \
-              -X POST 'https://texttospeech.googleapis.com/v1/text:synthesize' \
-              -H "Authorization: Bearer ${access_token}" \
-              -H 'Content-Type: application/json' \
-              --data-binary "@$request")"
-            if [[ "$status" == "200" ]] && [[ -n "$(jq -r '.audioContent // empty' "$response")" ]]; then
-              jq -r '.audioContent' "$response" | base64 -d > "$base/audio/narration-google.mp3"
-              ffmpeg -hide_banner -loglevel error -y -i "$base/audio/narration-google.mp3" -c:a pcm_s16le "$narration"
-              source_label="google-cloud-tts"
-            fi
-            rm -f "$request" "$response"
+          status="$(curl -sS -o "$response" -w '%{http_code}' \
+            -X POST 'https://texttospeech.googleapis.com/v1/text:synthesize' \
+            -H "Authorization: Bearer ${access_token}" \
+            -H 'Content-Type: application/json' \
+            --data-binary "@$request")"
+          if [[ "$status" != "200" ]] || [[ -z "$(jq -r '.audioContent // empty' "$response")" ]]; then
+            jq -c '{error: (.error.message // "missing audioContent")}' "$response" >&2 || true
+            echo "Named male Google Cloud voice synthesis failed closed: $voice_name HTTP $status" >&2
+            exit 1
           fi
-
-          if [[ ! -s "$narration" ]]; then
-            if flite -lv 2>&1 | grep -qw slt; then voice=slt; else voice=kal; fi
-            flite -voice "$voice" -f scripts/final_wave4_winner_narration.txt -o "$narration"
-            source_label="flite-fallback"
-          fi
-          printf '%s\n' "$source_label" > "$base/narration-source.txt"
-          echo "HEALTHIA_NARRATION_SOURCE=$source_label"
+          jq -r '.audioContent' "$response" | base64 -d > "$base/audio/narration-google.mp3"
+          ffmpeg -hide_banner -loglevel error -y -i "$base/audio/narration-google.mp3" -c:a pcm_s16le "$narration"
+          test -s "$narration"
+          python - "$base/narration-voice-proof.json" "$voice_name" <<'PY'
+          import json, pathlib, sys
+          payload={
+              'status':'PASS',
+              'provider':'Google Cloud Text-to-Speech',
+              'voice_name':sys.argv[2],
+              'voice_short_name':'Charon',
+              'gender':'MALE',
+              'language_code':'en-US',
+              'voice_tier':'Chirp 3 HD',
+              'fallback_used':False,
+          }
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(payload, indent=2), encoding='utf-8')
+          print(json.dumps(payload))
+          PY
+          printf '%s\n' "google-cloud-tts-chirp3-hd-charon-male" > "$base/narration-source.txt"
+          rm -f "$request" "$response" "$voices"
+          echo "HEALTHIA_NARRATION_VOICE_PASS $voice_name MALE"
 
           raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"
           test -n "$raw"
@@ -204,8 +248,8 @@ jobs:
           narration=float(sys.argv[2])
           if raw <= 0 or narration <= 0:
               raise SystemExit('invalid live-video or narration duration')
-          target=max(170.0, raw*1.22, narration+2.0)
-          target=min(225.0, target)
+          target=max(215.0, raw*1.22, narration+2.0)
+          target=min(235.0, target)
           video_factor=target/raw
           audio_target=max(1.0, target-1.0)
           audio_speed=narration/audio_target
@@ -252,10 +296,22 @@ jobs:
           audio_streams=int(sys.argv[2])
           video_streams=int(sys.argv[3])
           report=json.load(open(sys.argv[4], encoding='utf-8'))
-          if not 160 <= duration <= 230:
+          if not 215 <= duration <= 240:
               raise SystemExit(f'final Taskmaster demo must stay in the substantial competition window: {duration:.2f}s')
           if audio_streams < 1 or video_streams < 1:
               raise SystemExit('final demo must contain both continuous live video and English narration audio')
+          voice=json.load(open('dist/final-live-english-demo/narration-voice-proof.json', encoding='utf-8'))
+          if voice != {
+              'status':'PASS',
+              'provider':'Google Cloud Text-to-Speech',
+              'voice_name':'en-US-Chirp3-HD-Charon',
+              'voice_short_name':'Charon',
+              'gender':'MALE',
+              'language_code':'en-US',
+              'voice_tier':'Chirp 3 HD',
+              'fallback_used':False,
+          }:
+              raise SystemExit(f'narration voice proof mismatch: {voice}')
           if report.get('status') != 'PASS':
               raise SystemExit(f"recorder report is not PASS: {report}")
           if report.get('live_app_only') is not True or report.get('static_screenshots_used') is not False:
@@ -273,6 +329,7 @@ jobs:
               'multimodal_original_result_and_provenance',
               'logout_login_restores_evidence_and_selected_google_mission',
               'visible_exact_candidate_cloud_proof',
+              'exact_head_autonomous_continuity_judge_mode',
               'zero_browser_console_or_page_errors',
           }
           missing=required-set(report.get('checks') or [])
@@ -292,16 +349,16 @@ jobs:
           base=dist/final-live-english-demo
           final="$base/$RELEASE_ASSET"
           expected="$(awk '{print $1}' "$base/final-video.sha256")"
-          notes="Continuous live-app Wave 4 Taskmaster judge demo. Exact source SHA: ${SOURCE_SHA}. GitHub Actions run: ${GITHUB_RUN_ID}. Proven gates: no Google Places candidates before mission-scoped consent; same durable mission resumes after consent; real Google Places candidates with Maps URIs; exact deterministic selection of candidate #2; multimodal original evidence provenance; logout/login continuity; zero browser console/page errors. Video SHA-256: ${expected}. Synthetic patient data only."
+          notes="Continuous exact-head autonomous Taskmaster judge demo with Google Cloud male voice en-US-Chirp3-HD-Charon. Exact source SHA: ${SOURCE_SHA}. GitHub Actions run: ${GITHUB_RUN_ID}. Proven gates: no Google Places candidates before mission-scoped consent; same durable mission resumes after consent; real Google Places candidates with Maps URIs; exact deterministic selection of candidate #2; multimodal original evidence provenance; logout/login continuity; zero browser console/page errors. Video SHA-256: ${expected}. Synthetic patient data only."
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --title 'HealthIA ONE — Wave 4 Taskmaster Winner Demo' \
+              --title 'HealthIA ONE — Autonomous Taskmaster Winner Demo — Charon' \
               --notes "$notes" \
               --latest=false
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --target "$SOURCE_SHA" \
-              --title 'HealthIA ONE — Wave 4 Taskmaster Winner Demo' \
+              --title 'HealthIA ONE — Autonomous Taskmaster Winner Demo — Charon' \
               --notes "$notes" \
               --latest=false
           fi
@@ -340,7 +397,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-ONE-Wave4-winner-demo
+          name: HealthIA-ONE-autonomous-winner-demo-Charon
           path: dist/final-live-english-demo
           if-no-files-found: error
           retention-days: 30
@@ -350,3 +407,4 @@ jobs:
         shell: bash
         run: |
           gcloud run services delete "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet || true
+          gcloud run services delete "$JUDGE_SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet || true
