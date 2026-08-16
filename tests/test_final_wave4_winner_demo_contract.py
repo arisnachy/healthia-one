@@ -54,7 +54,6 @@ def test_cutlock_requires_real_candidates_and_no_preconsent_execution() -> None:
 def test_winner_narration_prefers_existing_google_tts_and_has_local_fallback() -> None:
     assert "texttospeech.googleapis.com" in WORKFLOW
     assert "gcloud services list" in WORKFLOW
-    assert "will" not in ""  # keep this contract intentionally simple and executable
     assert "flite-fallback" in WORKFLOW
     assert "gcloud services enable" not in WORKFLOW
     assert "VOICE_PART_1" not in WORKFLOW
