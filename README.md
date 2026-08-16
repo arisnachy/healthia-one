@@ -97,6 +97,19 @@ Safety
 
 Cloud execution uses service identity / ADC rather than embedding a Gemini API key in Cloud Run.
 
+## The broader Patient OS is still here
+
+The final judge story is intentionally narrow, but the underlying patient system retains the release-proven capabilities that make continuity useful beyond one demo:
+
+- **pathological family genogram with provenance**;
+- **multimodal result ingestion with original evidence retention**;
+- **treatment and medication check-ins without autonomous prescribing**;
+- **patient-controlled consent, snooze, audit and JSON export**;
+- longitudinal results, documents, measurements, family context, device paths and patient controls;
+- the earlier **Closed-loop Taskmaster result mission**, preserved as a tested capability rather than used as the Wave 4 flagship.
+
+The smoke path remains `scripts/smoke_test.py`. Local deterministic mode can run with **zero Google AI calls**.
+
 ## Exact evidence
 
 ### Current Wave 4 tested product candidate
@@ -170,6 +183,7 @@ pytest
 python scripts/full_system_check.py
 python scripts/dialogbench.py
 python scripts/judge_omega.py
+python scripts/smoke_test.py
 ```
 
 Frontend static checks:
