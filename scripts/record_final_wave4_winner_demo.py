@@ -22,6 +22,7 @@ CLOUD_REVISION = os.getenv("HEALTHIA_CLOUD_REVISION", "")
 CLOUD_IMAGE = os.getenv("HEALTHIA_CLOUD_IMAGE", "")
 CLOUD_PROJECT = os.getenv("HEALTHIA_CLOUD_PROJECT", "")
 CLOUD_REGION = os.getenv("HEALTHIA_CLOUD_REGION", "")
+JUDGE_URL = os.getenv("HEALTHIA_JUDGE_URL", "").rstrip("/")
 
 
 def checkpoint(report: dict) -> None:
@@ -171,6 +172,7 @@ def run() -> dict:
         "cloud_image": CLOUD_IMAGE,
         "cloud_project": CLOUD_PROJECT,
         "cloud_region": CLOUD_REGION,
+        "judge_url": JUDGE_URL,
         "pdf_sha256": hashlib.sha256(pdf).hexdigest(),
         "checks": [],
     }
@@ -347,6 +349,32 @@ def run() -> dict:
         )
         overlay(page, "Real action requires real evidence", cloud_summary, 8)
         report["checks"].append("visible_exact_candidate_cloud_proof")
+        clear_overlay(page)
+
+        # 8. Exact-head autonomous continuity proof stays public, read-only and synthetic.
+        require(JUDGE_URL.startswith("https://") and ".run.app" in JUDGE_URL, "exact-head Judge Mode URL is required")
+        health_response = page.request.get(f"{JUDGE_URL}/judge-health")
+        require(health_response.ok, f"Judge Mode health failed: {health_response.status}")
+        judge_health = health_response.json()
+        proof_response = page.request.get(f"{JUDGE_URL}/api/proof")
+        require(proof_response.ok, f"Judge Mode proof failed: {proof_response.status}")
+        autonomous_proof = proof_response.json()
+        require(judge_health.get("source_sha") == CANDIDATE_SHA, f"Judge Mode source mismatch: {judge_health}")
+        require(judge_health.get("mode") == "judge_read_only_synthetic", f"unexpected Judge Mode: {judge_health}")
+        require(judge_health.get("mutations") is False and judge_health.get("secrets") is False, "Judge Mode must be inert")
+        require(autonomous_proof.get("boundary_count") == 5, f"unexpected autonomy proof: {autonomous_proof}")
+        require(autonomous_proof.get("model_calls_for_trigger") == 0, "overdue detection must use zero model calls")
+        page.goto(JUDGE_URL, wait_until="networkidle", timeout=60_000)
+        body = page.locator("body").inner_text()
+        require("HealthIA noticed the follow-up was overdue. Nobody prompted it." in body, "autonomous judge sentence is not visible")
+        require("JUDGE MODE · READ ONLY · SYNTHETIC" in body, "public truth boundary is not visible")
+        overlay(page, "HealthIA noticed the follow-up was overdue. Nobody prompted it.", "One opted-in blood-pressure mission crossed five durable boundaries: Firestore, Eventarc, private Cloud Run, real Gmail with Pub/Sub reply recovery, and a canonical measurement — with zero model calls to detect that follow-up was due.", 10)
+        clear_overlay(page)
+        page.locator(".grid").scroll_into_view_if_needed()
+        overlay(page, "Bounded autonomy, inspectable proof", "The operational workers stay private. This exact-head Cloud Run surface is synthetic, GET-only, credential-free, and independently stamps the source SHA and LIVE proof run.", 8)
+        report["judge_health"] = judge_health
+        report["autonomous_proof"] = {key: autonomous_proof.get(key) for key in ("boundary_count", "model_calls_for_trigger", "source_sha", "live_proof_run", "judge_mode")}
+        report["checks"].append("exact_head_autonomous_continuity_judge_mode")
         clear_overlay(page)
 
         require(not page_errors, f"browser page errors: {page_errors}")
