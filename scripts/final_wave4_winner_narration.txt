@@ -1,0 +1,17 @@
+HealthIA ONE is built around one promise: your health should never start over.
+
+This is the exact candidate running live on Google Cloud. The patient signs in to a real Cloud Run deployment. Gemini 3.5 Flash and Google ADK are available for reasoning, Firestore stores durable patient state, and private Cloud Storage preserves original clinical evidence.
+
+Now watch the Taskmaster behavior that defines HealthIA. The patient asks for an autism support center near Santiago de los Caballeros. HealthIA does not jump straight to a search. It creates a durable mission, identifies that location is required, and stops at the human boundary. No Google Places candidate exists yet, and the receipt states that the external search has not been performed.
+
+The patient explicitly authorizes location for this mission. The authorization is temporary and mission-scoped. The same mission resumes; it does not start over. Now, and only now, HealthIA performs a bounded real Google Places lookup. The live application surfaces verifiable candidates, Google Maps links, addresses, and any public contact details returned by Google. This is read-only resource discovery, not a clinical referral and not an invented recommendation.
+
+Then the patient says only: “The second one.” That sentence is deliberately important. HealthIA does not spend another language-model call trying to reinterpret a bounded ordinal choice. Deterministic policy selects exactly candidate number two from the list already shown, verifies that the persisted selection matches that candidate, and records the result in the same mission. More AI is not automatically better autonomy.
+
+Next, HealthIA demonstrates evidence discipline. A synthetic clinical document is uploaded through the real application. The original bytes are preserved first in private Google Cloud Storage. Gemini performs bounded multimodal extraction after preservation, and the structured result in Firestore remains linked to the original source. If the evidence cannot be interpreted reliably, the system is designed to fail closed rather than manufacture a finding.
+
+Finally, the patient logs out and signs in again. The clinical evidence is still present. The same Google mission is still present. The exact second resource remains selected. Continuity belongs to durable patient state, not to a browser variable and not to prompt memory.
+
+HealthIA also has a separately preserved live Google action proof covering Gmail, Pub/Sub, Calendar and Google Tasks. The rule across every connector is the same: authorization is not execution evidence. A model cannot declare a real-world mutation complete. HealthIA only claims completion when the real connector returns a durable outcome or receipt.
+
+HealthIA ONE does not win by talking longer. It wins by carrying unfinished patient work forward, doing every safe step it can prove, stopping exactly where the human must decide, resuming the same mission after consent, and preserving the outcome so the patient never starts over.
