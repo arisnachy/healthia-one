@@ -1,0 +1,67 @@
+name: Cinematic autonomy narration
+
+on:
+  push:
+    branches: [kira/wave14-autonomous-live-recorder]
+    paths:
+      - ".github/workflows/cinematic-autonomy-narration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: healthia-6088a
+
+      - name: Synthesize premium Studio narration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/cinematic-narration
+          cat > /tmp/request.json <<'JSON'
+          {
+            "input": {
+              "ssml": "<speak><p>The conversation ends. <break time='180ms'/> HealthIA doesn't.</p><p>No new prompt. Guardian detects Ana's overdue blood-pressure follow-up, opens a mission, and reaches her through Gmail.</p><p>She replies: one twenty-eight over eighty. That event wakes HealthIA, updates her longitudinal record, and closes the same mission automatically.</p><p>Not a chatbot waiting for instructions. <break time='160ms'/> An agent completing a goal.</p></speak>"
+            },
+            "voice": {
+              "languageCode": "en-US",
+              "name": "en-US-Studio-Q"
+            },
+            "audioConfig": {
+              "audioEncoding": "LINEAR16",
+              "speakingRate": 1.06,
+              "volumeGainDb": 1.5
+            }
+          }
+          JSON
+          token="$(gcloud auth print-access-token)"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            --data-binary @/tmp/request.json \
+            "https://texttospeech.googleapis.com/v1/text:synthesize" > /tmp/response.json
+          jq -e '.audioContent and (.audioContent | length > 1000)' /tmp/response.json >/dev/null
+          jq -r '.audioContent' /tmp/response.json | base64 -d > dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav
+          ffprobe -v error -show_entries format=duration,size -of json dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav > dist/cinematic-narration/voice-probe.json
+          sha256sum dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav > dist/cinematic-narration/voice.sha256
+
+      - name: Upload cinematic narration
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-cinematic-autonomy-narration
+          path: dist/cinematic-narration/
+          if-no-files-found: error
+          retention-days: 7
