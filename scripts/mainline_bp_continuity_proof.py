@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 from google.cloud import firestore
 
-from scripts.guardian_wave14_stitch_proof import (
-    PROJECT_ID,
-    RUN_ID,
+# The production image intentionally excludes scripts/.  The ephemeral proof
+# overlay copies this directory as plain files, not as an installed Python
+# package.  Import the already-proven harness from the wrapper's own directory
+# so no __init__.py or production package surface is required.
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from guardian_wave14_stitch_proof import (  # noqa: E402
     await_email as proven_await_email,
     client,
     proof_ref,
@@ -20,7 +27,7 @@ from scripts.guardian_wave14_stitch_proof import (
 
 
 async def setup() -> None:
-    """Run the already-proven setup path and stamp its no-chat origin durably."""
+    """Run the proven setup path and stamp its no-chat origin durably."""
     require_identity()
     await proven_setup()
     proof_ref(client()).set(
