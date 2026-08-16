@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/mainline-autonomous-continuity-live-proof.yml"
       - "scripts/guardian_wave14_stitch_proof.py"
+      - "scripts/mainline_bp_continuity_proof.py"
       - "healthia_one/autopilot_worker.py"
       - "healthia_one/bp_followup_guardian.py"
       - "healthia_one/guardian_email_delivery.py"
@@ -66,6 +67,7 @@ jobs:
             tests/test_gmail_push_worker.py
           python -m py_compile \
             scripts/guardian_wave14_stitch_proof.py \
+            scripts/mainline_bp_continuity_proof.py \
             healthia_one/autopilot_worker.py \
             healthia_one/gmail_push_worker.py
 
@@ -119,15 +121,22 @@ jobs:
           echo "auto_url=$auto_url" >> "$GITHUB_OUTPUT"
           echo "eventarc_location=$location" >> "$GITHUB_OUTPUT"
 
-      - name: Build exact-head candidate image
+      - name: Build exact-head candidate image without log-stream privilege
         id: build
         shell: bash
         run: |
           set -euo pipefail
           image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-autonomous-continuity:${GITHUB_SHA}"
-          gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --quiet
-          digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=''
+          for _ in $(seq 1 120); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
           test -n "$digest"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
@@ -189,7 +198,7 @@ jobs:
               --project "$PROJECT_ID" --region "$REGION" \
               --image "$image" --service-account "$runtime_sa" \
               --command python \
-              --args "scripts/guardian_wave14_stitch_proof.py,${script_phase}" \
+              --args "scripts/mainline_bp_continuity_proof.py,${script_phase}" \
               --set-env-vars "$common" \
               --max-retries 0 --task-timeout 300s --quiet
             key="${phase//-/_}_job"
@@ -238,18 +247,24 @@ jobs:
           reply_count="$(jq -r '.fields.processed_reply_count.integerValue // "0"' /tmp/proof.json)"
           eventarc_outbound="$(jq -r '.fields.eventarc_outbound.booleanValue // false' /tmp/proof.json)"
           gmail_inbound="$(jq -r '.fields.gmail_pubsub_inbound.booleanValue // false' /tmp/proof.json)"
-          no_prompt="$(jq -r '.fields.no_chat_prompt_used.booleanValue // true' /tmp/proof.json)"
+          no_prompt="$(jq -r '.fields.no_chat_prompt_used.booleanValue // false' /tmp/proof.json)"
+          trigger_model_calls="$(jq -r '.fields.trigger_model_calls.integerValue // "-1"' /tmp/proof.json)"
+          trigger_network_calls="$(jq -r '.fields.trigger_network_calls.integerValue // "-1"' /tmp/proof.json)"
+          trigger_origin="$(jq -r '.fields.trigger_origin.stringValue // empty' /tmp/proof.json)"
           mkdir -p dist/mainline-autonomy-live
           cat > dist/mainline-autonomy-live/report.md <<EOF
           # HealthIA ONE — mainline autonomous continuity LIVE proof
 
           - Exact candidate SHA: ${GITHUB_SHA}
           - Candidate image digest: ${{ steps.build.outputs.digest }}
+          - Cloud Build id: ${{ steps.build.outputs.build_id }}
           - Autopilot revision: ${{ steps.promote.outputs.auto_revision }}
           - Gmail worker revision: ${{ steps.promote.outputs.gmail_revision }}
           - Eventarc location: ${{ steps.topology.outputs.eventarc_location }}
           - No chat prompt used: ${no_prompt}
-          - Model calls required to trigger follow-up: 0
+          - Trigger origin: ${trigger_origin}
+          - Model calls required to trigger follow-up: ${trigger_model_calls}
+          - Trigger network calls: ${trigger_network_calls}
           - Durable boundary count: 5
           - Outbox status: ${outbox_status}
           - Real Gmail thread: verified, identifier redacted
@@ -268,7 +283,7 @@ jobs:
 
           Truth boundary: synthetic patient state and a controlled synthetic BP reply. No autonomous diagnosis, prescribing, medication change, or declaration of blood-pressure control. No email address, OAuth material, message body, precise location, or secret is included in this artifact.
           EOF
-          if [[ "$status" != full_loop_live_pass || "$mission_status" != completed || "$source_type" != patient_email_reply || "$outbox_status" != processed || "$reply_count" != 1 || "$eventarc_outbound" != true || "$gmail_inbound" != true || "$no_prompt" != true ]]; then
+          if [[ "$status" != full_loop_live_pass || "$mission_status" != completed || "$source_type" != patient_email_reply || "$outbox_status" != processed || "$reply_count" != 1 || "$eventarc_outbound" != true || "$gmail_inbound" != true || "$no_prompt" != true || "$trigger_model_calls" != 0 || "$trigger_network_calls" != 0 || "$trigger_origin" != deterministic_bp_followup_reconciliation ]]; then
             cat dist/mainline-autonomy-live/report.md
             echo "Exact-head autonomy proof did not reach every terminal condition" >&2
             exit 1
