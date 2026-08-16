@@ -55,8 +55,15 @@ jobs:
             "https://texttospeech.googleapis.com/v1/text:synthesize" > /tmp/response.json
           jq -e '.audioContent and (.audioContent | length > 1000)' /tmp/response.json >/dev/null
           jq -r '.audioContent' /tmp/response.json | base64 -d > dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav
-          ffprobe -v error -show_entries format=duration,size -of json dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav > dist/cinematic-narration/voice-probe.json
           sha256sum dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav > dist/cinematic-narration/voice.sha256
+          python - <<'PY'
+          import wave, json, os
+          p='dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav'
+          with wave.open(p,'rb') as w:
+              d={'duration': w.getnframes()/w.getframerate(), 'sample_rate': w.getframerate(), 'channels': w.getnchannels(), 'size': os.path.getsize(p)}
+          open('dist/cinematic-narration/voice-probe.json','w').write(json.dumps(d, indent=2))
+          print(d)
+          PY
 
       - name: Upload cinematic narration
         uses: actions/upload-artifact@v4
