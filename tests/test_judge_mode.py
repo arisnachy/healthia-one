@@ -9,13 +9,17 @@ client = TestClient(app)
 
 
 def test_judge_mode_is_public_read_only_synthetic_evidence_surface() -> None:
-    health = client.get('/healthz')
+    health = client.get('/judge-health')
     assert health.status_code == 200
     payload = health.json()
     assert payload['mode'] == 'judge_read_only_synthetic'
     assert payload['mutations'] is False
     assert payload['model_calls'] is False
     assert payload['secrets'] is False
+
+    # Keep the conventional local health route too; the Cloud proof intentionally
+    # uses /judge-health because the reused Run service's edge intercepted /healthz.
+    assert client.get('/healthz').status_code == 200
 
     proof = client.get('/api/proof')
     assert proof.status_code == 200
@@ -28,6 +32,7 @@ def test_judge_mode_is_public_read_only_synthetic_evidence_surface() -> None:
     assert state.status_code == 200
     assert state.json()['truth_boundary'].startswith('Read-only synthetic evidence surface')
 
+    assert client.post('/judge-health').status_code == 405
     assert client.post('/api/proof').status_code == 405
     assert client.post('/api/synthetic-state').status_code == 405
 
