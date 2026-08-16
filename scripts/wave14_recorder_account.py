@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# Proof-only recorder trigger revision 2. Product source remains untouched.
 import hashlib
 import os
 import sys
