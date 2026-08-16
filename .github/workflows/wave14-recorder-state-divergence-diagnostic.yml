@@ -1,0 +1,204 @@
+name: Wave14 recorder state divergence diagnostic
+
+on:
+  pull_request:
+    branches: [kira/autonomous-guardian-wave5]
+    paths:
+      - ".github/workflows/wave14-recorder-state-divergence-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave14-state-divergence
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/wave14-autonomous-live-recorder')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      PRODUCT_SHA: f9a3906484095460916218623a919a01b4f87e30
+      RECORDER_IMAGE: us-central1-docker.pkg.dev/healthia-6088a/cloud-run-source-deploy/healthia-wave14-live-recorder:44995b2a85aed854fc853f585c03860f39ee9da9
+      PROOF_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+      WEB_RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      WEB_SERVICE: healthia-wave14-diag-${{ github.run_id }}
+      RECORDER_EMAIL: wave14-diag-${{ github.run_id }}@example.test
+      RECORDER_PASSWORD: Wave14Diag${{ github.run_id }}Aa9
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Gate product source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code "$PRODUCT_SHA" -- app healthia_one healthia_agent web demo pyproject.toml README.md LICENSE
+          mkdir -p dist/wave14-state-divergence
+
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Resolve Gmail runtime
+        id: topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe healthia-gmail-worker --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail.json
+          runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail.json)"
+          test -n "$runtime_sa" && [[ "$topic" == projects/*/topics/* ]]
+          echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "topic=$topic" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy private diagnostic web surface
+        id: web
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$WEB_SERVICE" --image "$RECORDER_IMAGE" --project "$PROJECT_ID" --region "$REGION" \
+            --service-account "$WEB_RUNTIME_SA" --min 0 --max 1 --concurrency 10 --cpu 1 --memory 512Mi --timeout 600 \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=false,HEALTHIA_PROACTIVE_ENABLED=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID}" \
+            --set-secrets "HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" --no-allow-unauthenticated --quiet
+          url="$(gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Create reversible jobs
+        id: jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="healthia-diag-${GITHUB_RUN_ID}"
+          runtime_sa="${{ steps.topology.outputs.runtime_sa }}"
+          topic="${{ steps.topology.outputs.topic }}"
+          common="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${topic},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID},HEALTHIA_WAVE14_RECORDER_EMAIL=${RECORDER_EMAIL},HEALTHIA_WAVE14_RECORDER_PASSWORD=${RECORDER_PASSWORD}"
+          create_job() {
+            local key="$1" script="$2" phase="$3" timeout="${4:-240s}" job="${prefix}-${1//_/-}"
+            gcloud run jobs create "$job" --project "$PROJECT_ID" --region "$REGION" --image "$RECORDER_IMAGE" --service-account "$runtime_sa" \
+              --command python --args "${script},${phase}" --set-env-vars "$common" --max-retries 0 --task-timeout "$timeout" --quiet
+            echo "${key}_job=$job" >> "$GITHUB_OUTPUT"
+          }
+          create_job account_setup scripts/wave14_recorder_account.py setup
+          create_job account_cleanup scripts/wave14_recorder_account.py cleanup
+          create_job prestage scripts/wave14_recorder_control.py prestage
+          create_job activate scripts/wave14_recorder_control.py activate
+          create_job restore scripts/guardian_wave14_stitch_proof.py restore
+
+      - name: Prestage and create temporary account
+        id: prestage
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.prestage_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          gcloud run jobs execute "${{ steps.jobs.outputs.account_setup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - name: Establish authenticated web session and capture before state
+        id: session
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/wave14-state-divergence
+          url="${{ steps.web.outputs.url }}"
+          idtoken="${{ steps.web.outputs.token }}"
+          curl -fsS -c /tmp/cookies.txt -H "Authorization: Bearer $idtoken" -H 'Content-Type: application/json' \
+            -d "{\"email\":\"${RECORDER_EMAIL}\",\"password\":\"${RECORDER_PASSWORD}\"}" "$url/api/auth/login" > "$base/login.json"
+          jq -e --arg pid "$PROOF_PATIENT_ID" '.authenticated == true and .account.patient_id == $pid' "$base/login.json" >/dev/null
+          curl -fsS -b /tmp/cookies.txt -H "Authorization: Bearer $idtoken" "$url/api/bootstrap" > "$base/bootstrap-before.json"
+          jq '[.missions[]? | select(.mission_type=="bp_followup_guardian_measurement")]' "$base/bootstrap-before.json" > "$base/browser-missions-before.json"
+          [[ "$(jq length "$base/browser-missions-before.json")" == 0 ]]
+
+      - name: Activate autonomous Guardian
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.activate_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Compare Firestore and authenticated bootstrap repeatedly
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/wave14-state-divergence
+          url="${{ steps.web.outputs.url }}"
+          idtoken="${{ steps.web.outputs.token }}"
+          access="$(gcloud auth print-access-token)"
+          firestore_url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/healthia_one_patients/${PROOF_PATIENT_ID}"
+          for delay in 0 2 5 10 20 40; do
+            [[ "$delay" == 0 ]] || sleep "$delay"
+            tag="t${delay}"
+            curl -fsS -H "Authorization: Bearer $access" "$firestore_url" > "$base/firestore-${tag}.json"
+            curl -fsS -b /tmp/cookies.txt -H "Authorization: Bearer $idtoken" -H 'Cache-Control: no-cache' "$url/api/bootstrap?diag=${GITHUB_RUN_ID}-${tag}" > "$base/bootstrap-${tag}.json"
+            python - "$base/firestore-${tag}.json" "$base/bootstrap-${tag}.json" "$base/compare-${tag}.json" <<'PY'
+          import json, sys
+          fs=json.load(open(sys.argv[1], encoding='utf-8'))
+          api=json.load(open(sys.argv[2], encoding='utf-8'))
+          # Decode only the Firestore missions array recursively enough for mission metadata.
+          def decode(v):
+              if 'stringValue' in v: return v['stringValue']
+              if 'integerValue' in v: return int(v['integerValue'])
+              if 'doubleValue' in v: return float(v['doubleValue'])
+              if 'booleanValue' in v: return bool(v['booleanValue'])
+              if 'nullValue' in v: return None
+              if 'timestampValue' in v: return v['timestampValue']
+              if 'arrayValue' in v: return [decode(x) for x in v.get('arrayValue',{}).get('values',[])]
+              if 'mapValue' in v: return {k:decode(x) for k,x in v.get('mapValue',{}).get('fields',{}).items()}
+              return v
+          fields=fs.get('fields',{})
+          fs_missions=decode(fields.get('missions', {'arrayValue':{}}))
+          api_missions=api.get('missions') or []
+          target=lambda xs:[m for m in xs if m.get('mission_type')=='bp_followup_guardian_measurement']
+          out={'firestore':target(fs_missions),'bootstrap':target(api_missions),'profile_ids':{'firestore':decode(fields.get('profile',{'mapValue':{}})).get('id'),'bootstrap':(api.get('profile') or {}).get('id')}}
+          json.dump(out, open(sys.argv[3],'w',encoding='utf-8'), ensure_ascii=False, indent=2)
+          print(json.dumps(out, ensure_ascii=False))
+          PY
+          done
+          unset access
+          cat "$base"/compare-*.json
+
+      - name: Cleanup account
+        if: always() && steps.prestage.outputs.complete == 'true'
+        shell: bash
+        run: gcloud run jobs execute "${{ steps.jobs.outputs.account_cleanup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet || true
+
+      - name: Restore patient
+        if: always() && steps.prestage.outputs.complete == 'true'
+        shell: bash
+        run: gcloud run jobs execute "${{ steps.jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet || true
+
+      - name: Cleanup temporary resources
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          token="$(gcloud auth print-access-token)"
+          curl -sS -X DELETE -H "Authorization: Bearer ${token}" "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/healthia_wave14_stitch_proofs/${GITHUB_RUN_ID}" >/dev/null
+          unset token
+          for job in "${{ steps.jobs.outputs.account_setup_job }}" "${{ steps.jobs.outputs.account_cleanup_job }}" "${{ steps.jobs.outputs.prestage_job }}" "${{ steps.jobs.outputs.activate_job }}" "${{ steps.jobs.outputs.restore_job }}"; do
+            [[ -n "$job" ]] && gcloud run jobs delete "$job" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
+          done
+          gcloud run services delete "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
+
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave14-STATE-DIVERGENCE-DIAGNOSTIC
+          path: dist/wave14-state-divergence
+          if-no-files-found: warn
+          retention-days: 14
