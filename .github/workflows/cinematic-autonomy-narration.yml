@@ -26,27 +26,66 @@ jobs:
         with:
           project_id: healthia-6088a
 
-      - name: Synthesize premium Studio narration
+      - name: Synthesize full premium Studio narration
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/cinematic-narration
-          cat > /tmp/request.json <<'JSON'
-          {
-            "input": {
-              "ssml": "<speak><p>The conversation ends. <break time='180ms'/> HealthIA doesn't.</p><p>No new prompt. Guardian detects Ana's overdue blood-pressure follow-up, opens a mission, and reaches her through Gmail.</p><p>She replies: one twenty-eight over eighty. That event wakes HealthIA, updates her longitudinal record, and closes the same mission automatically.</p><p>Not a chatbot waiting for instructions. <break time='160ms'/> An agent completing a goal.</p></speak>"
-            },
-            "voice": {
-              "languageCode": "en-US",
-              "name": "en-US-Studio-Q"
-            },
-            "audioConfig": {
-              "audioEncoding": "LINEAR16",
-              "speakingRate": 1.06,
-              "volumeGainDb": 1.5
-            }
+          cat > /tmp/narration.txt <<'TEXT'
+          Health care should not reset every time a conversation ends.
+
+          HealthIA One is a patient-centered continuity agent built to remember what matters, understand what changes, and keep the next clinical goal alive.
+
+          It starts with the patient, not the interface. Identity, history, medications, symptoms, measurements, prior evidence, and current concerns become one longitudinal context.
+
+          During a conversation, HealthIA does more than answer. It continuously resolves three things: the goal, the context, and the next best action. Gemini and Google ADK help structure that reasoning while the patient stays in control.
+
+          When new evidence arrives, HealthIA preserves the original source first. A laboratory result, image, document, or measurement is extracted with provenance. If the evidence is uncertain, the system fails closed instead of inventing certainty.
+
+          That context moves forward. HealthIA can prepare a visit, compare new evidence with the current treatment plan, organize the clinical timeline, and surface what is still missing.
+
+          But continuity is not enough.
+
+          The defining moment begins after the conversation is over.
+
+          No new prompt is sent. No one asks the chatbot to continue.
+
+          Guardian detects that Ana's authorized blood-pressure follow-up is overdue. HealthIA creates a durable mission on its own and reaches the patient through Gmail.
+
+          Then it waits.
+
+          The patient replies: one twenty-eight over eighty.
+
+          That reply is not copied manually into the app. Gmail events wake HealthIA through Google Cloud. The measurement is recognized as clinical evidence, written into the longitudinal record, and the same mission that HealthIA opened is completed automatically.
+
+          The system identified a need, acted outside the chat, waited for the real world, understood the response, updated the patient record, and closed the goal.
+
+          That is the difference between a chatbot and an agent.
+
+          And autonomy has boundaries. HealthIA can pursue an authorized information goal, but it does not silently change treatment or cross a clinical decision that requires human authority. Consent, provenance, and deterministic safeguards stay visible throughout the workflow.
+
+          Under the hood, this is not a mockup. HealthIA runs on Google Cloud using Gemini, Google ADK, Cloud Run, Firestore, Eventarc, Pub/Sub, Gmail, Secret Manager, and Google Places. Its state persists beyond a single request, so the mission can survive time, logout, and external events.
+
+          The result is a different model of digital health.
+
+          A system that can talk when conversation is useful, stay quiet when it is not, remember what happened, and continue working toward the patient's next health goal.
+
+          HealthIA One.
+
+          The conversation can end.
+
+          The mission doesn't.
+          TEXT
+          python - <<'PY'
+          import json
+          text=open('/tmp/narration.txt').read().strip()
+          req={
+            'input': {'text': text},
+            'voice': {'languageCode':'en-US','name':'en-US-Studio-Q'},
+            'audioConfig': {'audioEncoding':'LINEAR16','speakingRate':1.02,'volumeGainDb':1.0,'pitch':-1.0}
           }
-          JSON
+          open('/tmp/request.json','w').write(json.dumps(req))
+          PY
           token="$(gcloud auth print-access-token)"
           curl -fsS -X POST \
             -H "Authorization: Bearer ${token}" \
@@ -54,11 +93,11 @@ jobs:
             --data-binary @/tmp/request.json \
             "https://texttospeech.googleapis.com/v1/text:synthesize" > /tmp/response.json
           jq -e '.audioContent and (.audioContent | length > 1000)' /tmp/response.json >/dev/null
-          jq -r '.audioContent' /tmp/response.json | base64 -d > dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav
-          sha256sum dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav > dist/cinematic-narration/voice.sha256
+          jq -r '.audioContent' /tmp/response.json | base64 -d > dist/cinematic-narration/HealthIA_FULL_CINEMATIC_STUDIO_Q.wav
+          sha256sum dist/cinematic-narration/HealthIA_FULL_CINEMATIC_STUDIO_Q.wav > dist/cinematic-narration/voice.sha256
           python - <<'PY'
           import wave, json, os
-          p='dist/cinematic-narration/HealthIA_AUTONOMY_STUDIO_Q.wav'
+          p='dist/cinematic-narration/HealthIA_FULL_CINEMATIC_STUDIO_Q.wav'
           with wave.open(p,'rb') as w:
               d={'duration': w.getnframes()/w.getframerate(), 'sample_rate': w.getframerate(), 'channels': w.getnchannels(), 'size': os.path.getsize(p)}
           open('dist/cinematic-narration/voice-probe.json','w').write(json.dumps(d, indent=2))
@@ -68,7 +107,7 @@ jobs:
       - name: Upload cinematic narration
         uses: actions/upload-artifact@v4
         with:
-          name: HealthIA-cinematic-autonomy-narration
+          name: HealthIA-full-cinematic-narration
           path: dist/cinematic-narration/
           if-no-files-found: error
           retention-days: 7
