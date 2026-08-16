@@ -29,7 +29,8 @@ HealthIA ONE uses:
 - **Firestore** for durable patient and mission state;
 - **private Google Cloud Storage** for original clinical evidence;
 - **Secret Manager** for sensitive configuration;
-- **Google Places / Maps Platform** for consent-authorized real-world resource discovery.
+- **Google Places / Maps Platform** for consent-authorized resource discovery;
+- **Gmail + Pub/Sub + Calendar + Google Tasks** for the preserved real external-action loop.
 
 The Cloud path uses service identity / ADC rather than embedding a Gemini key in the application runtime.
 
@@ -118,8 +119,11 @@ That is the idea behind HealthIA ONE:
 
 ## Judge evidence
 
-- Final Wave 4 submission candidate: https://github.com/arisnachy/healthia-one/pull/41
-- Preserved Google action-loop proof: https://github.com/arisnachy/healthia-one/pull/37
-- Public demo: https://youtu.be/-NWS65Hv_h0
+- Judge-first evidence map: https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md
+- Wave 4 submission lineage: https://github.com/arisnachy/healthia-one/pull/41
+- Preserved Google action-loop evidence: https://github.com/arisnachy/healthia-one/pull/37
+- Devpost-selected demo video: https://youtu.be/WTnln7u23sw
+
+The Wave 4 tested candidate is `a48710eeb5a2e8429a91f5004129064e5af37c1a`. The preserved full Google action-loop proof at `891745e1ab93dc78b9aa4e54d65b315befa885f2` is an ancestor of that candidate. They are intentionally distinguished rather than presented as the same LIVE run.
 
 All hackathon clinical demonstrations use synthetic patient data.
