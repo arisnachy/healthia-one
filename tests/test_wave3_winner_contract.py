@@ -16,21 +16,36 @@ def test_unanchored_reference_is_patient_visible_clarification_not_guess() -> No
     assert "No tengo evidencia suficiente" in response.message.content
 
 
-def test_winning_one_take_locks_all_product_fronts_and_old_video_fallback() -> None:
+def test_winning_one_take_locks_wave4_taskmaster_story_and_fallback_rule() -> None:
     doc = (ROOT / "docs/WINNING_ONE_TAKE.md").read_text(encoding="utf-8")
     for marker in (
-        "Natural conversation and reference repair",
-        "Evidence-first clinical result",
-        "Autonomous navigation mission",
-        "Human authorization is visible, not hidden",
-        "Event-driven continuation",
-        "Durable close and continuity",
-        "Comprobante de misión",
-        "old judge video remains the submission fallback",
+        "Problem + promise, inside the real app",
+        "Evidence-first multimodal result",
+        "Flagship Taskmaster mission",
+        "Human boundary",
+        "real Google Places",
+        "The second one",
+        "Real external-action proof",
+        "Continuity survives logout/login",
+        "Google Cloud proof",
+        "existing public judge video remains the fallback",
     ):
         assert marker.lower() in doc.lower()
     assert "unresolved pronoun is guessed" in doc
     assert "exact final HEAD is not green before recording/publication" in doc
+    assert "do not fake this scene" in doc.lower()
+    assert "no gate is lowered" in doc.lower()
+
+
+def test_judges_start_here_separates_current_wave4_from_preserved_live_proof() -> None:
+    doc = (ROOT / "JUDGES_START_HERE.md").read_text(encoding="utf-8")
+    assert "a48710eeb5a2e8429a91f5004129064e5af37c1a" in doc
+    assert "891745e1ab93dc78b9aa4e54d65b315befa885f2" in doc
+    assert "0 external Places searches before location consent" in doc
+    assert "same mission" in doc
+    assert "Authorization is not execution evidence" in doc
+    assert "ancestor of the Wave 4 candidate" in doc
+    assert "synthetic patient data" in doc
 
 
 def test_submission_delta_freezes_infrastructure_and_does_not_claim_replacement() -> None:
