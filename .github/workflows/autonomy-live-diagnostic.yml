@@ -26,7 +26,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Inspect private autonomy services without mutation
+      - name: Inspect private autonomy services and proof jobs without mutation
         shell: bash
         run: |
           set -euo pipefail
@@ -42,3 +42,12 @@ jobs:
               traffic: .status.traffic
             }' "/tmp/${service}.json"
           done
+          echo "=== active mainline proof jobs ==="
+          gcloud run jobs list --project "$PROJECT_ID" --region "$REGION" --format='value(metadata.name)' \
+            | grep '^healthia-mainline-' | tail -n 10 || true
+          echo "=== setup executions for current v3 run ==="
+          gcloud run jobs executions list \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --job healthia-mainline-31971215610-setup \
+            --limit 5 \
+            --format='table(metadata.name,status.conditions[0].type,status.conditions[0].status,status.conditions[0].message,status.startTime,status.completionTime)' || true
