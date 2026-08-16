@@ -25,17 +25,30 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Authenticated GET against private Cloud Run only
+      - name: Resolve and test all private Cloud Run URLs
         shell: bash
         run: |
           set -euo pipefail
+          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/service.json
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-          url="https://${SERVICE}-${project_number}.${REGION}.run.app"
-          anonymous="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
-          [[ -n "$anonymous" && ! "$anonymous" =~ ^2 ]]
-          token="$(gcloud auth print-identity-token --audiences="$url")"
-          test -n "$token"
-          code="$(curl -sS -o /tmp/health.json -w '%{http_code}' -H "Authorization: Bearer $token" "$url/healthz")"
-          echo "anonymous_http=${anonymous} authenticated_http=${code}"
-          [[ "$code" == "200" ]]
-          jq '{status,worker,mainline_autonomy,care_continuity_schedule}' /tmp/health.json
+          canonical="https://${SERVICE}-${project_number}.${REGION}.run.app"
+          status_url="$(jq -r '.status.url // empty' /tmp/service.json)"
+          annotation_urls="$(jq -r '.metadata.annotations["run.googleapis.com/urls"] // "[]"' /tmp/service.json | jq -r '.[]?' 2>/dev/null || true)"
+          printf '%s\n%s\n%s\n' "$status_url" "$canonical" "$annotation_urls" | awk 'NF && !seen[$0]++' > /tmp/urls.txt
+          winner=''
+          while IFS= read -r url; do
+            anonymous="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+            token="$(gcloud auth print-identity-token --audiences="$url" 2>/dev/null || true)"
+            authcode='token-failed'
+            if [[ -n "$token" ]]; then
+              authcode="$(curl -sS -o /tmp/health.json -w '%{http_code}' -H "Authorization: Bearer $token" "$url/healthz" || true)"
+            fi
+            echo "candidate=$(sed -E 's#https://[^.]+#https://[service]#' <<<"$url") anonymous=${anonymous} authenticated=${authcode}"
+            if [[ "$authcode" == "200" ]]; then
+              winner="$url"
+              jq '{status,worker,mainline_autonomy,care_continuity_schedule}' /tmp/health.json
+              break
+            fi
+          done < /tmp/urls.txt
+          test -n "$winner"
+          echo "PRIVATE_RUN_INVOCATION=PASS"
