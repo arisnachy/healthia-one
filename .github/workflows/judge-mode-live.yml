@@ -62,15 +62,22 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Build exact-head Judge Mode image
+      - name: Build exact-head Judge Mode image without log-stream privilege
         id: build
         shell: bash
         run: |
           set -euo pipefail
           image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-one-judge:${GITHUB_SHA}"
-          gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --quiet
-          digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=''
+          for _ in $(seq 1 120); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
           test -n "$digest"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
@@ -125,6 +132,7 @@ jobs:
 
           - URL: ${{ steps.deploy.outputs.url }}
           - Source SHA: ${GITHUB_SHA}
+          - Cloud Build id: ${{ steps.build.outputs.build_id }}
           - Image digest: ${{ steps.build.outputs.digest }}
           - Cloud Run revision: ${{ steps.deploy.outputs.revision }}
           - Public anonymous access: PASS
