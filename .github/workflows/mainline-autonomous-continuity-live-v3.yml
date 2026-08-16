@@ -1,0 +1,429 @@
+name: HealthIA mainline autonomous continuity LIVE v3
+
+on:
+  push:
+    branches:
+      - kira/autonomous-continuity-mainline
+      - main
+    paths:
+      - ".github/workflows/mainline-autonomous-continuity-live-v3.yml"
+      - "Dockerfile.autonomy-proof"
+      - "cloudbuild.autonomy-proof.yaml"
+      - "scripts/mainline_bp_continuity_proof.py"
+      - "scripts/guardian_wave14_stitch_proof.py"
+      - "healthia_one/autopilot_worker.py"
+      - "healthia_one/bp_followup_guardian.py"
+      - "healthia_one/guardian_email_delivery.py"
+      - "healthia_one/guardian_email_reply.py"
+      - "healthia_one/guardian_email_watch.py"
+      - "healthia_one/gmail_push_worker.py"
+      - "healthia_one/store.py"
+      - "healthia_one/models.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-mainline-autonomous-continuity-live
+  cancel-in-progress: false
+
+jobs:
+  exact-head-live:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      GMAIL_WORKER: healthia-gmail-worker
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      AUTOPILOT_TRIGGER: healthia-opportunity-events
+      CARE_JOB: healthia-care-continuity-daily
+      PROOF_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+      PROOF_COLLECTION: healthia_wave14_stitch_proofs
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Gate bounded BP autonomy before Cloud mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+          python -m pytest -q \
+            tests/test_autonomous_continuity_mainline_contract.py \
+            tests/test_autopilot_event_intents.py \
+            tests/test_bp_followup_guardian_resolution_loop.py \
+            tests/test_guardian_email_delivery.py \
+            tests/test_guardian_email_bidirectional.py \
+            tests/test_gmail_push_worker.py
+          python -m py_compile scripts/mainline_bp_continuity_proof.py scripts/guardian_wave14_stitch_proof.py
+          grep -F 'COPY scripts ./scripts' Dockerfile >/dev/null && { echo 'Production Dockerfile must not contain proof scripts' >&2; exit 1; } || true
+          grep -F 'COPY scripts ./scripts' Dockerfile.autonomy-proof >/dev/null
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Force safe baseline before proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services update "$AUTOPILOT_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=false" \
+            --quiet >/dev/null
+          if gcloud scheduler jobs describe "$CARE_JOB" --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs pause "$CARE_JOB" --project "$PROJECT_ID" --location "$REGION" --quiet >/dev/null || true
+          fi
+
+      - name: Snapshot current private topology
+        id: topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/mainline-autonomy-live
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          auto_url="https://${AUTOPILOT_SERVICE}-${project_number}.${REGION}.run.app"
+          gmail_url="https://${GMAIL_WORKER}-${project_number}.${REGION}.run.app"
+          gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/autopilot.before.json
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail.before.json
+          auto_image="$(jq -r '.spec.template.spec.containers[0].image // empty' /tmp/autopilot.before.json)"
+          gmail_image="$(jq -r '.spec.template.spec.containers[0].image // empty' /tmp/gmail.before.json)"
+          runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail.before.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail.before.json)"
+          test -n "$project_number" && test -n "$auto_image" && test -n "$gmail_image" && test -n "$runtime_sa"
+          [[ "$topic" == projects/*/topics/* ]]
+          for url in "$auto_url" "$gmail_url"; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+            if [[ -z "$code" || "$code" =~ ^2 ]]; then
+              echo "Private worker unexpectedly allows anonymous access: $url -> $code" >&2
+              exit 1
+            fi
+          done
+          location="$(gcloud firestore databases describe --database='(default)' --project "$PROJECT_ID" --format='value(locationId)')"
+          gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json
+          [[ "$(jq -r '.destination.cloudRun.service // empty' /tmp/trigger.json)" == "$AUTOPILOT_SERVICE" ]]
+          [[ "$(jq -r '.destination.cloudRun.path // empty' /tmp/trigger.json)" == "/events/firestore" ]]
+          trigger_sa="$(jq -r '.serviceAccount // empty' /tmp/trigger.json)"
+          test -n "$trigger_sa"
+          jq -e '.eventFilters[]? | select(.attribute=="type" and .value=="google.cloud.firestore.document.v1.created")' /tmp/trigger.json >/dev/null
+          jq -e '.eventFilters[]? | select(.attribute=="document" and .value=="healthia_autopilot_events/{eventId}")' /tmp/trigger.json >/dev/null
+          echo "auto_url=$auto_url" >> "$GITHUB_OUTPUT"
+          echo "gmail_url=$gmail_url" >> "$GITHUB_OUTPUT"
+          echo "auto_image=$auto_image" >> "$GITHUB_OUTPUT"
+          echo "gmail_image=$gmail_image" >> "$GITHUB_OUTPUT"
+          echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "topic=$topic" >> "$GITHUB_OUTPUT"
+          echo "trigger_sa=$trigger_sa" >> "$GITHUB_OUTPUT"
+          echo "eventarc_location=$location" >> "$GITHUB_OUTPUT"
+
+      - name: Build exact product image
+        id: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-autonomous-continuity:${GITHUB_SHA}"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=''
+          for _ in $(seq 1 120); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Build ephemeral proof overlay from exact product image
+        id: harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-autonomy-proof:${GITHUB_SHA}"
+          build_id="$(gcloud builds submit . \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --config cloudbuild.autonomy-proof.yaml \
+            --substitutions "_BASE_IMAGE=${{ steps.product.outputs.image }},_PROOF_IMAGE=${proof_image}" \
+            --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=''
+          for _ in $(seq 1 120); do
+            digest="$(gcloud artifacts docker images describe "$proof_image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "image=$proof_image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Promote exact product image to private workers
+        id: promote
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_image="${{ steps.product.outputs.image }}"
+          gcloud run services update "$AUTOPILOT_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "$product_image" \
+            --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=true" \
+            --quiet
+          gcloud run services update "$GMAIL_WORKER" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "$product_image" \
+            --quiet
+          auto_revision="$(gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          gmail_revision="$(gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$auto_revision" && test -n "$gmail_revision"
+          echo "auto_revision=$auto_revision" >> "$GITHUB_OUTPUT"
+          echo "gmail_revision=$gmail_revision" >> "$GITHUB_OUTPUT"
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify production workers remain private and exact
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in "$AUTOPILOT_SERVICE" "$GMAIL_WORKER"; do
+            running="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+            [[ "$running" == "${{ steps.product.outputs.image }}" || "$running" == *"${{ steps.product.outputs.digest }}" ]]
+          done
+          for url in "${{ steps.topology.outputs.auto_url }}" "${{ steps.topology.outputs.gmail_url }}"; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+            if [[ -z "$code" || "$code" =~ ^2 ]]; then
+              echo "Private worker became anonymously callable: $url -> $code" >&2
+              exit 1
+            fi
+          done
+
+      - name: Create reversible proof jobs from ephemeral overlay
+        id: jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="healthia-mainline-${GITHUB_RUN_ID}"
+          proof_image="${{ steps.harness.outputs.image }}"
+          common="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${{ steps.topology.outputs.topic }},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID}"
+          for phase in setup await-email reply verify restore; do
+            job="${prefix}-${phase}"
+            script_phase="$phase"
+            [[ "$phase" == "await-email" ]] && script_phase="await_email"
+            gcloud run jobs create "$job" \
+              --project "$PROJECT_ID" --region "$REGION" \
+              --image "$proof_image" --service-account "${{ steps.topology.outputs.runtime_sa }}" \
+              --command python \
+              --args "scripts/mainline_bp_continuity_proof.py,${script_phase}" \
+              --set-env-vars "$common" \
+              --max-retries 0 --task-timeout 300s --quiet
+            key="${phase//-/_}_job"
+            echo "${key}=$job" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: SETUP — no prompt creates one overdue BP mission
+        id: setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.setup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - name: WAIT — Eventarc private worker sends real Gmail
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.await_email_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: REPLY — controlled synthetic BP 128/80 on same Gmail thread
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.reply_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: VERIFY — PubSub persists VitalRecord and closes same mission
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.verify_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Gate durable exact-head evidence
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          proof_url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}"
+          curl -fsS -H "Authorization: Bearer ${token}" "$proof_url" > /tmp/proof.json
+          unset token
+          status="$(jq -r '.fields.status.stringValue // empty' /tmp/proof.json)"
+          mission_status="$(jq -r '.fields.mission_status.stringValue // empty' /tmp/proof.json)"
+          source_type="$(jq -r '.fields.vital_source_type.stringValue // empty' /tmp/proof.json)"
+          outbox_status="$(jq -r '.fields.outbox_status.stringValue // empty' /tmp/proof.json)"
+          reply_count="$(jq -r '.fields.processed_reply_count.integerValue // "0"' /tmp/proof.json)"
+          eventarc_outbound="$(jq -r '.fields.eventarc_outbound.booleanValue // false' /tmp/proof.json)"
+          gmail_inbound="$(jq -r '.fields.gmail_pubsub_inbound.booleanValue // false' /tmp/proof.json)"
+          no_prompt="$(jq -r '.fields.no_chat_prompt_used.booleanValue // false' /tmp/proof.json)"
+          trigger_model_calls="$(jq -r '.fields.trigger_model_calls.integerValue // "-1"' /tmp/proof.json)"
+          trigger_network_calls="$(jq -r '.fields.trigger_network_calls.integerValue // "-1"' /tmp/proof.json)"
+          trigger_origin="$(jq -r '.fields.trigger_origin.stringValue // empty' /tmp/proof.json)"
+          [[ "$status" == full_loop_live_pass ]]
+          [[ "$mission_status" == completed ]]
+          [[ "$source_type" == patient_email_reply ]]
+          [[ "$outbox_status" == processed ]]
+          [[ "$reply_count" == 1 ]]
+          [[ "$eventarc_outbound" == true ]]
+          [[ "$gmail_inbound" == true ]]
+          [[ "$no_prompt" == true ]]
+          [[ "$trigger_model_calls" == 0 ]]
+          [[ "$trigger_network_calls" == 0 ]]
+          [[ "$trigger_origin" == deterministic_bp_followup_reconciliation ]]
+          cat > dist/mainline-autonomy-live/report.md <<EOF
+          # HealthIA ONE — mainline autonomous continuity LIVE PASS
+
+          - Exact candidate SHA: ${GITHUB_SHA}
+          - Production image digest: ${{ steps.product.outputs.digest }}
+          - Ephemeral proof-overlay digest: ${{ steps.harness.outputs.digest }}
+          - Production Cloud Build: ${{ steps.product.outputs.build_id }}
+          - Proof-overlay Cloud Build: ${{ steps.harness.outputs.build_id }}
+          - Autopilot revision: ${{ steps.promote.outputs.auto_revision }}
+          - Gmail worker revision: ${{ steps.promote.outputs.gmail_revision }}
+          - No chat prompt used: true
+          - Trigger origin: deterministic_bp_followup_reconciliation
+          - Trigger model calls: 0
+          - Trigger network calls: 0
+          - Durable boundary count: 5
+          - Eventarc outbound: true
+          - Real Gmail thread: verified; identifier redacted
+          - Gmail users.watch / authenticated PubSub inbound: true
+          - Canonical vital provenance: patient_email_reply
+          - Same mission terminal status: completed
+          - Reply processed exactly once: 1
+
+          **HealthIA noticed the follow-up was overdue. Nobody prompted it.**
+
+          **One unattended health mission crossed 5 durable boundaries without another chat prompt.**
+
+          Production workers run the clean product image. The proof overlay inherits from that exact product image and adds only the reversible verification scripts; it is never deployed as a product service.
+
+          Synthetic-data truth boundary: no autonomous diagnosis, prescription, medication change, or declaration of blood-pressure control. No email address, OAuth material, message body, precise location, or secret is included here.
+          EOF
+          echo "pass=true" >> "$GITHUB_OUTPUT"
+
+      - name: Activate daily private trigger only after LIVE PASS
+        if: steps.evidence.outputs.pass == 'true'
+        id: schedule
+        shell: bash
+        run: |
+          set -euo pipefail
+          scheduler_sa="${{ steps.topology.outputs.trigger_sa }}"
+          uri="${{ steps.topology.outputs.auto_url }}/scheduled/care"
+          audience="${{ steps.topology.outputs.auto_url }}"
+          if gcloud scheduler jobs describe "$CARE_JOB" --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$CARE_JOB" \
+              --project "$PROJECT_ID" --location "$REGION" \
+              --schedule "0 8 * * *" --time-zone "America/Santo_Domingo" \
+              --uri "$uri" --http-method POST \
+              --oidc-service-account-email "$scheduler_sa" --oidc-token-audience "$audience" \
+              --attempt-deadline 300s \
+              --description "HealthIA mainline: daily explicitly opted-in blood-pressure continuity only" \
+              --quiet
+          else
+            gcloud scheduler jobs create http "$CARE_JOB" \
+              --project "$PROJECT_ID" --location "$REGION" \
+              --schedule "0 8 * * *" --time-zone "America/Santo_Domingo" \
+              --uri "$uri" --http-method POST \
+              --oidc-service-account-email "$scheduler_sa" --oidc-token-audience "$audience" \
+              --attempt-deadline 300s \
+              --description "HealthIA mainline: daily explicitly opted-in blood-pressure continuity only" \
+              --quiet
+          fi
+          gcloud scheduler jobs resume "$CARE_JOB" --project "$PROJECT_ID" --location "$REGION" --quiet || true
+          gcloud scheduler jobs describe "$CARE_JOB" --project "$PROJECT_ID" --location "$REGION" --format=json > /tmp/care-job.json
+          [[ "$(jq -r '.schedule' /tmp/care-job.json)" == "0 8 * * *" ]]
+          [[ "$(jq -r '.timeZone' /tmp/care-job.json)" == "America/Santo_Domingo" ]]
+          [[ "$(jq -r '.httpTarget.uri' /tmp/care-job.json)" == "$uri" ]]
+          [[ "$(jq -r '.httpTarget.oidcToken.serviceAccountEmail' /tmp/care-job.json)" == "$scheduler_sa" ]]
+          cat >> dist/mainline-autonomy-live/report.md <<EOF
+
+          ## Operational trigger
+          - Cloud Scheduler: ${CARE_JOB}
+          - Cadence: daily 08:00 America/Santo_Domingo
+          - Target: private /scheduled/care
+          - OIDC identity: existing Eventarc service account
+          - Runtime autonomy: ON only after LIVE PASS
+          EOF
+          echo "scheduler_sa=$scheduler_sa" >> "$GITHUB_OUTPUT"
+          echo "uri=$uri" >> "$GITHUB_OUTPUT"
+
+      - name: Restore original synthetic patient state
+        if: always() && steps.setup.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Delete proof metadata
+        if: always() && steps.setup.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set +e
+          token="$(gcloud auth print-access-token)"
+          curl -sS -X DELETE -H "Authorization: Bearer ${token}" \
+            "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}" >/dev/null
+
+      - name: Fail-closed rollback on terminal failure
+        if: failure() && steps.promote.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set +e
+          gcloud scheduler jobs pause "$CARE_JOB" --project "$PROJECT_ID" --location "$REGION" --quiet >/dev/null 2>&1 || true
+          gcloud run services update "$AUTOPILOT_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.topology.outputs.auto_image }}" \
+            --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=false" \
+            --quiet >/dev/null 2>&1
+          gcloud run services update "$GMAIL_WORKER" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.topology.outputs.gmail_image }}" \
+            --quiet >/dev/null 2>&1
+
+      - name: Cleanup proof jobs
+        if: always() && steps.jobs.outputs.setup_job != ''
+        shell: bash
+        run: |
+          set +e
+          for job in \
+            "${{ steps.jobs.outputs.setup_job }}" \
+            "${{ steps.jobs.outputs.await_email_job }}" \
+            "${{ steps.jobs.outputs.reply_job }}" \
+            "${{ steps.jobs.outputs.verify_job }}" \
+            "${{ steps.jobs.outputs.restore_job }}"; do
+            [[ -n "$job" ]] && gcloud run jobs delete "$job" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
+          done
+
+      - name: Upload sanitized autonomy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-mainline-autonomous-continuity-LIVE-v3-${{ github.sha }}
+          path: dist/mainline-autonomy-live/
+          if-no-files-found: warn
+          retention-days: 30
