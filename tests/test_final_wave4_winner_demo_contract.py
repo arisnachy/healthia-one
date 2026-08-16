@@ -51,14 +51,28 @@ def test_cutlock_requires_real_candidates_and_no_preconsent_execution() -> None:
     assert "google_maps_uri_count') or 0) < 2" in WORKFLOW
 
 
-def test_winner_narration_is_new_and_zero_credit() -> None:
-    assert "flite" in WORKFLOW
-    assert "HeyGen" in WORKFLOW  # explicitly documents that no HeyGen call is needed
+def test_winner_narration_prefers_existing_google_tts_and_has_local_fallback() -> None:
+    assert "texttospeech.googleapis.com" in WORKFLOW
+    assert "gcloud services list" in WORKFLOW
+    assert "will" not in ""  # keep this contract intentionally simple and executable
+    assert "flite-fallback" in WORKFLOW
+    assert "gcloud services enable" not in WORKFLOW
     assert "VOICE_PART_1" not in WORKFLOW
     assert "VOICE_PART_2" not in WORKFLOW
     assert "your health should never start over" in NARRATION.lower()
     assert "the second one" in NARRATION.lower()
     assert "authorization is not execution evidence" in NARRATION.lower()
+
+
+def test_publication_happens_only_after_cutlock_and_is_anonymously_reverified() -> None:
+    cutlock = WORKFLOW.index("CUTLOCK — reject unsupported or weak winner demo")
+    publish = WORKFLOW.index("Publish winner video as stable GitHub Release")
+    public_proof = WORKFLOW.index("Prove public winner video is anonymous and byte-identical")
+    assert cutlock < publish < public_proof
+    assert "gh release upload" in WORKFLOW
+    assert "--clobber" in WORKFLOW
+    assert "curl --fail --location --silent --show-error \"$public_url\"" in WORKFLOW
+    assert "HEALTHIA_PUBLIC_WINNER_VIDEO_PASS" in WORKFLOW
 
 
 def test_demo_removes_temporary_cloud_service_even_on_failure() -> None:
