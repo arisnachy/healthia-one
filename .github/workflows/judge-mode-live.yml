@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - kira/autonomous-continuity-mainline
+      - main
     paths:
       - "healthia_one/judge_mode.py"
       - "healthia_one/autonomous_continuity.py"
@@ -86,10 +87,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Cloud Run's current recommended public-access mechanism is to disable
-          # the Invoker IAM check for this deliberately read-only service.  This
-          # avoids depending on an allUsers IAM binding while the private HealthIA
-          # workers retain normal IAM enforcement.
           gcloud run deploy "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
@@ -105,32 +102,27 @@ jobs:
             --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${GITHUB_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=pending-exact-head-proof" \
             --quiet
 
-          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/judge-service.json
-          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/judge-service.json)"
-          invoker_disabled="$(jq -r '.metadata.annotations["run.googleapis.com/invoker-iam-disabled"] // "false"' /tmp/judge-service.json)"
+          revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
           canonical="https://${SERVICE}-${project_number}.${REGION}.run.app"
-          status_url="$(jq -r '.status.url // empty' /tmp/judge-service.json)"
-          annotation_urls="$(jq -r '.metadata.annotations["run.googleapis.com/urls"] // "[]"' /tmp/judge-service.json | jq -r '.[]?' 2>/dev/null || true)"
           test -n "$revision" && test -n "$project_number"
-          [[ "$invoker_disabled" == "true" ]]
 
+          # The load-bearing proof of public access is the anonymous request itself,
+          # not a metadata annotation whose representation varies across Run APIs.
           url=''
-          for _ in $(seq 1 30); do
-            while IFS= read -r candidate; do
-              [[ -n "$candidate" ]] || continue
-              body="$(curl -sS --max-time 10 "$candidate/healthz" 2>/dev/null || true)"
-              if [[ "$(jq -r '.mode // empty' <<<"$body" 2>/dev/null || true)" == "judge_read_only_synthetic" ]]; then
-                url="$candidate"
-                break 2
-              fi
-            done < <(printf '%s\n%s\n%s\n' "$canonical" "$status_url" "$annotation_urls" | awk 'NF && !seen[$0]++')
+          for attempt in $(seq 1 30); do
+            code="$(curl -sS --max-time 10 -o /tmp/health.json -w '%{http_code}' "$canonical/healthz" || true)"
+            mode="$(jq -r '.mode // empty' /tmp/health.json 2>/dev/null || true)"
+            echo "Judge Mode anonymous probe attempt=${attempt} code=${code} mode=${mode}"
+            if [[ "$code" == "200" && "$mode" == "judge_read_only_synthetic" ]]; then
+              url="$canonical"
+              break
+            fi
             sleep 2
           done
           test -n "$url"
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "invoker_disabled=$invoker_disabled" >> "$GITHUB_OUTPUT"
 
       - name: Anonymous public verification
         shell: bash
@@ -139,6 +131,7 @@ jobs:
           url="${{ steps.deploy.outputs.url }}"
           curl -fsS "$url/healthz" > /tmp/health.json
           curl -fsS "$url/api/proof" > /tmp/proof.json
+          curl -fsS "$url/api/synthetic-state" > /tmp/state.json
           curl -fsS "$url/" > /tmp/home.html
           [[ "$(jq -r '.mode' /tmp/health.json)" == "judge_read_only_synthetic" ]]
           [[ "$(jq -r '.mutations' /tmp/health.json)" == "false" ]]
@@ -146,7 +139,9 @@ jobs:
           [[ "$(jq -r '.secrets' /tmp/health.json)" == "false" ]]
           [[ "$(jq -r '.source_sha' /tmp/health.json)" == "$GITHUB_SHA" ]]
           [[ "$(jq -r '.boundary_count' /tmp/proof.json)" == "5" ]]
+          [[ "$(jq -r '.judge_mode' /tmp/proof.json)" == "read_only_synthetic_evidence" ]]
           grep -F "Nobody prompted it." /tmp/home.html >/dev/null
+          grep -F "JUDGE MODE · READ ONLY · SYNTHETIC" /tmp/home.html >/dev/null
           for path in /api/proof /api/synthetic-state /; do
             code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$url$path")"
             [[ "$code" == "405" ]]
@@ -165,15 +160,14 @@ jobs:
           - Cloud Build id: ${{ steps.build.outputs.build_id }}
           - Image digest: ${{ steps.build.outputs.digest }}
           - Cloud Run revision: ${{ steps.deploy.outputs.revision }}
-          - Invoker IAM check disabled for this read-only public surface: ${{ steps.deploy.outputs.invoker_disabled }}
-          - Public anonymous access: PASS
+          - Anonymous GET /healthz: PASS
           - Mutation endpoints: NONE / POST checks return 405
           - Secrets embedded in surface: NONE
           - Model calls from surface: NONE
           - Patient data: SYNTHETIC ONLY
           - min instances: 0
           - max instances: 1
-          - Exact-head autonomous live proof: PENDING separate gate
+          - Exact-head autonomous live proof: independently gated
           EOF
 
       - name: Upload Judge Mode evidence
