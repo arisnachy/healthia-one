@@ -119,7 +119,7 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
           echo "HEALTHIA_EXACT_REVISION_BOUND $revision"
 
-      - name: Deploy exact-head public read-only Judge Mode
+      - name: Deploy exact-head private read-only Judge Mode
         id: judge
         shell: bash
         env:
@@ -134,15 +134,18 @@ jobs:
             --args "healthia_one.judge_mode:app,--host,0.0.0.0,--port,8080" \
             --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${SOURCE_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=31972928348" \
             --min 0 --max 1 --memory 256Mi --cpu 1 \
-            --ingress all --no-invoker-iam-check --quiet
+            --ingress all --no-allow-unauthenticated --quiet
           url="$(gcloud run services describe "$JUDGE_SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-          test -n "$url"
-          curl --fail --silent --show-error "$url/judge-health" > /tmp/judge-health.json
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          test -n "$url" && test -n "$token"
+          echo "::add-mask::$token"
+          curl --fail --silent --show-error -H "Authorization: Bearer ${token}" "$url/judge-health" > /tmp/judge-health.json
           test "$(jq -r '.source_sha' /tmp/judge-health.json)" = "$SOURCE_SHA"
           test "$(jq -r '.mode' /tmp/judge-health.json)" = "judge_read_only_synthetic"
           test "$(jq -r '.mutations' /tmp/judge-health.json)" = "false"
           echo "url=$url" >> "$GITHUB_OUTPUT"
-          echo "HEALTHIA_EXACT_HEAD_JUDGE_MODE_PASS $url"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_EXACT_HEAD_PRIVATE_JUDGE_MODE_PASS $url"
 
       - uses: actions/setup-python@v5
         with:
@@ -169,6 +172,7 @@ jobs:
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
           HEALTHIA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           HEALTHIA_JUDGE_URL: ${{ steps.judge.outputs.url }}
+          HEALTHIA_JUDGE_ID_TOKEN: ${{ steps.judge.outputs.token }}
         run: python scripts/record_final_wave4_winner_demo.py
 
       - name: Build new narrated winner master
