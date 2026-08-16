@@ -1,0 +1,239 @@
+name: Guardian Wave 14 Eventarc phase 5 propagation-safe final proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/guardian-wave14-eventarc-phase5.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave14-eventarc-phase5
+  cancel-in-progress: false
+
+jobs:
+  finish:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/guardian-wave14-eventarc-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      PRODUCT_SHA: f9a3906484095460916218623a919a01b4f87e30
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      AUTOPILOT_TRIGGER: healthia-opportunity-events
+      EVENTARC_SA: healthia-autopilot-eventarc@healthia-6088a.iam.gserviceaccount.com
+    steps:
+      - name: Checkout exact merged Wave 14 source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCT_SHA }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Wait for private Autopilot service readiness and propagation
+        id: ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/guardian-wave14-eventarc-phase5
+          [[ "$(git rev-parse HEAD)" == "$PRODUCT_SHA" ]]
+          ready=false
+          revision=''
+          url=''
+          for _ in $(seq 1 30); do
+            gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/autopilot.json
+            ready="$(jq -r '[.status.conditions[]? | select(.type=="Ready") | .status][0] // "False"' /tmp/autopilot.json)"
+            revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/autopilot.json)"
+            url="$(jq -r '.status.url // empty' /tmp/autopilot.json)"
+            if [[ "$ready" == True && -n "$revision" && -n "$url" ]]; then break; fi
+            sleep 5
+          done
+          [[ "$ready" == True ]]
+          test -n "$revision" && test -n "$url"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$url/healthz" || true)"
+          if [[ -z "$code" || "$code" =~ ^2 ]]; then echo "Autopilot unexpectedly public" >&2; exit 1; fi
+          location="$(gcloud firestore databases describe --database='(default)' --project "$PROJECT_ID" --format='value(locationId)')"
+          test -n "$location"
+          gcloud iam service-accounts describe "$EVENTARC_SA" --project "$PROJECT_ID" >/dev/null
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "location=$location" >> "$GITHUB_OUTPUT"
+          {
+            echo "# HealthIA Wave 14 Eventarc propagation-safe final proof"
+            echo "Product SHA: $PRODUCT_SHA"
+            echo "Autopilot revision: $revision"
+            echo "Autopilot Ready=True: yes"
+            echo "Autopilot private: yes"
+            echo "Firestore location: $location"
+          } > dist/guardian-wave14-eventarc-phase5/report.md
+          # Allow control-plane propagation after Ready=True before Eventarc validates destination.
+          sleep 25
+
+      - name: Verify project-level trigger IAM
+        shell: bash
+        run: |
+          set -euo pipefail
+          policy="$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json)"
+          jq -e --arg m "serviceAccount:$EVENTARC_SA" '.bindings[]? | select(.role=="roles/eventarc.eventReceiver") | .members[]? | select(.==$m)' <<<"$policy" >/dev/null
+          jq -e --arg m "serviceAccount:$EVENTARC_SA" '.bindings[]? | select(.role=="roles/run.invoker") | .members[]? | select(.==$m)' <<<"$policy" >/dev/null
+
+      - name: Create Eventarc trigger with readiness retry
+        id: trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          location="${{ steps.ready.outputs.location }}"
+          if gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json 2>/dev/null; then
+            echo "Trigger already exists; verifying exact contract."
+          else
+            created=false
+            for attempt in $(seq 1 12); do
+              set +e
+              output="$(gcloud eventarc triggers create "$AUTOPILOT_TRIGGER" \
+                --project "$PROJECT_ID" --location "$location" \
+                --destination-run-service "$AUTOPILOT_SERVICE" \
+                --destination-run-region "$REGION" \
+                --destination-run-path "/events/firestore" \
+                --event-filters "type=google.cloud.firestore.document.v1.created" \
+                --event-filters "database=(default)" \
+                --event-filters-path-pattern "document=healthia_autopilot_events/{eventId}" \
+                --event-data-content-type application/protobuf \
+                --service-account "$EVENTARC_SA" --quiet 2>&1)"
+              rc=$?
+              set -e
+              if [[ $rc -eq 0 ]]; then created=true; break; fi
+              if grep -q 'SERVICE_NOT_READY\|is not ready' <<<"$output"; then
+                echo "Eventarc destination propagation not ready yet (attempt $attempt/12); retrying..."
+                sleep 10
+                continue
+              fi
+              echo "$output" >&2
+              exit $rc
+            done
+            [[ "$created" == true ]]
+            gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json
+          fi
+          [[ "$(jq -r '.destination.cloudRun.service // empty' /tmp/trigger.json)" == "$AUTOPILOT_SERVICE" ]]
+          [[ "$(jq -r '.destination.cloudRun.region // empty' /tmp/trigger.json)" == "$REGION" ]]
+          [[ "$(jq -r '.destination.cloudRun.path // empty' /tmp/trigger.json)" == "/events/firestore" ]]
+          [[ "$(jq -r '.eventFilters.type // empty' /tmp/trigger.json)" == "google.cloud.firestore.document.v1.created" ]]
+          [[ "$(jq -r '.eventFilters.database // empty' /tmp/trigger.json)" == "(default)" ]]
+          [[ "$(jq -r '.eventFilters.document // empty' /tmp/trigger.json)" == "healthia_autopilot_events/{eventId}" ]]
+          [[ "$(jq -r '.serviceAccount // empty' /tmp/trigger.json)" == "$EVENTARC_SA" ]]
+          echo "location=$location" >> "$GITHUB_OUTPUT"
+          # Give a newly-created trigger time to finish provisioning.
+          sleep 20
+
+      - name: Install exact product package for isolated probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip >/dev/null
+          python -m pip install -e . >/dev/null
+
+      - name: Create isolated Firestore outbox event
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+          python - <<'PY' > /tmp/probe.json
+          import json, os
+          from google.cloud import firestore
+          from healthia_one.autopilot_events import FirestoreEventOutboxStore
+          from healthia_one.autopilot_runtime import AutopilotEvent
+          from healthia_one.models import PatientState
+          from healthia_one.store import PATIENT_STATE_COLLECTION
+          project=os.environ['GOOGLE_CLOUD_PROJECT']; patient_id=f"patient_eventarc_phase5_{os.environ['GITHUB_RUN_ID']}"
+          state=PatientState(); state.profile.id=patient_id; state.profile.display_name='HealthIA Eventarc Synthetic Probe'; state.profile.email=''; state.consent.proactive_enabled=False; state.consent.signal_types=[]
+          c=firestore.Client(project=project); c.collection(PATIENT_STATE_COLLECTION).document(patient_id).set(state.model_dump(mode='json'))
+          event=AutopilotEvent(patient_id=patient_id,event_type='patient_state_changed',subject_id='eventarc_probe',payload={'source':'eventarc_live_probe','notification_requested':False})
+          record=FirestoreEventOutboxStore(project=project).put(event)
+          print(json.dumps({'patient_id':patient_id,'event_id':record.id,'status':record.status}))
+          PY
+          echo "patient_id=$(jq -r '.patient_id' /tmp/probe.json)" >> "$GITHUB_OUTPUT"
+          echo "event_id=$(jq -r '.event_id' /tmp/probe.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait exclusively for Eventarc autonomous processing
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+          event_id="${{ steps.probe.outputs.event_id }}"; status=pending; attempts=0; last_error=''
+          for _ in $(seq 1 120); do
+            readarray -t v < <(EVENT_ID="$event_id" python - <<'PY'
+          import os
+          from healthia_one.autopilot_events import FirestoreEventOutboxStore
+          r=FirestoreEventOutboxStore(project=os.environ['GOOGLE_CLOUD_PROJECT']).get(os.environ['EVENT_ID'])
+          print(r.status if r else 'missing'); print(r.attempts if r else 0); print((r.last_error if r else 'missing').replace('\n',' ')[:200])
+          PY
+            )
+            status="${v[0]:-missing}"; attempts="${v[1]:-0}"; last_error="${v[2]:-}"
+            [[ "$status" == processed ]] && break
+            if [[ "$status" == failed ]]; then echo "Eventarc invoked worker but processing failed: $last_error" >&2; exit 1; fi
+            sleep 3
+          done
+          [[ "$status" == processed ]]
+          [[ "$attempts" -ge 1 ]]
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
+
+      - name: Record FINAL LIVE PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo ""
+            echo "## FINAL LIVE PASS"
+            echo "Autopilot revision: ${{ steps.ready.outputs.revision }}"
+            echo "Autopilot private: yes"
+            echo "Eventarc trigger: $AUTOPILOT_TRIGGER"
+            echo "Eventarc location: ${{ steps.trigger.outputs.location }}"
+            echo "Eventarc dedicated identity: $EVENTARC_SA"
+            echo "Outbox final status: ${{ steps.verify.outputs.status }}"
+            echo "Processing attempts: ${{ steps.verify.outputs.attempts }}"
+            echo "Proven path: Firestore create -> Eventarc -> authenticated IAM -> private Cloud Run /events/firestore -> durable processed"
+            echo "No direct worker call was made; no Gmail, push, model, paid network, treatment or clinical action was requested by the probe."
+          } >> dist/guardian-wave14-eventarc-phase5/report.md
+          cat dist/guardian-wave14-eventarc-phase5/report.md
+
+      - name: Cleanup isolated probe
+        if: always() && steps.probe.outputs.event_id != ''
+        shell: bash
+        run: |
+          set +e
+          export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
+          PATIENT_ID="${{ steps.probe.outputs.patient_id }}" EVENT_ID="${{ steps.probe.outputs.event_id }}" python - <<'PY'
+          import os
+          from google.cloud import firestore
+          from healthia_one.autopilot_runtime import event_key
+          from healthia_one.autopilot_events import FirestoreEventOutboxStore
+          from healthia_one.store import PATIENT_STATE_COLLECTION
+          project=os.environ['GOOGLE_CLOUD_PROJECT']; patient_id=os.environ['PATIENT_ID']; event_id=os.environ['EVENT_ID']; c=firestore.Client(project=project)
+          r=FirestoreEventOutboxStore(project=project).get(event_id)
+          if r:
+              claim_id=event_key(r.event); c.collection('healthia_autopilot_claims').document(patient_id).collection('claims').document(claim_id).delete(); c.collection('healthia_autopilot_receipts').document(patient_id).collection('receipts').document(claim_id).delete()
+          c.collection('healthia_autopilot_events').document(event_id).delete(); c.collection(PATIENT_STATE_COLLECTION).document(patient_id).delete(); c.collection('healthia_opportunity_vaults').document(patient_id).delete()
+          PY
+
+      - name: Upload final propagation-safe proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave14-Eventarc-PHASE5-FINAL-LIVE-proof
+          path: dist/guardian-wave14-eventarc-phase5
+          if-no-files-found: warn
+          retention-days: 30
