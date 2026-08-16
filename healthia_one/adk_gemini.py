@@ -11,8 +11,10 @@ from healthia_one.control import audit
 from healthia_one.conversation_brain import selective_memory, semantic_packet
 from healthia_one.cost_guard import CostGuardBlocked
 from healthia_one.gemini import GeminiResponder
+from healthia_one.google_mission_chat import GoogleMissionConversationRouter
 from healthia_one.language import current_requested_locale, language_instruction, resolve_response_locale
 from healthia_one.models import MissionStatus, PatientState, RiskLevel
+from healthia_one.safety import assess_text
 
 
 PATIENT_RESPONSE_SYSTEM_INSTRUCTION = """
@@ -77,6 +79,7 @@ class AdkGeminiResponder(GeminiResponder):
     def __init__(self, settings: Settings, client_factory: Callable[[], Any] | None = None) -> None:
         super().__init__(settings, client_factory=client_factory)
         self.adk_runtime = AdkClinicalRuntime(settings)
+        self.google_mission_router = GoogleMissionConversationRouter(settings)
 
     @staticmethod
     def _response_locale(state: PatientState, text: str) -> str:
@@ -460,6 +463,24 @@ class AdkGeminiResponder(GeminiResponder):
         interview = draft.message.metadata.get("clinical_interview")
         if isinstance(interview, dict) and interview.get("status") == "ready_for_synthesis":
             return await self._enhance_clinical_resolution(state, draft, interview)
+
+        if draft.message.metadata.get("google_mission_candidate"):
+            safety = assess_text(patient_text)
+            if not safety.must_stop_normal_flow:
+                mission_response = await self.google_mission_router.respond(state, patient_text)
+                if mission_response is not None:
+                    response_locale = self._response_locale(state, patient_text)
+                    mission_response.message.metadata.update(
+                        {
+                            "response_locale": response_locale,
+                            "llm_backend": "gemini_api",
+                            "llm_status": "google_mission_routed",
+                            "google_mission_routing_order": "deterministic_safety_then_google_mission",
+                        }
+                    )
+                    self.last_status = "google_mission_routed"
+                    self.last_error = ""
+                    return mission_response
 
         result = await super().enhance(state, patient_text, draft)
         response_locale = self._response_locale(state, patient_text)

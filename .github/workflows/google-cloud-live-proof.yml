@@ -1,0 +1,200 @@
+name: Google Health Constellation live proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/google-cloud-live-proof.yml"
+      - "healthia_one/gmail_push_worker.py"
+      - "deployment/deploy-gmail-push-worker.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-google-live-proof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-health-constellation')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      BASE_SERVICE: healthia-one-demo
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Build and prove authenticated PubSub to private Cloud Run
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/google-live-proof
+          proof="dist/google-live-proof/proof.md"
+          source_sha="$(git rev-parse HEAD)"
+          suffix="${GITHUB_RUN_ID}"
+          service="healthia-gmail-proof-${suffix}"
+          topic="healthia-gmail-proof-${suffix}"
+          subscription="healthia-gmail-proof-${suffix}"
+          full_topic="projects/${PROJECT_ID}/topics/${topic}"
+          image_package="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-gmail-proof"
+          image="${image_package}:${source_sha}"
+          active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
+          runtime_sa="$(gcloud run services describe "$BASE_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.serviceAccountName)')"
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          compute_sa="${project_number}-compute@developer.gserviceaccount.com"
+
+          cleanup() {
+            set +e
+            gcloud pubsub subscriptions delete "$subscription" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+            gcloud pubsub topics delete "$topic" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+            gcloud run services delete "$service" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1
+            gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1
+          }
+          trap cleanup EXIT
+
+          sanitize_logs() {
+            sed -E \
+              -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g' \
+              -e 's/(refresh_token|client_secret|access_token|id_token)[^[:space:]]*/[credential-field]/gi' \
+              -e 's/ya29\.[A-Za-z0-9._-]+/[token]/g'
+          }
+
+          {
+            echo "# Google Health Constellation live proof"
+            echo
+            echo "Project: $PROJECT_ID"
+            echo "Region: $REGION"
+            echo "Exact source head: $source_sha"
+            echo "Mode: temporary/reversible; no IAM mutation"
+            echo
+          } > "$proof"
+
+          gcloud artifacts docker images delete "$image_package" --project "$PROJECT_ID" --quiet --delete-tags >/dev/null 2>&1 || true
+
+          build_id="$(gcloud builds submit . \
+            --project "$PROJECT_ID" --region "$REGION" --tag "$image" \
+            --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+
+          image_digest=""
+          for _ in $(seq 1 48); do
+            image_digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$image_digest" ]] && break
+            sleep 5
+          done
+          test -n "$image_digest"
+
+          gcloud run deploy "$service" \
+            --project "$PROJECT_ID" --region "$REGION" --image "$image" \
+            --service-account "$runtime_sa" --no-allow-unauthenticated \
+            --min 0 --max 1 --concurrency 4 --memory 512Mi --cpu 1 \
+            --command uvicorn \
+            --args 'healthia_one.gmail_push_worker:app,--host,0.0.0.0,--port,8080' \
+            --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_GMAIL_PUBSUB_TOPIC=${full_topic}" \
+            --quiet
+
+          service_url="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$service_url" && test -n "$revision"
+
+          unauth_status="$(curl -sS -o /dev/null -w '%{http_code}' "$service_url/healthz" || true)"
+          if [[ -z "$unauth_status" || "$unauth_status" =~ ^2 ]]; then
+            echo "Private Cloud Run unexpectedly allowed unauthenticated access: ${unauth_status:-empty}" >&2
+            exit 1
+          fi
+
+          gcloud pubsub topics create "$topic" --project "$PROJECT_ID" --quiet
+
+          push_sa=""
+          subscription_error=""
+          for candidate in "$active_account" "$compute_sa"; do
+            if output="$(gcloud pubsub subscriptions create "$subscription" \
+              --project "$PROJECT_ID" --topic "$topic" \
+              --push-endpoint "${service_url}/events/gmail-push" \
+              --push-auth-service-account "$candidate" \
+              --push-auth-token-audience "$service_url" \
+              --ack-deadline 20 --message-retention-duration 10m --quiet 2>&1)"; then
+              push_sa="$candidate"
+              break
+            fi
+            subscription_error="$output"
+            gcloud pubsub subscriptions delete "$subscription" --project "$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+          done
+          if [[ -z "$push_sa" ]]; then
+            echo "$subscription_error" >&2
+            exit 1
+          fi
+
+          payload='{"emailAddress":"unknown-proof@example.invalid","historyId":"100"}'
+          message_id="$(gcloud pubsub topics publish "$topic" --project "$PROJECT_ID" --message "$payload" --format='value(messageIds[0])')"
+          test -n "$message_id"
+
+          push_status=""
+          for _ in $(seq 1 15); do
+            push_status="$(gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND httpRequest.requestUrl=\"${service_url}/events/gmail-push\"" \
+              --project "$PROJECT_ID" --limit 10 --freshness 5m --format='value(httpRequest.status)' 2>/dev/null | head -n1 || true)"
+            [[ -n "$push_status" ]] && break
+            sleep 4
+          done
+
+          {
+            echo "## Infrastructure"
+            echo "- Cloud Build id: $build_id"
+            echo "- Artifact Registry digest: $image_digest"
+            echo "- Private Cloud Run revision: $revision"
+            echo "- Unauthenticated /healthz status: $unauth_status"
+            echo "- Authenticated Pub/Sub push identity: $push_sa"
+            echo "- Synthetic message id: $message_id"
+            echo "- Worker request status: ${push_status:-not_visible}"
+          } >> "$proof"
+
+          if [[ "$push_status" != "204" ]]; then
+            stderr_log="$(gcloud logging read \
+              "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND logName=\"projects/${PROJECT_ID}/logs/run.googleapis.com%2Fstderr\"" \
+              --project "$PROJECT_ID" --limit 80 --freshness 10m --order=asc --format='value(textPayload)' 2>/dev/null \
+              | tail -n 100 | sanitize_logs || true)"
+            printf '%s\n' "$stderr_log" > dist/google-live-proof/worker-error-sanitized.txt
+            echo "--- SANITIZED WORKER STDERR ---" >&2
+            printf '%s\n' "$stderr_log" >&2
+            exit 1
+          fi
+
+          {
+            echo
+            echo "## Proven"
+            echo "- Exact-head Cloud Build produced an immutable image."
+            echo "- Worker ran on private Cloud Run."
+            echo "- Unauthenticated access did not receive 2xx."
+            echo "- Authenticated Pub/Sub OIDC reached /events/gmail-push."
+            echo "- Firestore-backed worker failed closed for an unknown mailbox with HTTP 204."
+            echo "- No IAM policy was modified by this proof."
+            echo
+            echo "## Not proven"
+            echo "- Real Gmail users.watch/users.history.list: no patient OAuth refresh secret is provisioned."
+            echo "- Scheduler live renewal: current audit principal cannot list Scheduler jobs."
+            echo "- Real provider Gmail/Calendar/Tasks side effects were intentionally not executed against a patient account."
+          } >> "$proof"
+          cat "$proof"
+      - name: Upload live proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Google-Constellation-live-proof
+          path: dist/google-live-proof
+          if-no-files-found: warn
+          retention-days: 30

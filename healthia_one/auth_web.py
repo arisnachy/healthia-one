@@ -8,7 +8,11 @@ from pydantic import BaseModel, Field
 
 from healthia_one.auth import AccountManager, AuthError, bind_principal, current_principal, reset_principal
 from healthia_one.config import Settings
+from healthia_one.google_constellation_api import build_google_constellation_router
+from healthia_one.google_constellation_singleton import get_google_constellation_service
+from healthia_one.google_oauth_web import build_google_oauth_browser_flow, build_google_oauth_router
 from healthia_one.language import bind_requested_locale, current_requested_locale, reset_requested_locale
+from healthia_one.opportunity_api import build_opportunity_router
 from healthia_one.service import HealthIAService
 
 
@@ -41,6 +45,7 @@ def install_patient_auth(
 ) -> AccountManager:
     manager = AccountManager(settings)
     app.state.account_manager = manager
+    app.state.healthia_service = service
 
     public_exact = {
         "/healthz",
@@ -62,7 +67,10 @@ def install_patient_auth(
         locale_token = bind_requested_locale(_header_locale(request))
         try:
             path = request.url.path
-            public = path.startswith("/assets/") or path in public_exact
+            # FCM device routes are session-public only because the Android bridge
+            # authenticates with its separately signed pairing bearer. The router
+            # itself rejects missing/revoked/mismatched device credentials.
+            public = path.startswith("/assets/") or path.startswith("/api/devices/fcm/") or path in public_exact
             if settings.auth_required and principal is None and not public:
                 if path == "/":
                     return RedirectResponse("/login", status_code=303)
@@ -139,5 +147,28 @@ def install_patient_auth(
         response = JSONResponse({"authenticated": False, "logged_out": True})
         response.delete_cookie(settings.session_cookie_name, path="/")
         return response
+
+    # FCM routes are mounted once by app.main so they share the production
+    # pairing verifier and registration store with device revocation cleanup.
+    # This module only keeps the browser-session middleware exception above.
+
+    # Opportunity and Google Constellation data are mounted after the same
+    # patient-session middleware. Neither prefix is public, so Cloud mode always
+    # requires an authenticated patient before any mission/grant/receipt read.
+    app.include_router(build_opportunity_router(service))
+    constellation = get_google_constellation_service(settings)
+    app.state.google_constellation = constellation
+    app.include_router(build_google_constellation_router(constellation))
+
+    # OAuth readiness is safe to mount even when credentials have not been
+    # provisioned: the flow reports configuration presence and /connect fails
+    # closed. Connect/callback/disconnect remain behind the same patient session
+    # boundary above; no OAuth route is added to public_exact.
+    google_oauth_flow = build_google_oauth_browser_flow(
+        settings,
+        constellation.runtime.oauth_connection_store,
+    )
+    app.state.google_oauth_flow = google_oauth_flow
+    app.include_router(build_google_oauth_router(google_oauth_flow, settings))
 
     return manager

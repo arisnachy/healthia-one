@@ -75,6 +75,11 @@ if (!window.__HEALTHIA_CHAT_OS_CONTROLLER__) {
         showToast(document.documentElement.lang === "es" ? "Selecciona el resultado que quieres cargar." : "Choose the result you want to upload.");
       } else if (action.type === "open_view") {
         showToast(document.documentElement.lang === "es" ? "Listo, abrí esa parte de HealthIA." : "Done, I opened that part of HealthIA.");
+      } else if (action.type === "open_google_connection") {
+        document.dispatchEvent(new CustomEvent("healthia:open-google-connection", {detail: {source: "chat"}}));
+        showToast(document.documentElement.lang === "es" ? "Abrí los controles de conexión de Google." : "I opened the Google connection controls.");
+      } else {
+        return false;
       }
 
       lastAppliedMessageId = message.id;

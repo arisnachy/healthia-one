@@ -1,0 +1,230 @@
+name: Google Firebase Android config readiness
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/google-firebase-config-readiness.yml'
+      - '.github/workflows/android-bridge.yml'
+      - 'android-health-bridge/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firebase-config-readiness:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-constellation-wave2-live')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      PACKAGE_NAME: com.healthia.one.bridge
+      REGION: us-central1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Bind source SHA
+        shell: bash
+        run: echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Audit Firebase config sources read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/firebase-config-readiness
+
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || true)"
+          if [[ -n "$project_number" ]]; then echo "::add-mask::$project_number"; fi
+
+          gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)' | sort > /tmp/enabled-services.txt
+
+          access_token="$(gcloud auth print-access-token)"
+          test -n "$access_token"
+          echo "::add-mask::$access_token"
+
+          # Firebase Management: body is discarded. We retain only HTTP status.
+          firebase_list_code="$(curl -sS -o /tmp/firebase-apps.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${access_token}" \
+            -H 'Accept: application/json' \
+            "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}/androidApps" || true)"
+          rm -f /tmp/firebase-apps.json
+
+          # Secret Manager metadata only: names are examined in /tmp, never uploaded.
+          secret_list_status=0
+          if gcloud secrets list --project "$PROJECT_ID" --format='value(name)' > /tmp/secret-names.txt 2>/tmp/secret-list.err; then
+            secret_list_status=200
+          else
+            secret_list_status=403
+            : > /tmp/secret-names.txt
+          fi
+          rm -f /tmp/secret-list.err
+
+          # Cloud Run ENV names only, never values.
+          : > /tmp/run-env-names.txt
+          while IFS= read -r service; do
+            [[ -z "$service" ]] && continue
+            gcloud run services describe "$service" --project "$PROJECT_ID" --region "$REGION" \
+              --format=json > /tmp/run-service.json 2>/dev/null || continue
+            python - <<'PY' >> /tmp/run-env-names.txt
+          import json
+          from pathlib import Path
+          try:
+              raw=json.loads(Path('/tmp/run-service.json').read_text(encoding='utf-8'))
+          except Exception:
+              raw={}
+          containers=(((raw.get('spec') or {}).get('template') or {}).get('spec') or {}).get('containers') or []
+          for container in containers:
+              for item in container.get('env') or []:
+                  name=str(item.get('name') or '').strip()
+                  if name:
+                      print(name)
+          PY
+          done < <(gcloud run services list --project "$PROJECT_ID" --region "$REGION" --format='value(metadata.name)' 2>/dev/null || true)
+          sort -u -o /tmp/run-env-names.txt /tmp/run-env-names.txt
+
+          # API Keys metadata only. keys.list intentionally does not return keyString.
+          api_keys_list_code=0
+          if [[ -n "$project_number" ]] && grep -Fxq 'apikeys.googleapis.com' /tmp/enabled-services.txt; then
+            api_keys_list_code="$(curl -sS -o /tmp/api-keys.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${access_token}" \
+              -H 'Accept: application/json' \
+              "https://apikeys.googleapis.com/v2/projects/${project_number}/locations/global/keys?pageSize=300" || true)"
+          else
+            printf '{"keys":[]}' > /tmp/api-keys.json
+          fi
+          [[ -s /tmp/api-keys.json ]] || printf '{"keys":[]}' > /tmp/api-keys.json
+
+          # Cloud Asset Inventory can index firebase.googleapis.com/FirebaseAppInfo.
+          cloud_asset_code=0
+          if grep -Fxq 'cloudasset.googleapis.com' /tmp/enabled-services.txt; then
+            cloud_asset_code="$(curl -sS -o /tmp/firebase-assets.json -w '%{http_code}' -X POST \
+              -H 'X-HTTP-Method-Override: GET' \
+              -H "Authorization: Bearer ${access_token}" \
+              -H 'Content-Type: application/json; charset=utf-8' \
+              -d '{"assetTypes":["firebase.googleapis.com/FirebaseAppInfo"],"pageSize":100,"readMask":"name,assetType,displayName,description,additionalAttributes"}' \
+              "https://cloudasset.googleapis.com/v1/projects/${PROJECT_ID}:searchAllResources" || true)"
+          else
+            printf '{"results":[]}' > /tmp/firebase-assets.json
+          fi
+          [[ -s /tmp/firebase-assets.json ]] || printf '{"results":[]}' > /tmp/firebase-assets.json
+
+          export PROJECT_NUMBER_PRESENT="$( [[ -n "$project_number" ]] && echo true || echo false )"
+          export FIREBASE_LIST_CODE="$firebase_list_code"
+          export SECRET_LIST_STATUS="$secret_list_status"
+          export API_KEYS_LIST_CODE="$api_keys_list_code"
+          export CLOUD_ASSET_CODE="$cloud_asset_code"
+          python - <<'PY'
+          import hashlib, json, os, re
+          from pathlib import Path
+
+          def load(path, fallback):
+              try:
+                  return json.loads(Path(path).read_text(encoding='utf-8'))
+              except Exception:
+                  return fallback
+
+          enabled=set(Path('/tmp/enabled-services.txt').read_text(encoding='utf-8').splitlines())
+          secret_names=[line.strip() for line in Path('/tmp/secret-names.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
+          env_names=set(line.strip() for line in Path('/tmp/run-env-names.txt').read_text(encoding='utf-8').splitlines() if line.strip())
+          exact=(
+              'HEALTHIA_FIREBASE_APP_ID',
+              'HEALTHIA_FIREBASE_API_KEY',
+              'HEALTHIA_FIREBASE_PROJECT_ID',
+              'HEALTHIA_FIREBASE_SENDER_ID',
+          )
+          normalized=lambda value: re.sub(r'[^a-z0-9]+','',value.lower())
+          firebase_like=[name for name in secret_names if 'firebase' in normalized(name) or 'googleservices' in normalized(name)]
+
+          package=os.environ['PACKAGE_NAME']
+          api_payload=load('/tmp/api-keys.json',{'keys':[]})
+          keys=(api_payload.get('keys') or []) if isinstance(api_payload,dict) else []
+          package_key_matches=[]
+          for key in keys:
+              restrictions=key.get('restrictions') or {}
+              android=(restrictions.get('androidKeyRestrictions') or {})
+              apps=android.get('allowedApplications') or []
+              if any(str(app.get('packageName') or '') == package for app in apps if isinstance(app,dict)):
+                  package_key_matches.append(str(key.get('name') or ''))
+
+          asset_payload=load('/tmp/firebase-assets.json',{'results':[]})
+          assets=(asset_payload.get('results') or []) if isinstance(asset_payload,dict) else []
+          package_asset_matches=[]
+          asset_schema_keys=set()
+          additional_attribute_keys=set()
+          for asset in assets:
+              if not isinstance(asset,dict):
+                  continue
+              asset_schema_keys.update(asset.keys())
+              attrs=asset.get('additionalAttributes') or {}
+              if isinstance(attrs,dict):
+                  additional_attribute_keys.update(attrs.keys())
+              serialized=json.dumps(asset,sort_keys=True,separators=(',',':'))
+              if package in serialized:
+                  package_asset_matches.append(str(asset.get('name') or ''))
+
+          out={
+              'status':'READ_ONLY_AUDIT',
+              'source_sha':os.environ.get('SOURCE_SHA',''),
+              'project_number_readable':os.environ.get('PROJECT_NUMBER_PRESENT')=='true',
+              'firebase_api_enabled':'firebase.googleapis.com' in enabled,
+              'firebase_management_list_http_status':int(os.environ.get('FIREBASE_LIST_CODE') or 0),
+              'secret_manager_api_enabled':'secretmanager.googleapis.com' in enabled,
+              'secret_metadata_list_status':int(os.environ.get('SECRET_LIST_STATUS') or 0),
+              'firebase_like_secret_name_count':len(firebase_like),
+              'exact_firebase_secret_name_presence':{name: name in secret_names for name in exact},
+              'cloud_run_exact_firebase_env_name_presence':{name: name in env_names for name in exact},
+              'api_keys_api_enabled':'apikeys.googleapis.com' in enabled,
+              'api_keys_list_http_status':int(os.environ.get('API_KEYS_LIST_CODE') or 0),
+              'api_key_metadata_count':len(keys),
+              'android_package_api_key_match_count':len(package_key_matches),
+              'android_package_api_key_resource_hashes':[hashlib.sha256(name.encode()).hexdigest() for name in package_key_matches if name],
+              'cloud_asset_api_enabled':'cloudasset.googleapis.com' in enabled,
+              'cloud_asset_search_http_status':int(os.environ.get('CLOUD_ASSET_CODE') or 0),
+              'firebase_app_info_asset_count':len(assets),
+              'android_package_firebase_asset_match_count':len(package_asset_matches),
+              'android_package_firebase_asset_name_hashes':[hashlib.sha256(name.encode()).hexdigest() for name in package_asset_matches if name],
+              'firebase_asset_result_field_names':sorted(asset_schema_keys),
+              'firebase_asset_additional_attribute_names':sorted(additional_attribute_keys),
+              'provider_write':False,
+              'iam_mutation':False,
+              'api_key_string_read':False,
+              'secret_value_read':False,
+              'secret_material_exposed':False,
+          }
+          Path('dist/firebase-config-readiness/readiness.json').write_text(json.dumps(out,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+          rm -f /tmp/enabled-services.txt /tmp/secret-names.txt /tmp/run-env-names.txt /tmp/api-keys.json /tmp/firebase-assets.json /tmp/run-service.json
+
+      - name: Refuse secret-like artifact content
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -Eiq '(BEGIN PRIVATE KEY|client_secret|access_token|refresh_token|ya29\.|AIza[0-9A-Za-z_-]{20,}|1:[0-9]+:android:[0-9a-f]+)' dist/firebase-config-readiness; then
+            rm -rf dist/firebase-config-readiness
+            echo 'Sensitive-looking Firebase material detected; refusing upload.' >&2
+            exit 1
+          fi
+
+      - name: Upload sanitized Firebase readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Firebase-Config-Readiness
+          path: dist/firebase-config-readiness/readiness.json
+          if-no-files-found: error
+          retention-days: 30

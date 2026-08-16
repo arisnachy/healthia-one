@@ -10,8 +10,10 @@ from healthia_one.clinical_intake import (
 )
 from healthia_one.conversation_brain import build_frame
 from healthia_one.deterministic_router import respond as deterministic_respond
+from healthia_one.google_mission_chat import should_consider_google_mission
 from healthia_one.language import current_requested_locale, normalize_locale
 from healthia_one.models import ChatMessage, ChatResponse, PatientState
+from healthia_one.opportunity_integration import respond as opportunity_respond
 from healthia_one.safety import assess_text
 
 
@@ -58,6 +60,34 @@ _UI_RECORD_VERBS = (
     "record", "log", "add", "save",
 )
 _UI_UPLOAD_VERBS = ("subir", "cargar", "adjuntar", "upload", "attach")
+_UI_GOOGLE_CONNECTION_PHRASES = (
+    "conecta google",
+    "conectar google",
+    "conecta mi google",
+    "conectar mi google",
+    "conecta mi cuenta google",
+    "conectar mi cuenta google",
+    "conecta mi cuenta de google",
+    "conectar mi cuenta de google",
+    "vincula mi cuenta google",
+    "vincular mi cuenta google",
+    "gestiona mi cuenta google",
+    "gestionar mi cuenta google",
+    "configura mi cuenta google",
+    "configurar mi cuenta google",
+    "desconecta google",
+    "desconectar google",
+    "desconecta mi cuenta google",
+    "desconectar mi cuenta google",
+    "connect google",
+    "connect my google account",
+    "link google account",
+    "link my google account",
+    "manage google account",
+    "manage my google account",
+    "disconnect google",
+    "disconnect my google account",
+)
 
 _UI_VIEW_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("results", ("resultado", "resultados", "results", "labs", "laboratorio")),
@@ -164,6 +194,15 @@ def _has_any_command_phrase(text: str, phrases: tuple[str, ...]) -> bool:
     return any(_contains_command_phrase(text, phrase) for phrase in phrases)
 
 
+def _requested_google_connection_action(text: str) -> dict[str, str] | None:
+    normalized = text.lower().strip()
+    if not normalized:
+        return None
+    if _has_any_command_phrase(normalized, _UI_GOOGLE_CONNECTION_PHRASES):
+        return {"type": "open_google_connection"}
+    return None
+
+
 def _requested_ui_action(text: str) -> dict[str, str] | None:
     normalized = text.lower().strip()
     if not normalized:
@@ -202,8 +241,12 @@ def _attach_conversation_frame(response: ChatResponse, frame) -> ChatResponse:
     response.message.metadata["conversation_context"] = {
         "ambiguous_reference": frame.ambiguous_reference,
         "correction": frame.correction,
+        "current_topic": frame.current_topic,
         "last_action_target": frame.last_action_target,
         "last_mission_type": frame.last_mission_type,
+        "reference_status": frame.reference_status,
+        "resolved_reference": frame.resolved_reference,
+        "needs_clarification": frame.needs_clarification,
     }
     return response
 
@@ -213,6 +256,28 @@ def _attach_ui_action(response: ChatResponse, ui_action: dict[str, str] | None) 
         response.message.metadata["ui_action"] = ui_action
         response.message.metadata["health_os_control"] = True
     return response
+
+
+def _clarification_response(frame, patient_text: str) -> ChatResponse:
+    english = bool(re.search(r"\b(that|this|it|which|one|previous|second|first)\b", patient_text.lower()))
+    content = (
+        "I don't have enough evidence in this conversation to know exactly what you're referring to. Tell me the result, measurement, appointment, document, or task you mean and I'll continue from there."
+        if english else
+        "No tengo evidencia suficiente en esta conversación para saber con certeza a qué te refieres. Dime si hablas de un resultado, medición, cita, documento o tarea y continúo desde ahí."
+    )
+    response = ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=content,
+            metadata={
+                "intent": "reference_clarification",
+                "reference_clarification_required": True,
+                "external_action_executed": False,
+            },
+        )
+    )
+    return _attach_conversation_frame(response, frame)
 
 
 def _human_clinical_conversation(state: PatientState, patient_text: str) -> ChatResponse:
@@ -242,7 +307,76 @@ def _human_clinical_conversation(state: PatientState, patient_text: str) -> Chat
     )
 
 
+def _google_connection_control_response(state: PatientState, patient_text: str) -> ChatResponse:
+    frame = build_frame(state, patient_text)
+    english = bool(re.search(r"\b(connect|link|manage|disconnect)\b", patient_text.lower()))
+    content = (
+        "I opened your Google connection controls. HealthIA will not connect, disconnect, or authorize anything by itself; review the status and use the Google button only if you want to continue."
+        if english else
+        "Te abrí los controles de conexión de Google. HealthIA no conectará, desconectará ni autorizará nada por sí sola; revisa el estado y usa el botón de Google sólo si quieres continuar."
+    )
+    response = ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=content,
+            metadata={
+                "intent": "google_connection_control",
+                "ui_action": {"type": "open_google_connection"},
+                "health_os_control": True,
+                "external_action_executed": False,
+            },
+        )
+    )
+    return _attach_conversation_frame(response, frame)
+
+
+def _google_mission_candidate_response(state: PatientState, patient_text: str) -> ChatResponse:
+    frame = build_frame(state, patient_text)
+    english = bool(re.search(r"\b(find|get me|where can i|contact|book)\b", patient_text.lower()))
+    content = (
+        "I can handle this as a real-world health navigation mission. I will keep advancing every safe step I can verify, and I will stop only when I need your authorization, your choice, or a real external reply."
+        if english else
+        "Puedo manejar esto como una misión real de navegación sanitaria. Avanzaré todos los pasos seguros que pueda verificar y sólo me detendré cuando necesite tu autorización, tu elección o una respuesta externa real."
+    )
+    response = ChatResponse(
+        message=ChatMessage(
+            role="assistant",
+            author="HealthIA",
+            content=content,
+            metadata={
+                "google_mission_candidate": True,
+                "google_mission_routing_order": "after_deterministic_safety_before_opportunity",
+                "autonomy_policy": "advance_until_human_or_external_event_boundary",
+                "health_os_control": True,
+            },
+        )
+    )
+    return _attach_conversation_frame(response, frame)
+
+
 def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
+    safety = assess_text(patient_text)
+    if safety.must_stop_normal_flow:
+        frame = build_frame(state, patient_text)
+        response = deterministic_respond(state, _router_text(patient_text))
+        return _attach_conversation_frame(response, frame)
+
+    # Google account management is a deterministic Health OS control, not a
+    # mission and never an OAuth authorization. Safety still runs first. The UI
+    # only opens the patient-controlled connection surface; the patient must
+    # explicitly press Connect/Disconnect there.
+    if _requested_google_connection_action(patient_text) is not None:
+        return _google_connection_control_response(state, patient_text)
+
+    if should_consider_google_mission(state, patient_text):
+        return _google_mission_candidate_response(state, patient_text)
+
+    opportunity_response = opportunity_respond(state, patient_text)
+    if opportunity_response is not None:
+        frame = build_frame(state, patient_text)
+        return _attach_conversation_frame(opportunity_response, frame)
+
     social_response = respond_to_social_small_talk(state, _clinical_text(patient_text))
     if social_response is not None:
         frame = build_frame(state, patient_text)
@@ -256,6 +390,9 @@ def _route_response(state: PatientState, patient_text: str) -> ChatResponse:
         clinical_response = respond_to_clinical_intake(state, patient_text)
         if clinical_response is not None:
             return _attach_conversation_frame(clinical_response, frame)
+
+    if frame.needs_clarification:
+        return _clarification_response(frame, patient_text)
 
     if ui_action is not None:
         response = deterministic_respond(state, _router_text(routed_text))

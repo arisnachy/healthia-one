@@ -1,0 +1,190 @@
+name: Google Health live promotion matrix
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/google-live-finalization.yml"
+      - "healthia_one/google_clinical_cloud_connectors.py"
+      - "healthia_one/google_constellation.py"
+      - "healthia_one/google_cloud_capabilities.py"
+      - "tests/test_google_live_finalization_contract.py"
+      - "docs/GOOGLE_HEALTH_CONSTELLATION.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-google-live-finalization-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/google-health-constellation')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Run bounded live promotion matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/google-live-finalization
+          out="dist/google-live-finalization/matrix.md"
+          tts_body="dist/google-live-finalization/tts-response.json"
+          fcm_body="dist/google-live-finalization/fcm-response.json"
+          scheduler_error="dist/google-live-finalization/scheduler-error.txt"
+          source_sha="$(git rev-parse HEAD)"
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          access_token="$(gcloud auth print-access-token)"
+
+          has_api() {
+            grep -qx "$1" <<<"$enabled"
+          }
+
+          {
+            echo "# HealthIA Google live promotion matrix"
+            echo
+            echo "Project: $PROJECT_ID"
+            echo "Region: $REGION"
+            echo "Exact source head: $source_sha"
+            echo "Mode: bounded synthetic live probes; no patient data; no API enablement; no IAM mutation"
+            echo
+          } > "$out"
+
+          echo "## Text-to-Speech" >> "$out"
+          if has_api "texttospeech.googleapis.com"; then
+            tts_status="$(curl -sS -o "$tts_body" -w '%{http_code}' \
+              -X POST "https://texttospeech.googleapis.com/v1/text:synthesize" \
+              -H "Authorization: Bearer ${access_token}" \
+              -H 'Content-Type: application/json' \
+              --data '{"input":{"text":"HealthIA synthetic accessibility proof."},"voice":{"languageCode":"en-US"},"audioConfig":{"audioEncoding":"MP3"}}')"
+            if [[ "$tts_status" != "200" ]]; then
+              echo "- FAIL: enabled API returned HTTP $tts_status" >> "$out"
+              jq -c '{error: {code: .error.code, status: .error.status}}' "$tts_body" 2>/dev/null >> "$out" || true
+              exit 1
+            fi
+            audio_b64="$(jq -r '.audioContent // empty' "$tts_body")"
+            if [[ -z "$audio_b64" ]]; then
+              echo "- FAIL: HTTP 200 contained no audioContent" >> "$out"
+              exit 1
+            fi
+            printf '%s' "$audio_b64" | base64 -d > /tmp/healthia-proof.mp3
+            audio_bytes="$(wc -c < /tmp/healthia-proof.mp3 | tr -d ' ')"
+            audio_sha="$(sha256sum /tmp/healthia-proof.mp3 | awk '{print $1}')"
+            rm -f /tmp/healthia-proof.mp3 "$tts_body"
+            echo "- LIVE PASS: authenticated synthesize returned MP3 bytes." >> "$out"
+            echo "- Synthetic audio bytes: $audio_bytes" >> "$out"
+            echo "- Synthetic audio SHA-256: $audio_sha" >> "$out"
+          else
+            echo "- BLOCKED: texttospeech.googleapis.com is not enabled." >> "$out"
+          fi
+          echo >> "$out"
+
+          echo "## Firebase Cloud Messaging" >> "$out"
+          if has_api "fcm.googleapis.com"; then
+            fcm_status="$(curl -sS -o "$fcm_body" -w '%{http_code}' \
+              -X POST "https://fcm.googleapis.com/v1/projects/${PROJECT_ID}/messages:send" \
+              -H "Authorization: Bearer ${access_token}" \
+              -H 'Content-Type: application/json' \
+              --data '{"message":{"token":"healthia-proof-intentionally-invalid-registration-token","notification":{"title":"HealthIA","body":"You have a HealthIA update."},"data":{"mission_id":"synthetic-proof","event_type":"proof"}}}')"
+            fcm_error_status="$(jq -r '.error.status // empty' "$fcm_body" 2>/dev/null || true)"
+            fcm_error_code="$(jq -r '[.error.details[]? | select(."@type" == "type.googleapis.com/google.firebase.fcm.v1.FcmError") | .errorCode][0] // empty' "$fcm_body" 2>/dev/null || true)"
+            if [[ "$fcm_status" == "400" && "$fcm_error_status" == "INVALID_ARGUMENT" && "$fcm_error_code" == "INVALID_ARGUMENT" ]]; then
+              echo "- LIVE AUTH PASS: FCM accepted authentication and rejected the intentionally invalid registration token as INVALID_ARGUMENT." >> "$out"
+              echo "- Delivery: impossible by construction; no real device token was used." >> "$out"
+            elif [[ "$fcm_status" == "403" && "$fcm_error_status" == "PERMISSION_DENIED" ]]; then
+              echo "- BLOCKED_IAM: FCM API is enabled, but the CI proof identity lacks permission to send." >> "$out"
+              echo "- Delivery: none; the probe used an intentionally invalid registration token." >> "$out"
+            else
+              echo "- FAIL: unexpected FCM response; got HTTP ${fcm_status:-none}, status ${fcm_error_status:-none}, FCM code ${fcm_error_code:-none}." >> "$out"
+              rm -f "$fcm_body"
+              exit 1
+            fi
+            rm -f "$fcm_body"
+          else
+            echo "- BLOCKED: fcm.googleapis.com is not enabled." >> "$out"
+          fi
+          echo >> "$out"
+
+          echo "## Resource/API blockers" >> "$out"
+          for spec in \
+            "Speech-to-Text|speech.googleapis.com" \
+            "Document AI|documentai.googleapis.com" \
+            "Cloud Healthcare|healthcare.googleapis.com"; do
+            label="${spec%%|*}"
+            api="${spec##*|}"
+            if has_api "$api"; then
+              echo "- $label: API enabled; resource-level live proof still required." >> "$out"
+            else
+              echo "- $label: BLOCKED_DISABLED_API ($api). This workflow will not enable it silently." >> "$out"
+            fi
+          done
+          if has_api "aiplatform.googleapis.com"; then
+            echo "- Veo: Vertex AI API enabled; generation remains COST_GATED and is not auto-triggered by CI." >> "$out"
+          else
+            echo "- Veo: BLOCKED_DISABLED_API (aiplatform.googleapis.com)." >> "$out"
+          fi
+          echo >> "$out"
+
+          echo "## Cloud Scheduler" >> "$out"
+          if gcloud scheduler jobs list --project "$PROJECT_ID" --location "$REGION" --format='value(name)' > /tmp/healthia-scheduler-list.txt 2>"$scheduler_error"; then
+            count="$(wc -l < /tmp/healthia-scheduler-list.txt | tr -d ' ')"
+            echo "- READ PASS: Scheduler jobs.list is permitted; visible jobs: $count." >> "$out"
+          else
+            if grep -q 'cloudscheduler.jobs.list' "$scheduler_error"; then
+              echo "- BLOCKED_IAM: audit principal lacks cloudscheduler.jobs.list; no live renewal-job claim." >> "$out"
+            else
+              echo "- BLOCKED_UNKNOWN: Scheduler inventory failed for a different reason; inspect sanitized artifact." >> "$out"
+            fi
+          fi
+          rm -f /tmp/healthia-scheduler-list.txt
+          sed -E \
+            -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email]/g' \
+            -e 's/(refresh_token|client_secret|access_token|id_token)[^[:space:]]*/[credential-field]/gi' \
+            -e 's/ya29\.[A-Za-z0-9._-]+/[token]/g' \
+            "$scheduler_error" > "${scheduler_error}.sanitized" || true
+          mv "${scheduler_error}.sanitized" "$scheduler_error"
+          echo >> "$out"
+
+          echo "## Human/external promotion gates" >> "$out"
+          echo "- Gmail real mailbox: requires patient OAuth/refresh secret and granted scopes." >> "$out"
+          echo "- FCM real delivery: requires a runtime identity with FCM send permission plus a real HealthIA device registration token." >> "$out"
+          echo "- Veo real generation: requires explicit cost/authorization gate and private GCS output resource." >> "$out"
+          echo "- No patient-specific content was sent by this workflow." >> "$out"
+
+          # Never upload raw provider response bodies or credentials.
+          rm -f "$tts_body" "$fcm_body"
+          if grep -Eiq '(BEGIN PRIVATE KEY|refresh_token|client_secret|ya29\.|sk-[A-Za-z0-9])' "$out" "$scheduler_error"; then
+            echo "Sensitive-looking material appeared in finalization evidence; refusing artifact upload."
+            rm -rf dist/google-live-finalization
+            exit 1
+          fi
+          cat "$out"
+
+      - name: Upload sanitized finalization evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Google-live-promotion-matrix
+          path: dist/google-live-finalization
+          if-no-files-found: warn
+          retention-days: 30
