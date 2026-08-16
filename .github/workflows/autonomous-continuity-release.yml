@@ -1,0 +1,397 @@
+name: HealthIA autonomous continuity exact-head release
+
+on:
+  push:
+    branches:
+      - kira/autonomous-continuity-mainline
+      - main
+    paths:
+      - ".github/workflows/autonomous-continuity-release.yml"
+      - ".github/workflows/autonomous-continuity-daily.yml"
+      - "Dockerfile"
+      - "Dockerfile.autonomy-proof"
+      - "cloudbuild.autonomy-proof.yaml"
+      - "healthia_one/autonomous_continuity.py"
+      - "healthia_one/autopilot_event_intents.py"
+      - "healthia_one/autopilot_worker.py"
+      - "healthia_one/bp_followup_guardian.py"
+      - "healthia_one/care_continuity_job.py"
+      - "healthia_one/guardian_email_delivery.py"
+      - "healthia_one/guardian_email_reply.py"
+      - "healthia_one/guardian_email_watch.py"
+      - "healthia_one/gmail_push_worker.py"
+      - "healthia_one/judge_mode.py"
+      - "healthia_one/models.py"
+      - "healthia_one/store.py"
+      - "scripts/mainline_bp_continuity_proof.py"
+      - "scripts/guardian_wave14_stitch_proof.py"
+      - "tests/test_autonomous_continuity_mainline_contract.py"
+      - "tests/test_care_continuity_job.py"
+      - "tests/test_judge_mode.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-autonomous-continuity-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      GMAIL_WORKER: healthia-gmail-worker
+      AUTOPILOT_TRIGGER: healthia-opportunity-events
+      CARE_JOB: healthia-care-continuity-daily
+      JUDGE_SERVICE: healthia-one-judge
+      PROOF_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+      PROOF_COLLECTION: healthia_wave14_stitch_proofs
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Fail closed on scope and production-image hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Fq 'COPY scripts ./scripts' Dockerfile; then
+            echo 'Production Dockerfile must never include proof scripts.' >&2
+            exit 1
+          fi
+          grep -Fq 'COPY scripts ./scripts' Dockerfile.autonomy-proof
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+          python -m pytest -q \
+            tests/test_autonomous_continuity_mainline_contract.py \
+            tests/test_autopilot_event_intents.py \
+            tests/test_bp_followup_guardian_resolution_loop.py \
+            tests/test_guardian_email_delivery.py \
+            tests/test_guardian_email_bidirectional.py \
+            tests/test_gmail_push_worker.py \
+            tests/test_care_continuity_job.py \
+            tests/test_judge_mode.py
+          python -m py_compile \
+            healthia_one/care_continuity_job.py \
+            scripts/mainline_bp_continuity_proof.py \
+            scripts/guardian_wave14_stitch_proof.py
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('.github/workflows/autonomous-continuity-daily.yml').read_text()
+          assert 'cron: "0 12 * * *"' in text
+          assert 'healthia-care-continuity-daily' in text
+          assert 'gcloud run jobs execute' in text
+          assert '--allow-unauthenticated' not in text
+          print('daily-clock-contract=PASS')
+          PY
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Force safe baseline and snapshot private topology
+        id: topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/autonomous-continuity-release
+          if gcloud run jobs describe "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1; then
+            gcloud run jobs update "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" \
+              --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=false" --quiet >/dev/null
+          fi
+          gcloud run services update "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+            --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=false" --quiet >/dev/null
+
+          gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/auto.json
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail.json
+          auto_image="$(jq -r '.spec.template.spec.containers[0].image // empty' /tmp/auto.json)"
+          gmail_image="$(jq -r '.spec.template.spec.containers[0].image // empty' /tmp/gmail.json)"
+          runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail.json)"
+          test -n "$auto_image" && test -n "$gmail_image" && test -n "$runtime_sa"
+          [[ "$topic" == projects/*/topics/* ]]
+          location="$(gcloud firestore databases describe --database='(default)' --project "$PROJECT_ID" --format='value(locationId)')"
+          gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json
+          [[ "$(jq -r '.destination.cloudRun.service // empty' /tmp/trigger.json)" == "$AUTOPILOT_SERVICE" ]]
+          [[ "$(jq -r '.destination.cloudRun.path // empty' /tmp/trigger.json)" == "/events/firestore" ]]
+          jq -e '.eventFilters[]? | select(.attribute=="type" and .value=="google.cloud.firestore.document.v1.created")' /tmp/trigger.json >/dev/null
+          echo "auto_image=$auto_image" >> "$GITHUB_OUTPUT"
+          echo "gmail_image=$gmail_image" >> "$GITHUB_OUTPUT"
+          echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "topic=$topic" >> "$GITHUB_OUTPUT"
+          echo "eventarc_location=$location" >> "$GITHUB_OUTPUT"
+
+      - name: Build clean exact-head product image
+        id: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-autonomous-continuity:${GITHUB_SHA}"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=''
+          for _ in $(seq 1 120); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Build ephemeral proof overlay from exact product
+        id: proof_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-autonomy-proof:${GITHUB_SHA}"
+          build_id="$(gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" \
+            --config cloudbuild.autonomy-proof.yaml \
+            --substitutions "_BASE_IMAGE=${{ steps.product.outputs.image }},_PROOF_IMAGE=${image}" \
+            --async --format='value(id)' --quiet)"
+          test -n "$build_id"
+          digest=''
+          for _ in $(seq 1 120); do
+            digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
+          test -n "$digest"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Mark promotion started
+        id: promotion
+        shell: bash
+        run: echo 'started=true' >> "$GITHUB_OUTPUT"
+
+      - name: Promote clean product to private workers
+        id: promote
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ steps.product.outputs.image }}"
+          gcloud run services update "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+            --image "$image" --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=true" --quiet
+          gcloud run services update "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" \
+            --image "$image" --quiet
+          auto_revision="$(gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          gmail_revision="$(gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          test -n "$auto_revision" && test -n "$gmail_revision"
+          echo "auto_revision=$auto_revision" >> "$GITHUB_OUTPUT"
+          echo "gmail_revision=$gmail_revision" >> "$GITHUB_OUTPUT"
+
+      - name: Create reversible exact-head proof jobs
+        id: proof_jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="healthia-release-${GITHUB_RUN_ID}"
+          common="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${{ steps.topology.outputs.topic }},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID}"
+          for phase in setup await-email reply verify restore; do
+            job="${prefix}-${phase}"
+            script_phase="$phase"; [[ "$phase" == "await-email" ]] && script_phase="await_email"
+            gcloud run jobs create "$job" --project "$PROJECT_ID" --region "$REGION" \
+              --image "${{ steps.proof_image.outputs.image }}" \
+              --service-account "${{ steps.topology.outputs.runtime_sa }}" \
+              --command python --args "scripts/mainline_bp_continuity_proof.py,${script_phase}" \
+              --set-env-vars "$common" --max-retries 0 --task-timeout 300s --quiet
+            echo "${phase//-/_}_job=$job" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Prove unattended chain end to end
+        id: loop
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.proof_jobs.outputs.setup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          echo 'setup=true' >> "$GITHUB_OUTPUT"
+          gcloud run jobs execute "${{ steps.proof_jobs.outputs.await_email_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          gcloud run jobs execute "${{ steps.proof_jobs.outputs.reply_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          gcloud run jobs execute "${{ steps.proof_jobs.outputs.verify_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Gate durable no-prompt evidence
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}"
+          curl -fsS -H "Authorization: Bearer ${token}" "$url" > /tmp/proof.json
+          unset token
+          [[ "$(jq -r '.fields.status.stringValue // empty' /tmp/proof.json)" == full_loop_live_pass ]]
+          [[ "$(jq -r '.fields.mission_status.stringValue // empty' /tmp/proof.json)" == completed ]]
+          [[ "$(jq -r '.fields.vital_source_type.stringValue // empty' /tmp/proof.json)" == patient_email_reply ]]
+          [[ "$(jq -r '.fields.outbox_status.stringValue // empty' /tmp/proof.json)" == processed ]]
+          [[ "$(jq -r '.fields.processed_reply_count.integerValue // "0"' /tmp/proof.json)" == 1 ]]
+          [[ "$(jq -r '.fields.eventarc_outbound.booleanValue // false' /tmp/proof.json)" == true ]]
+          [[ "$(jq -r '.fields.gmail_pubsub_inbound.booleanValue // false' /tmp/proof.json)" == true ]]
+          [[ "$(jq -r '.fields.no_chat_prompt_used.booleanValue // false' /tmp/proof.json)" == true ]]
+          [[ "$(jq -r '.fields.trigger_model_calls.integerValue // "-1"' /tmp/proof.json)" == 0 ]]
+          [[ "$(jq -r '.fields.trigger_network_calls.integerValue // "-1"' /tmp/proof.json)" == 0 ]]
+          [[ "$(jq -r '.fields.trigger_origin.stringValue // empty' /tmp/proof.json)" == deterministic_bp_followup_reconciliation ]]
+          echo 'pass=true' >> "$GITHUB_OUTPUT"
+
+      - name: Create or update permanent private Cloud Run Job
+        if: steps.evidence.outputs.pass == 'true'
+        id: care_job
+        shell: bash
+        run: |
+          set -euo pipefail
+          common="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_PROACTIVE_ENABLED=true"
+          if gcloud run jobs describe "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1; then
+            gcloud run jobs update "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" \
+              --image "${{ steps.product.outputs.image }}" \
+              --service-account "${{ steps.topology.outputs.runtime_sa }}" \
+              --command python --args=-m,healthia_one.care_continuity_job \
+              --set-env-vars "$common" --max-retries 0 --task-timeout 300s --quiet
+          else
+            gcloud run jobs create "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" \
+              --image "${{ steps.product.outputs.image }}" \
+              --service-account "${{ steps.topology.outputs.runtime_sa }}" \
+              --command python --args=-m,healthia_one.care_continuity_job \
+              --set-env-vars "$common" --max-retries 0 --task-timeout 300s --quiet
+          fi
+          gcloud run jobs execute "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          execution="$(gcloud run jobs executions list --job "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" --limit 1 --sort-by='~metadata.creationTimestamp' --format='value(metadata.name)')"
+          test -n "$execution"
+          gcloud run jobs executions describe "$execution" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/care-exec.json
+          [[ "$(jq -r '[.status.conditions[]? | select(.type=="Completed") | .status][0] // "False"' /tmp/care-exec.json)" == True ]]
+          echo "execution=$execution" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy exact-head public Judge Mode
+        if: steps.evidence.outputs.pass == 'true'
+        id: judge
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$JUDGE_SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.product.outputs.image }}" --ingress all --no-invoker-iam-check \
+            --min 0 --max 1 --concurrency 80 --memory 256Mi --cpu 1 \
+            --command uvicorn --args "healthia_one.judge_mode:app,--host,0.0.0.0,--port,8080" \
+            --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${GITHUB_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=${GITHUB_RUN_ID}" --quiet
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          url="https://${JUDGE_SERVICE}-${project_number}.${REGION}.run.app"
+          for _ in $(seq 1 30); do
+            code="$(curl -sS -o /tmp/judge.json -w '%{http_code}' "$url/judge-health" || true)"
+            if [[ "$code" == 200 && "$(jq -r '.source_sha // empty' /tmp/judge.json)" == "$GITHUB_SHA" && "$(jq -r '.live_proof_run // empty' /tmp/judge.json)" == "$GITHUB_RUN_ID" ]]; then break; fi
+            sleep 2
+          done
+          [[ "$(jq -r '.source_sha // empty' /tmp/judge.json)" == "$GITHUB_SHA" ]]
+          [[ "$(jq -r '.live_proof_run // empty' /tmp/judge.json)" == "$GITHUB_RUN_ID" ]]
+          curl -fsS "$url/api/proof" > /tmp/judge-proof.json
+          [[ "$(jq -r '.boundary_count' /tmp/judge-proof.json)" == 5 ]]
+          [[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$url/api/proof")" == 405 ]]
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Write sanitized release evidence
+        if: steps.evidence.outputs.pass == 'true'
+        shell: bash
+        run: |
+          cat > dist/autonomous-continuity-release/report.md <<EOF
+          # HealthIA ONE — Autonomous Continuity exact-head PASS
+
+          - Exact source SHA: ${GITHUB_SHA}
+          - GitHub Actions run: ${GITHUB_RUN_ID}
+          - Product image digest: ${{ steps.product.outputs.digest }}
+          - Proof overlay digest: ${{ steps.proof_image.outputs.digest }}
+          - Autopilot revision: ${{ steps.promote.outputs.auto_revision }}
+          - Gmail worker revision: ${{ steps.promote.outputs.gmail_revision }}
+          - Eventarc outbound: PASS
+          - Real Gmail send: PASS
+          - Same-thread controlled synthetic BP reply: PASS
+          - Gmail users.watch + authenticated Pub/Sub: PASS
+          - VitalRecord provenance patient_email_reply: PASS
+          - Same mission COMPLETED: PASS
+          - No chat prompt used: true
+          - Trigger model calls: 0
+          - Trigger network calls: 0
+          - Durable boundaries: 5
+          - Permanent private Cloud Run Job: ${CARE_JOB}
+          - Permanent job execution: ${{ steps.care_job.outputs.execution }}
+          - Daily clock: GitHub Actions cron 12:00 UTC / 08:00 America-Santo_Domingo
+          - Public Judge Mode: ${{ steps.judge.outputs.url }}
+          - Judge Mode source/proof stamp: exact current SHA/run
+
+          **HealthIA noticed the follow-up was overdue. Nobody prompted it.**
+
+          **One unattended health mission crossed 5 durable boundaries without another chat prompt.**
+
+          Truth boundary: explicitly opted-in BP measurement continuity only. No autonomous diagnosis, prescription, medication change, or declaration of blood-pressure control. Broad Wave 5 Guardian remains experimental.
+          EOF
+
+      - name: Restore synthetic proof patient
+        if: always() && steps.loop.outputs.setup == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.proof_jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Delete proof metadata
+        if: always() && steps.loop.outputs.setup == 'true'
+        shell: bash
+        run: |
+          set +e
+          token="$(gcloud auth print-access-token)"
+          curl -sS -X DELETE -H "Authorization: Bearer ${token}" \
+            "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}" >/dev/null
+
+      - name: Fail-closed rollback on any terminal failure
+        if: failure() && steps.promotion.outputs.started == 'true'
+        shell: bash
+        run: |
+          set +e
+          if gcloud run jobs describe "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1; then
+            gcloud run jobs update "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" \
+              --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=false" --quiet >/dev/null 2>&1
+          fi
+          gcloud run services update "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.topology.outputs.auto_image }}" \
+            --update-env-vars "HEALTHIA_PROACTIVE_ENABLED=false" --quiet >/dev/null 2>&1
+          gcloud run services update "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" \
+            --image "${{ steps.topology.outputs.gmail_image }}" --quiet >/dev/null 2>&1
+
+      - name: Cleanup ephemeral proof jobs
+        if: always() && steps.proof_jobs.outputs.setup_job != ''
+        shell: bash
+        run: |
+          set +e
+          for job in \
+            "${{ steps.proof_jobs.outputs.setup_job }}" \
+            "${{ steps.proof_jobs.outputs.await_email_job }}" \
+            "${{ steps.proof_jobs.outputs.reply_job }}" \
+            "${{ steps.proof_jobs.outputs.verify_job }}" \
+            "${{ steps.proof_jobs.outputs.restore_job }}"; do
+            [[ -n "$job" ]] && gcloud run jobs delete "$job" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
+          done
+
+      - name: Upload sanitized release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-autonomous-continuity-release-${{ github.sha }}
+          path: dist/autonomous-continuity-release/
+          if-no-files-found: warn
+          retention-days: 30
