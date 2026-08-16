@@ -87,9 +87,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # This service contains only synthetic/read-only evidence.  Ingress is
-          # explicit so an older private service configuration can never leave a
-          # seemingly successful deployment that returns infrastructure 404s.
           gcloud run deploy "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
@@ -106,17 +103,14 @@ jobs:
             --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${GITHUB_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=pending-exact-head-proof" \
             --quiet
 
-          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/judge-service.json
-          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/judge-service.json)"
+          revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
           canonical="https://${SERVICE}-${project_number}.${REGION}.run.app"
           test -n "$revision" && test -n "$project_number"
 
-          # Fail closed unless the *anonymous external request* reaches the exact
-          # Judge Mode app.  A revision merely becoming Ready is not sufficient.
           url=''
           for attempt in $(seq 1 30); do
-            code="$(curl -sS --max-time 10 -o /tmp/health.json -w '%{http_code}' "$canonical/healthz" || true)"
+            code="$(curl -sS --max-time 10 -o /tmp/health.json -w '%{http_code}' "$canonical/judge-health" || true)"
             mode="$(jq -r '.mode // empty' /tmp/health.json 2>/dev/null || true)"
             source="$(jq -r '.source_sha // empty' /tmp/health.json 2>/dev/null || true)"
             echo "Judge Mode anonymous probe attempt=${attempt} code=${code} mode=${mode} source=${source}"
@@ -135,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           url="${{ steps.deploy.outputs.url }}"
-          curl -fsS "$url/healthz" > /tmp/health.json
+          curl -fsS "$url/judge-health" > /tmp/health.json
           curl -fsS "$url/api/proof" > /tmp/proof.json
           curl -fsS "$url/api/synthetic-state" > /tmp/state.json
           curl -fsS "$url/" > /tmp/home.html
@@ -148,7 +142,7 @@ jobs:
           [[ "$(jq -r '.judge_mode' /tmp/proof.json)" == "read_only_synthetic_evidence" ]]
           grep -F "Nobody prompted it." /tmp/home.html >/dev/null
           grep -F "JUDGE MODE · READ ONLY · SYNTHETIC" /tmp/home.html >/dev/null
-          for path in /api/proof /api/synthetic-state /; do
+          for path in /judge-health /api/proof /api/synthetic-state /; do
             code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$url$path")"
             [[ "$code" == "405" ]]
           done
@@ -167,7 +161,9 @@ jobs:
           - Image digest: ${{ steps.build.outputs.digest }}
           - Cloud Run revision: ${{ steps.deploy.outputs.revision }}
           - Ingress: all (Judge Mode only)
-          - Anonymous GET /healthz: PASS
+          - Anonymous GET /judge-health: PASS
+          - Anonymous GET /api/proof: PASS
+          - Anonymous GET /api/synthetic-state: PASS
           - Mutation endpoints: NONE / POST checks return 405
           - Secrets embedded in surface: NONE
           - Model calls from surface: NONE
