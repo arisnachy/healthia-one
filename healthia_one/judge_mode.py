@@ -32,8 +32,7 @@ SYNTHETIC_STATE = {
 }
 
 
-@app.get("/healthz")
-async def healthz() -> dict:
+def _health_payload() -> dict:
     return {
         "status": "ok",
         "mode": "judge_read_only_synthetic",
@@ -43,6 +42,19 @@ async def healthz() -> dict:
         "model_calls": False,
         "secrets": False,
     }
+
+
+@app.get("/judge-health")
+async def judge_health() -> dict:
+    # Dedicated public verification endpoint.  Cloud Run's edge returned an
+    # infrastructure 404 for /healthz on the reused service even while / served
+    # the app correctly, so competition proof uses an unambiguous app-owned path.
+    return _health_payload()
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    return _health_payload()
 
 
 @app.get("/api/proof")
