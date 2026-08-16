@@ -8,15 +8,13 @@
 
 **Your health never starts over — a patient-owned AI agent that turns evidence into durable, consent-aware missions and real-world action.**
 
-## One-line judge pitch
+## Judge pitch
 
-**HealthIA ONE turns fragmented patient evidence into durable work: Gemini + Google ADK reason when needed, deterministic logic preserves exact human choices, and real Google tools act only after the required patient boundary is satisfied.**
+HealthIA ONE turns fragmented patient evidence into durable work: **Gemini + Google ADK reason when needed, deterministic logic preserves exact human choices, and real Google tools act only after the required patient boundary is satisfied.**
 
 ## The problem
 
-A patient's health story is scattered across conversations, laboratory reports, images, medications, appointments, devices, care resources and support programs. The patient is often the only person carrying unfinished context from one interaction to the next.
-
-Most health chat experiences can discuss one fragment. HealthIA ONE is designed to **carry unfinished health work forward**.
+A patient's health story is scattered across conversations, laboratory reports, images, medications, appointments, devices, care resources and support programs. Most health chat experiences can discuss one fragment. HealthIA ONE is designed to **carry unfinished health work forward**.
 
 ## The Taskmaster workflow
 
@@ -34,19 +32,9 @@ patient need
 → durable receipt/outcome
 ```
 
-### Adaptive clinical conversation
-
-HealthIA asks for missing information instead of immediately generating a generic answer. It fails closed when an ambiguous reference cannot be anchored safely and uses deterministic safety controls before routine orientation.
-
 ### Evidence first, interpretation second
 
-When a synthetic clinical PDF/image is uploaded:
-
-1. original bytes are stored first in private Google Cloud Storage;
-2. Gemini 3.5 Flash on Vertex AI performs bounded multimodal extraction;
-3. structured patient state is stored in Firestore;
-4. the clinical twin/timeline keeps provenance to the original;
-5. extraction failure stays pending instead of inventing a result.
+For a synthetic clinical PDF/image, original bytes are stored first in private Google Cloud Storage. Gemini 3.5 Flash on Vertex AI then performs bounded multimodal extraction, structured state is stored in Firestore and the clinical twin/timeline keeps provenance to the original. Extraction uncertainty fails closed instead of inventing a result.
 
 ### Durable missions, not prompt memory
 
@@ -54,42 +42,44 @@ A mission is not complete because an LLM produced text. The requested outcome mu
 
 ### Human boundary → same mission resumes
 
-For location-dependent resource navigation, HealthIA creates the mission but performs **zero Google Places searches before mission-scoped consent**.
+For location-dependent resource navigation, HealthIA creates the mission but performs **0 Google Places searches before mission-scoped consent**.
 
-After the patient authorizes location, the same durable mission resumes and performs bounded real Google Places discovery.
+After authorization, the **same durable mission resumes** and performs bounded real Google Places discovery.
 
-The patient can then say only:
+Wave 4 LIVE proof verified 4 bounded searches, 9 deduplicated real candidates, 9/9 Maps URIs, 6 websites and 9 phone numbers returned by Google.
+
+The patient can then say:
 
 > **“The second one.”**
 
 HealthIA deterministically selects exactly the second displayed candidate. It does not spend another LLM call guessing a bounded ordinal choice.
 
-### Real Google action loop
+### Preserved real Google action loop
 
-The preserved Google Health Constellation LIVE proof demonstrated:
+The Google Health Constellation Golden LIVE proof demonstrated:
 
 ```text
 Safety
 → Mission Router
 → Places
 → Gmail send
-→ Gmail watch
-→ Pub/Sub
-→ Gmail history / exact reply correlation
+→ Gmail users.watch
+→ authenticated Pub/Sub
+→ Gmail users.history.list / exact reply correlation
 → Calendar FreeBusy
-→ Calendar event
-→ Google Task
+→ Calendar event create + reread
+→ Google Task create + reread
 → durable receipts
 → COMPLETED
 ```
 
-External mutations are tied to exact authorization. A planned action is never represented as executed merely because the model described it; real completion requires a connector outcome/receipt.
+External mutations are tied to exact authorization. A planned action is never represented as executed merely because a model described it; real completion requires a connector outcome/receipt.
 
 ## Opportunity Autopilot
 
-HealthIA can maintain patient/family watch topics and discover relevant scientific/practical opportunities from sources including PubMed/NLM, Europe PMC and ClinicalTrials.gov.
+HealthIA can maintain patient/family watch topics and discover relevant scientific/practical opportunities from sources including PubMed/NLM, Europe PMC and ClinicalTrials.gov. Assistance-program requirements are not treated as fact until verified against an official source. Eligibility remains `MATCHED`, `UNMET` or `UNKNOWN`.
 
-Assistance-program requirements are not treated as fact until verified against an official source. Eligibility remains `MATCHED`, `UNMET` or `UNKNOWN`. HealthIA does not claim an external benefits/application submission unless a real external adapter returns a durable receipt.
+HealthIA does not claim an external benefits/application submission unless a real external adapter returns a durable receipt.
 
 ## Google technology
 
@@ -111,9 +101,7 @@ Cloud execution uses service identity / ADC rather than embedding a Gemini API k
 
 ## Architecture
 
-See `docs/ARCHITECTURE.md` and `JUDGES_START_HERE.md`.
-
-Core boundaries:
+See `JUDGES_START_HERE.md` and `docs/ARCHITECTURE.md`.
 
 ```text
 Patient Web UI
@@ -125,7 +113,7 @@ Patient Web UI
    ↳ Google mission runtime → Places/Gmail/Calendar/Tasks
 → Firestore canonical patient + mission state
 → Clinical twin / provenance
-→ Receipts + patient-visible durable outcome
+→ durable receipts + patient-visible outcome
 ```
 
 ## Production-minded boundaries
@@ -149,24 +137,20 @@ Patient Web UI
 ### Wave 4 current product candidate
 
 - tested SHA: `a48710eeb5a2e8429a91f5004129064e5af37c1a`
-- Wave 4 final PR: `#41` — integrated into `main` without rewriting the tested head
-- full verification / JUDGE run: `31562277991` — **SUCCESS**
-- real Places Wave 4 run: `31562277909` — **SUCCESS**
-- Opportunity Autopilot run: `31562277915` — **SUCCESS**
-
-Wave 4 resource proof verified 0 Places searches before consent, then 4 bounded real searches, 9 deduplicated real candidates, 9/9 Maps URIs, 6 websites and 9 phone numbers returned by Google.
+- Wave 4 final lineage: PR `#41`, integrated into `main` without rewriting the tested head
+- full verification / JUDGE run `31562277991` — **SUCCESS**
+- real Places Wave 4 run `31562277909` — **SUCCESS**
+- Opportunity Autopilot run `31562277915` — **SUCCESS**
 
 ### Preserved full external-action proof
 
 - Golden LIVE SHA: `891745e1ab93dc78b9aa4e54d65b315befa885f2`
-- evidence PR: `#37`
-- the Golden SHA is an ancestor of the Wave 4 candidate
+- evidence lineage: PR `#37`
+- relationship: Golden SHA is an ancestor of the Wave 4 candidate
 
 This proof includes real OAuth, Places, Gmail send/watch/history, authenticated Pub/Sub push, exact reply correlation, Calendar FreeBusy, Calendar event creation/reread, Google Tasks creation/reread and durable receipts.
 
 ## Reproducible setup
-
-### Zero-spend local mode
 
 ```bash
 python -m venv .venv
@@ -176,7 +160,7 @@ python -m pip install -e ".[test]"
 HEALTHIA_LLM_BACKEND=mock HEALTHIA_COST_MODE=local HEALTHIA_AI_REQUEST_LIMIT=0 uvicorn app.main:app --port 8000
 ```
 
-Windows:
+Windows helper:
 
 ```powershell
 .\deployment\run-local-secure.ps1
@@ -193,17 +177,21 @@ python scripts/judge_omega.py
 
 ## Hosted project
 
-A public hosted URL is **not claimed unless anonymous/judge access is explicitly verified**. The hackathon proof includes Google Cloud deployment evidence; controlled proof deployments are request-capped and may retain an IAM boundary to avoid unnecessary cost/exposure.
+A public hosted application URL is **not claimed unless anonymous/judge access is explicitly verified**. Controlled Cloud proofs are request-capped and may retain an IAM boundary to avoid unnecessary exposure.
 
-## Demo strategy
+## Video truth and replacement gate
 
-The replacement video contract is `docs/WINNING_ONE_TAKE.md`.
+The Devpost project currently selects its YouTube judge video. Separately, the repository preserves a **public byte-verified fallback** whose exact video SHA is locked by CI:
 
-The final take must show the real app continuously, not append a slide deck. Its center is:
+https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm
+
+The replacement contract is `docs/WINNING_ONE_TAKE.md`.
+
+A replacement must show the real app continuously — not append a slide deck — with this centerpiece:
 
 **durable mission → no Places before consent → explicit consent → real Places → “The second one” → exact deterministic selection → durable continuity**.
 
-The full Gmail/Calendar/Tasks connector proof must only be shown as LIVE when the recording account is genuinely provisioned for it. Nothing is simulated and presented as execution evidence.
+The full Gmail/Calendar/Tasks connector loop is shown as LIVE only when the recording account is genuinely provisioned. Nothing simulated is presented as execution evidence.
 
 ## Findings and learnings
 
@@ -221,7 +209,7 @@ The full Gmail/Calendar/Tasks connector proof must only be shown as LIVE when th
 
 ## Repository
 
-`https://github.com/arisnachy/healthia-one`
+https://github.com/arisnachy/healthia-one
 
 ## Clinical truth boundary
 
