@@ -72,6 +72,9 @@ def test_publication_happens_only_after_cutlock_and_is_anonymously_reverified() 
     assert "--clobber" in WORKFLOW
     assert "curl --fail --location --silent --show-error \"$public_url\"" in WORKFLOW
     assert "HEALTHIA_PUBLIC_WINNER_VIDEO_PASS" in WORKFLOW
+    assert "SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in WORKFLOW
+    assert "'source_sha':os.environ['SOURCE_HEAD_SHA']" in WORKFLOW
+    assert "'source_sha':os.environ.get('GITHUB_SHA'" not in WORKFLOW
 
 
 def test_demo_removes_temporary_cloud_service_even_on_failure() -> None:
