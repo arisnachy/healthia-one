@@ -25,6 +25,18 @@ patient need
 
 HealthIA deliberately combines **AI reasoning**, **deterministic exact logic**, and **human consent**. More model calls are not automatically more agentic.
 
+## Current winning proof: nobody prompted it
+
+> **HealthIA noticed the follow-up was overdue. Nobody prompted it.**
+
+For an explicitly opted-in synthetic patient, deterministic reconciliation created one durable blood-pressure follow-up mission before any external action. The mission crossed **5 durable boundaries**: Firestore commit, Eventarc delivery, private Cloud Run worker, real Gmail plus authenticated Pub/Sub reply recovery, and canonical measurement persistence on the same completed mission. Detecting that the follow-up was due required **0 model calls**.
+
+- Public exact-head Judge Mode: https://healthia-one-judge-1038180719788.us-central1.run.app
+- Architecture and safety contract: [`docs/AUTONOMOUS_CONTINUITY.md`](docs/AUTONOMOUS_CONTINUITY.md)
+- Final continuous demo with Google Cloud male voice `en-US-Chirp3-HD-Charon`: https://github.com/arisnachy/healthia-one/releases/download/healthia-one-autonomous-winner-demo-2026/HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4
+
+The public Judge Mode is read-only, synthetic and credential-free; the operational workers remain private.
+
 ## Flagship Taskmaster proof
 
 A patient asks HealthIA to find useful support nearby.
@@ -204,6 +216,7 @@ Cloud/live proofs are separate opt-in gates with bounded request budgets. A publ
 
 - [`JUDGES_START_HERE.md`](JUDGES_START_HERE.md) — judge-first claim/evidence map
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture
+- [`docs/AUTONOMOUS_CONTINUITY.md`](docs/AUTONOMOUS_CONTINUITY.md) — unattended five-boundary mission and public Judge Mode
 - [`docs/GOOGLE_HEALTH_CONSTELLATION.md`](docs/GOOGLE_HEALTH_CONSTELLATION.md) — current Google mission/action truth table
 - [`docs/OPPORTUNITY_AUTOPILOT.md`](docs/OPPORTUNITY_AUTOPILOT.md) — evidence-bounded opportunity layer
 - [`docs/WINNING_ONE_TAKE.md`](docs/WINNING_ONE_TAKE.md) — replacement-video contract
