@@ -86,11 +86,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Cloud Run's current recommended public-access mechanism is to disable
+          # the Invoker IAM check for this deliberately read-only service.  This
+          # avoids depending on an allUsers IAM binding while the private HealthIA
+          # workers retain normal IAM enforcement.
           gcloud run deploy "$SERVICE" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --image "${{ steps.build.outputs.image }}" \
-            --allow-unauthenticated \
+            --no-invoker-iam-check \
             --min 0 \
             --max 1 \
             --concurrency 80 \
@@ -100,11 +104,33 @@ jobs:
             --args "healthia_one.judge_mode:app,--host,0.0.0.0,--port,8080" \
             --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${GITHUB_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=pending-exact-head-proof" \
             --quiet
-          url="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-          revision="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
-          test -n "$url" && test -n "$revision"
+
+          gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/judge-service.json
+          revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/judge-service.json)"
+          invoker_disabled="$(jq -r '.metadata.annotations["run.googleapis.com/invoker-iam-disabled"] // "false"' /tmp/judge-service.json)"
+          project_number="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+          canonical="https://${SERVICE}-${project_number}.${REGION}.run.app"
+          status_url="$(jq -r '.status.url // empty' /tmp/judge-service.json)"
+          annotation_urls="$(jq -r '.metadata.annotations["run.googleapis.com/urls"] // "[]"' /tmp/judge-service.json | jq -r '.[]?' 2>/dev/null || true)"
+          test -n "$revision" && test -n "$project_number"
+          [[ "$invoker_disabled" == "true" ]]
+
+          url=''
+          for _ in $(seq 1 30); do
+            while IFS= read -r candidate; do
+              [[ -n "$candidate" ]] || continue
+              body="$(curl -sS --max-time 10 "$candidate/healthz" 2>/dev/null || true)"
+              if [[ "$(jq -r '.mode // empty' <<<"$body" 2>/dev/null || true)" == "judge_read_only_synthetic" ]]; then
+                url="$candidate"
+                break 2
+              fi
+            done < <(printf '%s\n%s\n%s\n' "$canonical" "$status_url" "$annotation_urls" | awk 'NF && !seen[$0]++')
+            sleep 2
+          done
+          test -n "$url"
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "invoker_disabled=$invoker_disabled" >> "$GITHUB_OUTPUT"
 
       - name: Anonymous public verification
         shell: bash
@@ -117,10 +143,14 @@ jobs:
           [[ "$(jq -r '.mode' /tmp/health.json)" == "judge_read_only_synthetic" ]]
           [[ "$(jq -r '.mutations' /tmp/health.json)" == "false" ]]
           [[ "$(jq -r '.model_calls' /tmp/health.json)" == "false" ]]
+          [[ "$(jq -r '.secrets' /tmp/health.json)" == "false" ]]
+          [[ "$(jq -r '.source_sha' /tmp/health.json)" == "$GITHUB_SHA" ]]
           [[ "$(jq -r '.boundary_count' /tmp/proof.json)" == "5" ]]
           grep -F "Nobody prompted it." /tmp/home.html >/dev/null
-          code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$url/api/proof")"
-          [[ "$code" == "405" ]]
+          for path in /api/proof /api/synthetic-state /; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$url$path")"
+            [[ "$code" == "405" ]]
+          done
 
       - name: Publish sanitized Judge Mode evidence
         shell: bash
@@ -135,8 +165,9 @@ jobs:
           - Cloud Build id: ${{ steps.build.outputs.build_id }}
           - Image digest: ${{ steps.build.outputs.digest }}
           - Cloud Run revision: ${{ steps.deploy.outputs.revision }}
+          - Invoker IAM check disabled for this read-only public surface: ${{ steps.deploy.outputs.invoker_disabled }}
           - Public anonymous access: PASS
-          - Mutation endpoints: NONE / POST proof check returns 405
+          - Mutation endpoints: NONE / POST checks return 405
           - Secrets embedded in surface: NONE
           - Model calls from surface: NONE
           - Patient data: SYNTHETIC ONLY
