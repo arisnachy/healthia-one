@@ -1,0 +1,310 @@
+name: Wave 14 autonomous live recorder v2
+
+on:
+  pull_request:
+    branches: [kira/autonomous-guardian-wave5]
+    paths:
+      - ".github/workflows/wave14-autonomous-live-recorder-v2.yml"
+      - "scripts/wave14_recorder_account.py"
+      - "scripts/wave14_recorder_control.py"
+      - "scripts/record_wave14_autonomous_live_demo.py"
+      - "scripts/guardian_wave14_stitch_proof.py"
+      - "Dockerfile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-wave14-autonomous-live-recorder
+  cancel-in-progress: false
+
+jobs:
+  record-live-autonomy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'kira/wave14-autonomous-live-recorder')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      PRODUCT_SHA: f9a3906484095460916218623a919a01b4f87e30
+      GMAIL_WORKER: healthia-gmail-worker
+      AUTOPILOT_SERVICE: healthia-one-autopilot
+      AUTOPILOT_TRIGGER: healthia-opportunity-events
+      PROOF_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+      PROOF_COLLECTION: healthia_wave14_stitch_proofs
+      WEB_RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      WEB_SERVICE: healthia-wave14-recorder-${{ github.run_id }}
+      RECORDER_EMAIL: wave14-${{ github.run_id }}@example.test
+      RECORDER_PASSWORD: Wave14Recorder${{ github.run_id }}Aa9
+
+    steps:
+      - name: Checkout proof-only recorder branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify recorder branch contains product source unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "${PRODUCT_SHA}^{commit}"
+          git diff --exit-code "$PRODUCT_SHA" -- app healthia_one healthia_agent web demo pyproject.toml README.md LICENSE
+          python -m py_compile scripts/wave14_recorder_account.py scripts/wave14_recorder_control.py scripts/record_wave14_autonomous_live_demo.py scripts/guardian_wave14_stitch_proof.py
+          mkdir -p dist/wave14-autonomous-live-recorder
+          echo "PRODUCT_SOURCE_UNCHANGED $PRODUCT_SHA" | tee dist/wave14-autonomous-live-recorder/source-gate.txt
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify live Eventarc and Gmail topology
+        id: topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$GMAIL_WORKER" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/gmail.json
+          gcloud run services describe "$AUTOPILOT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/autopilot.json
+          runtime_sa="$(jq -r '.spec.template.spec.serviceAccountName // empty' /tmp/gmail.json)"
+          topic="$(jq -r '[.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_GMAIL_PUBSUB_TOPIC") | .value][0] // empty' /tmp/gmail.json)"
+          auto_ready="$(jq -r '[.status.conditions[]? | select(.type=="Ready") | .status][0] // "False"' /tmp/autopilot.json)"
+          auto_revision="$(jq -r '.status.latestReadyRevisionName // empty' /tmp/autopilot.json)"
+          test -n "$runtime_sa" && [[ "$topic" == projects/*/topics/* ]]
+          [[ "$auto_ready" == True ]] && test -n "$auto_revision"
+          location="$(gcloud firestore databases describe --database='(default)' --project "$PROJECT_ID" --format='value(locationId)')"
+          gcloud eventarc triggers describe "$AUTOPILOT_TRIGGER" --project "$PROJECT_ID" --location "$location" --format=json > /tmp/trigger.json
+          [[ "$(jq -r '.destination.cloudRun.service // empty' /tmp/trigger.json)" == "$AUTOPILOT_SERVICE" ]]
+          [[ "$(jq -r '.destination.cloudRun.path // empty' /tmp/trigger.json)" == "/events/firestore" ]]
+          jq -e '.eventFilters[]? | select(.attribute=="type" and .value=="google.cloud.firestore.document.v1.created")' /tmp/trigger.json >/dev/null
+          jq -e '.eventFilters[]? | select(.attribute=="document" and .value=="healthia_autopilot_events/{eventId}")' /tmp/trigger.json >/dev/null
+          echo "runtime_sa=$runtime_sa" >> "$GITHUB_OUTPUT"
+          echo "topic=$topic" >> "$GITHUB_OUTPUT"
+          echo "autopilot_revision=$auto_revision" >> "$GITHUB_OUTPUT"
+          echo "eventarc_location=$location" >> "$GITHUB_OUTPUT"
+
+      - name: Build proof-only recorder image
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          recorder_sha="$(git rev-parse HEAD)"
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-wave14-live-recorder:${recorder_sha}"
+          gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" --tag "$image" --quiet
+          digest="$(gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+          test -n "$digest"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "recorder_sha=$recorder_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy temporary private HealthIA recorder surface
+        id: web
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ steps.build.outputs.image }}"
+          gcloud run deploy "$WEB_SERVICE" --image "$image" --project "$PROJECT_ID" --region "$REGION" \
+            --service-account "$WEB_RUNTIME_SA" --min 0 --max 1 --concurrency 10 --cpu 1 --memory 512Mi --timeout 600 \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=false,HEALTHIA_PROACTIVE_ENABLED=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID}" \
+            --set-secrets "HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" --no-allow-unauthenticated --quiet
+          url="$(gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          test -n "$url" && test -n "$revision" && test -n "$token"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Create reversible proof jobs before camera starts
+        id: jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="healthia-rec-${GITHUB_RUN_ID}"
+          image="${{ steps.build.outputs.image }}"
+          runtime_sa="${{ steps.topology.outputs.runtime_sa }}"
+          topic="${{ steps.topology.outputs.topic }}"
+          common="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},HEALTHIA_ENV=cloud,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_LLM_BACKEND=mock,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_GMAIL_PUBSUB_TOPIC=${topic},HEALTHIA_WAVE14_PROOF_PATIENT_ID=${PROOF_PATIENT_ID},HEALTHIA_WAVE14_PROOF_RUN_ID=${GITHUB_RUN_ID},HEALTHIA_WAVE14_RECORDER_EMAIL=${RECORDER_EMAIL},HEALTHIA_WAVE14_RECORDER_PASSWORD=${RECORDER_PASSWORD}"
+          create_job() {
+            local key="$1" script="$2" phase="$3" timeout="${4:-300s}" job="${prefix}-$1"
+            gcloud run jobs create "$job" --project "$PROJECT_ID" --region "$REGION" --image "$image" --service-account "$runtime_sa" \
+              --command python --args "${script},${phase}" --set-env-vars "$common" --max-retries 0 --task-timeout "$timeout" --quiet
+            echo "${key}_job=$job" >> "$GITHUB_OUTPUT"
+          }
+          create_job account_setup scripts/wave14_recorder_account.py setup 180s
+          create_job account_cleanup scripts/wave14_recorder_account.py cleanup 180s
+          create_job prestage scripts/wave14_recorder_control.py prestage 240s
+          create_job activate scripts/wave14_recorder_control.py activate 240s
+          create_job await_email scripts/guardian_wave14_stitch_proof.py await_email 300s
+          create_job reply scripts/guardian_wave14_stitch_proof.py reply 240s
+          create_job verify scripts/guardian_wave14_stitch_proof.py verify 300s
+          create_job restore scripts/guardian_wave14_stitch_proof.py restore 240s
+
+      - name: Prestage synthetic state without creating the autonomous mission
+        id: prestage
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ steps.jobs.outputs.prestage_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          gcloud run jobs execute "${{ steps.jobs.outputs.account_setup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install live browser recorder and ffmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      - name: Record one continuous autonomous HealthIA run
+        id: live
+        shell: bash
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.web.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.web.outputs.token }}
+          HEALTHIA_WAVE14_RECORDER_EMAIL: ${{ env.RECORDER_EMAIL }}
+          HEALTHIA_WAVE14_RECORDER_PASSWORD: ${{ env.RECORDER_PASSWORD }}
+          HEALTHIA_WAVE14_PROOF_PATIENT_ID: ${{ env.PROOF_PATIENT_ID }}
+        run: |
+          set -euo pipefail
+          base=dist/wave14-autonomous-live-recorder
+          python scripts/record_wave14_autonomous_live_demo.py > "$base/recorder.log" 2>&1 &
+          recorder_pid=$!
+          cleanup_recorder() { kill "$recorder_pid" >/dev/null 2>&1 || true; }
+          trap cleanup_recorder EXIT
+          for _ in $(seq 1 180); do
+            [[ -f "$base/browser-ready" ]] && break
+            kill -0 "$recorder_pid" 2>/dev/null || { cat "$base/recorder.log"; exit 1; }
+            sleep 1
+          done
+          [[ -f "$base/browser-ready" ]] || { cat "$base/recorder.log"; exit 1; }
+          gcloud run jobs execute "${{ steps.jobs.outputs.activate_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          for _ in $(seq 1 120); do
+            [[ -f "$base/mission-visible" ]] && break
+            kill -0 "$recorder_pid" 2>/dev/null || { cat "$base/recorder.log"; exit 1; }
+            sleep 1
+          done
+          [[ -f "$base/mission-visible" ]] || { cat "$base/recorder.log"; exit 1; }
+          gcloud run jobs execute "${{ steps.jobs.outputs.await_email_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          gcloud run jobs execute "${{ steps.jobs.outputs.reply_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          gcloud run jobs execute "${{ steps.jobs.outputs.verify_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+          wait "$recorder_pid"
+          trap - EXIT
+          cat "$base/recorder.log"
+          jq -e '.status == "PASS" and .no_chat_prompt_used == true and (.checks | index("mission_created_without_chat_prompt")) and (.checks | index("same_mission_completed_from_external_email_reply")) and (.checks | index("gmail_reply_persisted_as_canonical_vital")) and (.checks | index("completed_state_visible_in_real_product_ui"))' "$base/recorder-report.json" >/dev/null
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
+      - name: Capture proof truth and cut competition insert from real footage
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/wave14-autonomous-live-recorder
+          report="$base/recorder-report.json"
+          raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"
+          test -s "$raw" && test -s "$report"
+          token="$(gcloud auth print-access-token)"
+          proof_url="https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}"
+          curl -fsS -H "Authorization: Bearer ${token}" "$proof_url" > /tmp/proof.json
+          unset token
+          status="$(jq -r '.fields.status.stringValue // empty' /tmp/proof.json)"
+          mission_status="$(jq -r '.fields.mission_status.stringValue // empty' /tmp/proof.json)"
+          source_type="$(jq -r '.fields.vital_source_type.stringValue // empty' /tmp/proof.json)"
+          outbox_status="$(jq -r '.fields.outbox_status.stringValue // empty' /tmp/proof.json)"
+          reply_count="$(jq -r '.fields.processed_reply_count.integerValue // "0"' /tmp/proof.json)"
+          eventarc_outbound="$(jq -r '.fields.eventarc_outbound.booleanValue // false' /tmp/proof.json)"
+          gmail_inbound="$(jq -r '.fields.gmail_pubsub_inbound.booleanValue // false' /tmp/proof.json)"
+          [[ "$status" == full_loop_live_pass && "$mission_status" == completed && "$source_type" == patient_email_reply && "$outbox_status" == processed && "$reply_count" == 1 && "$eventarc_outbound" == true && "$gmail_inbound" == true ]]
+          cat > "$base/proof.md" <<EOF
+          # HealthIA Wave 14 autonomous live recorder
+          Product source: $PRODUCT_SHA
+          Recorder harness: ${{ steps.build.outputs.recorder_sha }}
+          Recorder image digest: ${{ steps.build.outputs.digest }}
+          Web revision: ${{ steps.web.outputs.revision }}
+          Autopilot revision: ${{ steps.topology.outputs.autopilot_revision }}
+          Eventarc location: ${{ steps.topology.outputs.eventarc_location }}
+          Status: $status
+          Outbox: $outbox_status
+          Real Gmail thread: yes
+          Controlled synthetic reply: BP 128/80
+          Gmail watch/PubSub inbound: $gmail_inbound
+          Same mission: $mission_status
+          Persisted vital provenance: $source_type
+          Reply processed exactly once: $reply_count
+          Eventarc outbound: $eventarc_outbound
+          Browser patient prompt used: no
+          EOF
+          ffmpeg -hide_banner -loglevel error -y -i "$raw" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -an -movflags +faststart "$base/HealthIA-Wave14-AUTONOMOUS-LIVE-ONE-TAKE.mp4"
+          read mission_s completed_s < <(python - "$report" <<'PY'
+          import json, sys
+          data=json.load(open(sys.argv[1], encoding='utf-8'))
+          print(float(data['timeline']['mission_created_s']), float(data['timeline']['mission_completed_s']))
+          PY
+          )
+          read a_start a_len b_start b_len < <(python - "$mission_s" "$completed_s" <<'PY'
+          import sys
+          mission=float(sys.argv[1]); completed=float(sys.argv[2])
+          print(f"{max(0.0, mission-4.5):.3f} 10.000 {max(mission+6.0, completed-1.5):.3f} 10.500")
+          PY
+          )
+          ffmpeg -hide_banner -loglevel error -y -ss "$a_start" -i "$raw" -t "$a_len" -c:v libx264 -preset veryfast -crf 19 -pix_fmt yuv420p -an "$base/part-a.mp4"
+          ffmpeg -hide_banner -loglevel error -y -ss "$b_start" -i "$raw" -t "$b_len" -c:v libx264 -preset veryfast -crf 19 -pix_fmt yuv420p -an "$base/part-b.mp4"
+          printf "file '%s'\nfile '%s'\n" "$PWD/$base/part-a.mp4" "$PWD/$base/part-b.mp4" > "$base/concat.txt"
+          ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$base/concat.txt" -c copy -movflags +faststart "$base/HealthIA-Wave14-AUTONOMOUS-LIVE-JUDGE-SEGMENT.mp4"
+          rm -f "$base/part-a.mp4" "$base/part-b.mp4" "$base/concat.txt"
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$base/HealthIA-Wave14-AUTONOMOUS-LIVE-JUDGE-SEGMENT.mp4" > "$base/judge-segment-duration.txt"
+          sha256sum "$base/HealthIA-Wave14-AUTONOMOUS-LIVE-ONE-TAKE.mp4" "$base/HealthIA-Wave14-AUTONOMOUS-LIVE-JUDGE-SEGMENT.mp4" | tee "$base/video.sha256"
+          echo "pass=true" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup temporary recorder account
+        if: always() && steps.prestage.outputs.complete == 'true'
+        shell: bash
+        run: gcloud run jobs execute "${{ steps.jobs.outputs.account_cleanup_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet || true
+
+      - name: Restore original synthetic patient state
+        if: always() && steps.prestage.outputs.complete == 'true'
+        shell: bash
+        run: gcloud run jobs execute "${{ steps.jobs.outputs.restore_job }}" --project "$PROJECT_ID" --region "$REGION" --wait --quiet || true
+
+      - name: Delete proof metadata
+        if: always() && steps.prestage.outputs.complete == 'true'
+        shell: bash
+        run: |
+          set +e
+          token="$(gcloud auth print-access-token)"
+          curl -sS -X DELETE -H "Authorization: Bearer ${token}" "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${PROOF_COLLECTION}/${GITHUB_RUN_ID}" >/dev/null
+          unset token
+
+      - name: Remove temporary Cloud Run jobs and recorder surface
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          for job in "${{ steps.jobs.outputs.account_setup_job }}" "${{ steps.jobs.outputs.account_cleanup_job }}" "${{ steps.jobs.outputs.prestage_job }}" "${{ steps.jobs.outputs.activate_job }}" "${{ steps.jobs.outputs.await_email_job }}" "${{ steps.jobs.outputs.reply_job }}" "${{ steps.jobs.outputs.verify_job }}" "${{ steps.jobs.outputs.restore_job }}"; do
+            [[ -n "$job" ]] && gcloud run jobs delete "$job" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
+          done
+          gcloud run services delete "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1 || true
+
+      - name: Upload real autonomous recording evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-Wave14-AUTONOMOUS-LIVE-RECORDER
+          path: dist/wave14-autonomous-live-recorder
+          if-no-files-found: warn
+          retention-days: 30
