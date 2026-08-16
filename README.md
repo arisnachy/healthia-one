@@ -163,13 +163,25 @@ Windows helper:
 .\deployment\run-local-secure.ps1
 ```
 
-Verification:
+Full verification:
 
 ```bash
 pytest
 python scripts/full_system_check.py
 python scripts/dialogbench.py
 python scripts/judge_omega.py
+```
+
+Frontend static checks:
+
+```bash
+node --check web/app.js
+node --check web/patient-record.js
+node --check web/family-documents.js
+node --check web/continuity.js
+node --check web/privacy-controls.js
+node --check web/profile-devices.js
+node --check web/icons.js
 ```
 
 Cloud/live proofs are separate opt-in gates with bounded request budgets. A public hosted application URL is **not claimed merely because a Cloud Run service exists**; anonymous/judge access must be explicitly verified first.
