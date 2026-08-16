@@ -308,6 +308,8 @@ jobs:
           gh release upload "$RELEASE_TAG" "$final" --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Prove public winner video is anonymous and byte-identical
+        env:
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -317,7 +319,7 @@ jobs:
           curl --fail --location --silent --show-error "$public_url" -o /tmp/healthia-public-winner.mp4
           actual="$(sha256sum /tmp/healthia-public-winner.mp4 | awk '{print $1}')"
           test "$actual" = "$expected"
-          PUBLIC_VIDEO_URL="$public_url" EXPECTED="$expected" ACTUAL="$actual" python - <<'PY'
+          PUBLIC_VIDEO_URL="$public_url" EXPECTED="$expected" ACTUAL="$actual" SOURCE_HEAD_SHA="$SOURCE_HEAD_SHA" python - <<'PY'
           import json, os, pathlib
           payload={
               'status':'PASS',
@@ -326,7 +328,7 @@ jobs:
               'byte_identical':os.environ['EXPECTED']==os.environ['ACTUAL'],
               'video_sha256':os.environ['EXPECTED'],
               'source_run_id':os.environ.get('GITHUB_RUN_ID',''),
-              'source_sha':os.environ.get('GITHUB_SHA',''),
+              'source_sha':os.environ['SOURCE_HEAD_SHA'],
               'release_tag':os.environ.get('RELEASE_TAG',''),
           }
           pathlib.Path('dist/final-live-english-demo/public-video-proof.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
