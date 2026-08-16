@@ -179,7 +179,6 @@ class CalendarConnector(OAuthConnectorBase):
 
     @staticmethod
     def _stable_event_id(idempotency_key: str) -> str:
-        # Calendar event IDs accept base32hex-style lowercase letters/digits.
         raw = bytes.fromhex(idempotency_key)
         return base64.b32hexencode(raw).decode("ascii").lower().rstrip("=")[:52]
 
@@ -224,6 +223,11 @@ class GmailConnector(OAuthConnectorBase):
     def _message_id(idempotency_key: str) -> str:
         return f"<healthia-{idempotency_key[:32]}@healthia.one>"
 
+    @staticmethod
+    def _thread_evidence(data: dict[str, Any]) -> list[str]:
+        thread_id = str(data.get("threadId") or "").strip()
+        return [f"gmail_thread:{thread_id}"] if thread_id else []
+
     def _raw_message(self, payload: dict[str, Any], idempotency_key: str) -> str:
         msg = EmailMessage()
         msg["To"] = ", ".join(str(item) for item in payload.get("to", []))
@@ -263,12 +267,25 @@ class GmailConnector(OAuthConnectorBase):
         if action in {GoogleAction.GMAIL_SEND, GoogleAction.GMAIL_REPLY}:
             existing = self._find_sent(idempotency_key)
             if existing:
-                return ConnectorResult(resource_id=str(existing.get("id") or ""), safe_summary="Recovered an already-sent Gmail message for this mission action.", data=existing, external_mutation=True, recovered_existing=True)
+                return ConnectorResult(
+                    resource_id=str(existing.get("id") or ""),
+                    safe_summary="Recovered an already-sent Gmail message for this mission action.",
+                    evidence_ids=self._thread_evidence(existing),
+                    data=existing,
+                    external_mutation=True,
+                    recovered_existing=True,
+                )
             message: dict[str, Any] = {"raw": raw}
             if payload.get("thread_id"):
                 message["threadId"] = str(payload["thread_id"])
             data = self.transport.call("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", headers=self.headers, body=message)
-            return ConnectorResult(resource_id=str(data.get("id") or ""), safe_summary="Sent the authorized Gmail message.", data=data, external_mutation=True)
+            return ConnectorResult(
+                resource_id=str(data.get("id") or ""),
+                safe_summary="Sent the authorized Gmail message.",
+                evidence_ids=self._thread_evidence(data),
+                data=data,
+                external_mutation=True,
+            )
         raise GoogleConnectorError(f"Unsupported Gmail action: {action}")
 
 
@@ -294,7 +311,7 @@ class PeopleConnector(OAuthConnectorBase):
                 if needle and needle in haystack:
                     matches.append(person)
             return ConnectorResult(safe_summary=f"Found {len(matches)} contact candidate(s); no clinical family relationship was inferred.", data={"matches": matches})
-        return ConnectorResult(safe_summary=f"Loaded {len(connections)} authorized contact(s).", data=data)
+        return ConnectorResult(safe_summary=f"Loaded {len(connections)} authorized contact(s); no clinical family relationship was inferred.", data=data)
 
 
 class DriveConnector(OAuthConnectorBase):

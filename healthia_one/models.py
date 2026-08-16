@@ -170,6 +170,17 @@ class PatientConsent(BaseModel):
             raise ValueError("quiet hours must use HH:MM")
         return f"{hour:02d}:{minute:02d}"
 
+    @model_validator(mode="after")
+    def normalize_guardian_email_permissions(self):
+        """Keep increasingly powerful Guardian email capabilities explicitly nested."""
+        signals = list(dict.fromkeys(str(item) for item in self.signal_types if str(item).strip()))
+        if "guardian_email" not in signals:
+            signals = [item for item in signals if item not in {"guardian_email_auto_send", "guardian_email_replies"}]
+        elif "guardian_email_auto_send" not in signals:
+            signals = [item for item in signals if item != "guardian_email_replies"]
+        self.signal_types = signals
+        return self
+
 
 class AuditEvent(BaseModel):
     id: str = Field(default_factory=lambda: new_id("audit"))

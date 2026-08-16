@@ -51,16 +51,22 @@ def test_cutlock_requires_real_candidates_and_no_preconsent_execution() -> None:
     assert "google_maps_uri_count') or 0) < 2" in WORKFLOW
 
 
-def test_winner_narration_prefers_existing_google_tts_and_has_local_fallback() -> None:
+def test_winner_narration_requires_named_google_cloud_charon_male_voice() -> None:
     assert "texttospeech.googleapis.com" in WORKFLOW
     assert "gcloud services list" in WORKFLOW
-    assert "flite-fallback" in WORKFLOW
+    assert "en-US-Chirp3-HD-Charon" in WORKFLOW
+    assert 'ssmlGender == "MALE"' in WORKFLOW
+    assert "'gender':'MALE'" in WORKFLOW
+    assert "'fallback_used':False" in WORKFLOW
+    assert "flite-fallback" not in WORKFLOW
+    assert "Named male Google Cloud voice synthesis failed closed" in WORKFLOW
     assert "gcloud services enable" not in WORKFLOW
     assert "VOICE_PART_1" not in WORKFLOW
     assert "VOICE_PART_2" not in WORKFLOW
     assert "your health should never start over" in NARRATION.lower()
     assert "the second one" in NARRATION.lower()
     assert "authorization is not execution evidence" in NARRATION.lower()
+    assert "nobody prompted it" in NARRATION.lower()
 
 
 def test_publication_happens_only_after_cutlock_and_is_anonymously_reverified() -> None:

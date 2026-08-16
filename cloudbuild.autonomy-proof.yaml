@@ -1,0 +1,13 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - BASE_IMAGE=${_BASE_IMAGE}
+      - -f
+      - Dockerfile.autonomy-proof
+      - -t
+      - ${_PROOF_IMAGE}
+      - .
+images:
+  - ${_PROOF_IMAGE}

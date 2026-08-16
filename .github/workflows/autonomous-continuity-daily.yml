@@ -1,0 +1,70 @@
+name: HealthIA daily autonomous continuity
+
+on:
+  schedule:
+    # 12:00 UTC = 08:00 America/Santo_Domingo year-round.
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/autonomous-continuity-daily.yml"
+      - "healthia_one/care_continuity_job.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-daily-autonomous-continuity
+  cancel-in-progress: false
+
+jobs:
+  wake-private-cloud-job:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      CARE_JOB: healthia-care-continuity-daily
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verify private Cloud Run Job is enabled and bounded
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs describe "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/job.json
+          image="$(jq -r '.spec.template.spec.template.spec.containers[0].image // empty' /tmp/job.json)"
+          proactive="$(jq -r '[.spec.template.spec.template.spec.containers[0].env[]? | select(.name=="HEALTHIA_PROACTIVE_ENABLED") | .value][0] // "false"' /tmp/job.json)"
+          command="$(jq -r '.spec.template.spec.template.spec.containers[0].command[0] // empty' /tmp/job.json)"
+          args="$(jq -r '.spec.template.spec.template.spec.containers[0].args | join(" ")' /tmp/job.json)"
+          test -n "$image"
+          [[ "$proactive" == "true" ]]
+          [[ "$command" == "python" ]]
+          [[ "$args" == "-m healthia_one.care_continuity_job" ]]
+          [[ "$(jq -r '.spec.template.spec.template.spec.maxRetries // 0' /tmp/job.json)" == "0" ]]
+
+      - name: Wake HealthIA without a chat prompt
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" --wait --quiet
+
+      - name: Verify latest Cloud Run Job execution succeeded
+        shell: bash
+        run: |
+          set -euo pipefail
+          execution="$(gcloud run jobs executions list --job "$CARE_JOB" --project "$PROJECT_ID" --region "$REGION" --limit 1 --sort-by='~metadata.creationTimestamp' --format='value(metadata.name)')"
+          test -n "$execution"
+          gcloud run jobs executions describe "$execution" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/execution.json
+          [[ "$(jq -r '[.status.conditions[]? | select(.type=="Completed") | .status][0] // "False"' /tmp/execution.json)" == "True" ]]
+          echo "HealthIA autonomous continuity wake completed inside private Cloud Run Job."

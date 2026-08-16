@@ -29,6 +29,22 @@ That separation is the core product idea.
 
 ---
 
+## Judge this first: an unattended mission
+
+> **HealthIA noticed the follow-up was overdue. Nobody prompted it.**
+
+For an explicitly opted-in synthetic patient, a deterministic clock found an overdue blood-pressure follow-up and committed the mission before external work. Eventarc woke a private Cloud Run worker, real Gmail delivered the follow-up under standing consent, Gmail `users.watch` and authenticated Pub/Sub recovered the exact-thread reply, a canonical `VitalRecord` was stored, and the same mission became `COMPLETED`.
+
+This single mission crossed **5 durable boundaries** and required **0 model calls** to decide that the follow-up was due.
+
+- Public, read-only, synthetic Judge Mode: https://healthia-one-judge-1038180719788.us-central1.run.app
+- Continuous live-app video narrated with Google Cloud male voice `en-US-Chirp3-HD-Charon`: https://github.com/arisnachy/healthia-one/releases/download/healthia-one-autonomous-winner-demo-2026/HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4
+- Full architecture and fail-closed boundaries: `docs/AUTONOMOUS_CONTINUITY.md`
+
+The proof surface carries no connector secrets or mutation routes. Operational workers remain private behind Cloud Run IAM.
+
+---
+
 ## What to judge first
 
 ### 1. A mission survives the chat
@@ -190,6 +206,7 @@ Controlled Cloud proofs are explicit opt-in and request-capped.
 
 - `README.md` — project overview and reproducible setup.
 - `docs/ARCHITECTURE.md` — architecture and evidence-flow diagrams.
+- `docs/AUTONOMOUS_CONTINUITY.md` — unattended five-boundary mission, clock, consent and Judge Mode.
 - `docs/GOOGLE_HEALTH_CONSTELLATION.md` — real Google action-loop architecture/evidence.
 - `docs/OPPORTUNITY_AUTOPILOT.md` — evidence-bounded opportunity system.
 - `docs/WINNING_ONE_TAKE.md` — the judge-demo north star.

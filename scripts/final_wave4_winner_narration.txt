@@ -12,6 +12,10 @@ Next, HealthIA demonstrates evidence discipline. A synthetic clinical document i
 
 Finally, the patient logs out and signs in again. The clinical evidence is still present. The same Google mission is still present. The exact second resource remains selected. Continuity belongs to durable patient state, not to a browser variable and not to prompt memory.
 
-HealthIA also has a separately preserved live Google action proof covering Gmail, Pub/Sub, Calendar and Google Tasks. The rule across every connector is the same: authorization is not execution evidence. A model cannot declare a real-world mutation complete. HealthIA only claims completion when the real connector returns a durable outcome or receipt.
+Now the decisive autonomous proof. HealthIA noticed an overdue blood-pressure follow-up. Nobody prompted it. For a synthetic patient who explicitly opted in, deterministic reconciliation created one durable mission before any external work. Eventarc woke a private Cloud Run worker. A real Gmail follow-up was sent under standing consent. The patient replied in the exact thread; Gmail users dot watch and authenticated Pub/Sub returned that event to HealthIA. A canonical measurement was stored and the same mission became completed. That single unattended mission crossed five durable boundaries, while overdue detection used zero model calls.
+
+The screen shown here is an exact-head, public Judge Mode running on Cloud Run. It is intentionally read-only, synthetic and credential-free. The operational workers remain private. The source SHA, proof run, five-boundary metric and zero-model trigger are visible and machine-readable.
+
+HealthIA also preserves a separate real Google action proof covering Places, Gmail, Pub/Sub, Calendar and Google Tasks. The rule across every connector is the same: authorization is not execution evidence. A model cannot declare a real-world mutation complete. HealthIA only claims completion when the real connector returns a durable outcome or receipt.
 
 HealthIA ONE does not win by talking longer. It wins by carrying unfinished patient work forward, doing every safe step it can prove, stopping exactly where the human must decide, resuming the same mission after consent, and preserving the outcome so the patient never starts over.

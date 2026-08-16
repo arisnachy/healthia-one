@@ -8,6 +8,7 @@ from healthia_one.autopilot_runtime import AutopilotEvent
 from healthia_one.models import PatientState
 from healthia_one.opportunity_autopilot import derive_watch_topics
 from healthia_one.opportunity_permissions import RadarPermissionStore
+from healthia_one.store import PATIENT_STATE_COLLECTION
 
 
 def utc_now() -> datetime:
@@ -76,7 +77,7 @@ def load_firestore_patient_states(project: str | None = None) -> list[PatientSta
 
     client = firestore.Client(project=project)
     states: list[PatientState] = []
-    for snapshot in client.collection("healthia_patient_states").stream():
+    for snapshot in client.collection(PATIENT_STATE_COLLECTION).stream():
         raw = snapshot.to_dict() or {}
         if not raw:
             continue
