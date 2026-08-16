@@ -7,7 +7,11 @@ on:
     paths:
       - "healthia_one/judge_mode.py"
       - "healthia_one/autonomous_continuity.py"
+      - "healthia_one/bp_followup_guardian.py"
+      - "healthia_one/mission_evidence_api.py"
+      - "healthia_one/store.py"
       - "tests/test_judge_mode.py"
+      - "tests/test_autonomous_continuity_mainline_contract.py"
       - ".github/workflows/judge-mode-live.yml"
   workflow_dispatch:
 
