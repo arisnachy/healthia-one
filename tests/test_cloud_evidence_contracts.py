@@ -131,3 +131,20 @@ def test_cloud_identity_token_is_not_passed_in_process_arguments() -> None:
     verifier = Path("deployment/verify_cloud_demo.py").read_text(encoding="utf-8")
     assert 'os.getenv("HEALTHIA_CLOUD_ACCESS_TOKEN", "")' in verifier
     assert "credentials=_cloud_credentials()" in verifier
+
+
+def test_strict_cloud_proof_cleans_secrets_when_token_acquisition_fails() -> None:
+    deploy = Path("deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
+    strict_block = deploy.split("if (-not $SkipStrictProof) {", 1)[1].split(
+        'Write-Host ""', 1
+    )[0]
+    try_index = strict_block.index("    try {")
+    secret_fetch_index = strict_block.index("gcloud secrets versions access latest")
+    access_token_index = strict_block.index("gcloud auth print-access-token")
+    finally_index = strict_block.index("    finally {")
+
+    assert try_index < secret_fetch_index < finally_index
+    assert try_index < access_token_index < finally_index
+    assert strict_block.count("Remove-Item Env:HEALTHIA_EVALUATION_ACCESS_KEY") == 1
+    assert strict_block.count("Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN") == 1
+    assert strict_block.count("Remove-Item Env:HEALTHIA_CLOUD_ACCESS_TOKEN") == 1
