@@ -148,3 +148,13 @@ def test_strict_cloud_proof_cleans_secrets_when_token_acquisition_fails() -> Non
     assert strict_block.count("Remove-Item Env:HEALTHIA_EVALUATION_ACCESS_KEY") == 1
     assert strict_block.count("Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN") == 1
     assert strict_block.count("Remove-Item Env:HEALTHIA_CLOUD_ACCESS_TOKEN") == 1
+
+
+def test_cloud_proof_uses_stable_living_surface_marker() -> None:
+    verifier = Path("deployment/verify_cloud_demo.py").read_text(encoding="utf-8")
+    living = Path("web/living.html").read_text(encoding="utf-8")
+    marker = 'data-healthia-surface="living-system"'
+
+    assert marker in verifier
+    assert marker in living
+    assert "It is a living health system" not in verifier
