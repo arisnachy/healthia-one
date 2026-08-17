@@ -71,6 +71,35 @@ jobs:
           grep -F "roles/cloudtrace.agent" <<<"$policy" | grep -F "$RUNTIME_SA" >/dev/null
           echo "HEALTHIA_ONE_SAFETY_IAM_PASS"
 
+      - name: Acquire temporary Model Armor template-admin capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          provisioner="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
+          test -n "$provisioner"
+          case "$provisioner" in
+            *.gserviceaccount.com) ;;
+            *) echo "Unexpected provisioning identity: $provisioner" >&2; exit 1 ;;
+          esac
+          echo "ONE_SAFETY_PROVISIONER=$provisioner" >> "$GITHUB_ENV"
+
+          existing="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+            --flatten='bindings[].members' \
+            --filter="bindings.role=roles/modelarmor.admin AND bindings.members=serviceAccount:$provisioner" \
+            --format='value(bindings.members)' | head -n 1)"
+          if [[ "$existing" == "serviceAccount:$provisioner" ]]; then
+            echo "ONE_SAFETY_TEMP_ADMIN_GRANTED=false" >> "$GITHUB_ENV"
+            echo "Provisioner already had Model Armor admin; preserving existing binding."
+          else
+            gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+              --member "serviceAccount:$provisioner" \
+              --role roles/modelarmor.admin \
+              --condition=None \
+              --quiet >/dev/null
+            echo "ONE_SAFETY_TEMP_ADMIN_GRANTED=true" >> "$GITHUB_ENV"
+            echo "Temporary Model Armor admin granted for template bootstrap."
+          fi
+
       - name: Create or harden Model Armor template
         shell: bash
         run: |
@@ -114,6 +143,22 @@ jobs:
           grep -q 'sanitizationResult\|sanitization_result' "$out"
           echo "HEALTHIA_ONE_MODEL_ARMOR_LIVE_PASS"
 
+      - name: Remove temporary Model Armor template-admin capability
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${ONE_SAFETY_TEMP_ADMIN_GRANTED:-false}" == "true" && -n "${ONE_SAFETY_PROVISIONER:-}" ]]; then
+            gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+              --member "serviceAccount:$ONE_SAFETY_PROVISIONER" \
+              --role roles/modelarmor.admin \
+              --condition=None \
+              --quiet >/dev/null
+            echo "HEALTHIA_ONE_TEMP_ADMIN_REMOVED"
+          else
+            echo "No temporary admin binding to remove."
+          fi
+
       - name: Cloud substrate summary
         shell: bash
         run: |
@@ -123,3 +168,4 @@ jobs:
           echo "- Runtime role: roles/modelarmor.user"
           echo "- Runtime role: roles/cloudtrace.agent"
           echo "- Cloud Trace API enabled"
+          echo "- Temporary provisioning admin removed when added by this run"
