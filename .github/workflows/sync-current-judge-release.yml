@@ -1,0 +1,152 @@
+name: Sync current ONE SAFETY judge Release metadata
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - hackathon/evidence/one_safety_final_proof.json
+      - .github/workflows/sync-current-judge-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Verify final asset and synchronize Release metadata
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify proof manifest and published MP4 digest
+        id: proof
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          proof='hackathon/evidence/one_safety_final_proof.json'
+          jq -e '.status == "PASS" and .synthetic_only == true and .feature_freeze == true' "$proof" >/dev/null
+
+          tag="$(jq -r '.video.release_tag' "$proof")"
+          asset="$(jq -r '.video.asset' "$proof")"
+          expected_sha="$(jq -r '.video.enhanced_master_sha256' "$proof")"
+          runtime_sha="$(jq -r '.runtime_candidate_sha' "$proof")"
+          model_armor_run="$(jq -r '.model_armor.run_id' "$proof")"
+          enhanced_run="$(jq -r '.enhanced_cloud_proof.run_id' "$proof")"
+          trace_id="$(jq -r '.enhanced_cloud_proof.correlation.trace_id' "$proof")"
+          ticket_id="$(jq -r '.enhanced_cloud_proof.correlation.health_action_ticket_id' "$proof")"
+          receipt_id="$(jq -r '.enhanced_cloud_proof.correlation.receipt_id' "$proof")"
+          audio_sha="$(jq -r '.video.charon_audio_bitstream_sha256' "$proof")"
+
+          test -n "$tag" && test -n "$asset" && test "${#expected_sha}" -eq 64
+          release_json="$RUNNER_TEMP/release.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > "$release_json"
+
+          actual_digest="$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest // empty' "$release_json" | head -n1)"
+          test "$actual_digest" = "sha256:${expected_sha}"
+          target="$(jq -r '.target_commitish' "$release_json")"
+          test "$target" = "$runtime_sha"
+
+          {
+            echo "tag=$tag"
+            echo "asset=$asset"
+            echo "expected_sha=$expected_sha"
+            echo "runtime_sha=$runtime_sha"
+            echo "model_armor_run=$model_armor_run"
+            echo "enhanced_run=$enhanced_run"
+            echo "trace_id=$trace_id"
+            echo "ticket_id=$ticket_id"
+            echo "receipt_id=$receipt_id"
+            echo "audio_sha=$audio_sha"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "HEALTHIA_FINAL_RELEASE_ASSET_DIGEST_PASS $expected_sha"
+          echo "HEALTHIA_FINAL_RELEASE_TARGET_PASS $runtime_sha"
+
+      - name: Synchronize current judge Release title and notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.proof.outputs.tag }}
+          ASSET: ${{ steps.proof.outputs.asset }}
+          VIDEO_SHA: ${{ steps.proof.outputs.expected_sha }}
+          RUNTIME_SHA: ${{ steps.proof.outputs.runtime_sha }}
+          MODEL_ARMOR_RUN: ${{ steps.proof.outputs.model_armor_run }}
+          ENHANCED_RUN: ${{ steps.proof.outputs.enhanced_run }}
+          TRACE_ID: ${{ steps.proof.outputs.trace_id }}
+          TICKET_ID: ${{ steps.proof.outputs.ticket_id }}
+          RECEIPT_ID: ${{ steps.proof.outputs.receipt_id }}
+          AUDIO_SHA: ${{ steps.proof.outputs.audio_sha }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          # HealthIA ONE — ONE SAFETY final judging package
+
+          **Your health never starts over.**
+
+          This Release is the byte-verifiable final judging package for HealthIA ONE. The 3:55 master adds the ONE SAFETY evidence overlay while preserving the validated Google Cloud Charon audio bitstream unchanged.
+
+          ## Final video
+
+          - Asset: \`${ASSET}\`
+          - MP4 SHA-256: \`${VIDEO_SHA}\`
+          - Charon audio-stream SHA-256: \`${AUDIO_SHA}\`
+          - Runtime candidate: \`${RUNTIME_SHA}\`
+
+          ## Independent Cloud safety evidence
+
+          - Google Model Armor adversarial run: \`${MODEL_ARMOR_RUN}\` — **SUCCESS**
+          - Enhanced ONE SAFETY proof run: \`${ENHANCED_RUN}\` — **SUCCESS**
+          - Exact Google Cloud Trace: \`${TRACE_ID}\`
+          - HealthActionTicket: \`${TICKET_ID}\`
+          - Durable execution receipt: \`${RECEIPT_ID}\`
+
+          The enhanced proof executes a real consent-gated Google Places action, correlates the one-use HealthActionTicket to the durable connector receipt, and reads the same Trace ID back from Google Cloud Trace. A controlled hostile prompt is stopped at prompt ingress with no model call, no new execution ticket and no patient-state mutation.
+
+          ## Judge entry point
+
+          Start with **HealthIA ONE**, not a separate Living product:
+          https://github.com/${GITHUB_REPOSITORY}/blob/main/JUDGES_START_HERE.md
+
+          Architecture:
+          https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/ARCHITECTURE.md
+
+          Machine-readable proof manifest:
+          https://github.com/${GITHUB_REPOSITORY}/blob/main/hackathon/evidence/one_safety_final_proof.json
+
+          Official YouTube submission demo:
+          https://youtu.be/dOIhP22SxZ8
+
+          The YouTube embed remains the continuous product demo. This Release master is the latest evidence package and contains the ONE SAFETY overlay.
+
+          All patient/device demonstration data are synthetic. HealthIA ONE is a hackathon patient-continuity prototype, not a physician, emergency service, autonomous prescription engine, regulated medical device or clinical-effectiveness study.
+
+          **Feature freeze:** no new product capabilities are being added for score; remaining work is limited to evidence integrity, reproducibility and public synchronization.
+          EOF
+
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title 'HealthIA ONE — ONE SAFETY Final Judge Proof' \
+            --notes-file "$notes" \
+            --latest=false
+          echo "HEALTHIA_FINAL_RELEASE_METADATA_SYNC_PASS $TAG"
+
+      - name: Re-read Release and reject stale Living-first metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.proof.outputs.tag }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release-after.json"
+          gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > "$out"
+          test "$(jq -r '.name' "$out")" = 'HealthIA ONE — ONE SAFETY Final Judge Proof'
+          jq -e '.body | contains("ONE SAFETY final judging package")' "$out" >/dev/null
+          if jq -r '.body' "$out" | grep -q 'The Living Health System'; then
+            echo 'Stale Living-first Release metadata remains.' >&2
+            exit 1
+          fi
+          echo "HEALTHIA_FINAL_RELEASE_METADATA_REREAD_PASS"
