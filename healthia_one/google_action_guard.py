@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from healthia_one.google_constellation import (
+    ACTION_POLICIES,
     GoogleActionReceipt,
     GoogleActionRequest,
     build_google_receipt,
@@ -69,7 +70,7 @@ class GuardedGoogleActionExecutor:
             "google.action.guarded_execute",
             action=request.action.value,
             service=request.service.value,
-            external_mutation=bool(getattr(request, "action", None)),
+            external_mutation=ACTION_POLICIES[request.action].mutates_external_state,
         ):
             return self._execute_guarded(request)
 
