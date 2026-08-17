@@ -261,7 +261,7 @@ def verify_living_system(config: CloudProofConfig) -> dict[str, Any]:
     if not config.evaluation_access_key:
         raise CloudProofError("Living System evaluator key was not supplied to the strict proof")
     living_status, living_html, _ = _request(config, "GET", "/living")
-    if living_status != 200 or b"It is a living health system" not in living_html:
+    if living_status != 200 or b'data-healthia-surface="living-system"' not in living_html:
         raise CloudProofError("Public Living System UI is unavailable")
 
     state = _post_json(config, "/api/evaluation/arm", {})
