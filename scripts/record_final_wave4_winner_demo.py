@@ -511,10 +511,27 @@ def run() -> dict:
         require(page.locator("#timelineRoot .timeline-event").count() >= 3, "unified longitudinal timeline is not visibly populated")
         overlay(page, "A living longitudinal timeline", "Measurements, evidence and missions become one provenance-linked chronology. After logout and login, the same patient state is still here.", 6)
         clear_overlay(page)
-        page.locator('.main-nav [data-open="missions"]').click()
-        page.wait_for_timeout(600)
         report["checks"].append("unified_record_and_timeline_visible_after_relogin")
-        overlay(page, "Continuity is durable", "The exact Google mission and selected resource also survived. HealthIA carries unfinished work across time instead of starting over with every prompt.", 7)
+
+        # The Living System is part of the main patient workspace, not a detached demo.
+        page.locator('.main-nav [data-open="living"]').click()
+        page.wait_for_selector("#view-living.is-active .living-surface", timeout=20_000)
+        page.wait_for_function("Number(document.querySelector('#livingMissionCount')?.textContent || 0) >= 1", timeout=20_000)
+        page.wait_for_function("Number(document.querySelector('#livingEvidenceCount')?.textContent || 0) >= 1", timeout=20_000)
+        page.wait_for_function("Number(document.querySelector('#livingDecisionCount')?.textContent || 0) >= 1", timeout=20_000)
+        native_living = {
+            "twin_version": page.locator("#livingTwinVersion").inner_text().strip(),
+            "evidence_count": int(page.locator("#livingEvidenceCount").inner_text().strip()),
+            "active_missions": int(page.locator("#livingMissionCount").inner_text().strip()),
+            "human_decisions": int(page.locator("#livingDecisionCount").inner_text().strip()),
+            "recorded_steps": page.locator("#livingActivityList li").count(),
+        }
+        require(native_living["twin_version"].startswith("v"), f"native Patient Twin is not visible: {native_living}")
+        require(native_living["recorded_steps"] >= 1, f"native autonomous activity is empty: {native_living}")
+        report["native_living_surface"] = native_living
+        report["checks"].append("native_patient_workspace_unifies_twin_missions_activity_and_human_decisions")
+        checkpoint(report)
+        overlay(page, "The Living System is the product", "Inside the main patient workspace, the real Patient Twin, persisted evidence, active Google mission, autonomous receipts and the decision waiting for the human now appear together. This is not a detached demo screen.", 8)
         clear_overlay(page)
 
         # 9. Final exact-candidate proof.

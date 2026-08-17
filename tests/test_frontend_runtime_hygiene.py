@@ -22,9 +22,10 @@ def test_core_runtime_serializes_refresh_and_owns_one_event_stream() -> None:
 def test_only_semantic_frontend_modules_are_loaded() -> None:
     html = (WEB / "index.html").read_text(encoding="utf-8")
     expected = (
-        "i18n.js",
-        "app.js",
-        "clinical-council.js",
+            "i18n.js",
+            "app.js",
+            "living-surface.js",
+            "clinical-council.js",
         "conversational-interview.js",
         "patient-record.js",
         "family-documents.js",

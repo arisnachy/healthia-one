@@ -79,6 +79,7 @@ def test_winner_recorder_is_continuous_wave4_taskmaster_story() -> None:
         '"logout_login_restores_evidence_and_selected_google_mission"',
         '"synthetic_health_connect_event_visible_with_provenance"',
         '"unified_record_and_timeline_visible_after_relogin"',
+        '"native_patient_workspace_unifies_twin_missions_activity_and_human_decisions"',
     ):
         assert marker in RECORDER
     assert 'record_video_dir=str(video_dir)' in RECORDER
@@ -88,6 +89,11 @@ def test_winner_recorder_is_continuous_wave4_taskmaster_story() -> None:
     assert 'api_post_json(page, "/api/demo/device-sync")' in RECORDER
     assert '.main-nav [data-open="devices"]' in RECORDER
     assert '.main-nav [data-open="timeline"]' in RECORDER
+    assert '.main-nav [data-open="living"]' in RECORDER
+    assert '"#livingTwinVersion"' in RECORDER
+    assert '"#livingEvidenceCount"' in RECORDER
+    assert '"#livingMissionCount"' in RECORDER
+    assert '"#livingDecisionCount"' in RECORDER
     assert 'page.wait_for_timeout(11_000)' in RECORDER
     assert 'page.wait_for_timeout(10_000)' in RECORDER
     assert 'overlay(page, "HealthIA noticed the follow-up was overdue.' not in RECORDER
@@ -156,6 +162,8 @@ def test_winner_narration_requires_named_google_cloud_charon_male_voice() -> Non
     assert "one living system" in NARRATION.lower()
     assert "before the patient types a message" in NARRATION.lower()
     assert "no slide deck and no mock screens" in NARRATION.lower()
+    assert "inside the main patient workspace" in NARRATION.lower()
+    assert "not a detached demonstration page" in NARRATION.lower()
 
 
 def test_publication_happens_only_after_cutlock_and_is_anonymously_reverified() -> None:

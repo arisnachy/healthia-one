@@ -450,6 +450,7 @@ jobs:
               'logout_login_restores_evidence_and_selected_google_mission',
               'synthetic_health_connect_event_visible_with_provenance',
               'unified_record_and_timeline_visible_after_relogin',
+              'native_patient_workspace_unifies_twin_missions_activity_and_human_decisions',
               'visible_exact_candidate_cloud_proof',
               'exact_head_autonomous_continuity_judge_mode',
               'zero_browser_console_or_page_errors',
