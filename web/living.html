@@ -3,52 +3,72 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="HealthIA ONE Living System — bounded autonomous health continuity demonstration">
+  <meta name="description" content="HealthIA ONE — bounded autonomous health continuity workspace">
   <title>HealthIA ONE · Living System</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%2319365e'/%3E%3Cpath d='M32 14c1.2 9 8 15.8 17 17-9 1.2-15.8 8-17 17-1.2-9-8-15.8-17-17 9-1.2 15.8-8 17-17Z' fill='none' stroke='%2357e2d2' stroke-width='4'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%232a4165'/%3E%3Cpath d='M32 14c1.2 9 8 15.8 17 17-9 1.2-15.8 8-17 17-1.2-9-8-15.8-17-17 9-1.2 15.8-8 17-17Z' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/assets/living-system.css">
 </head>
 <body>
   <main class="living-shell">
     <header class="living-header">
       <a class="living-brand" href="/" aria-label="HealthIA ONE home">
-        <span class="brand-orb" aria-hidden="true">✦</span>
-        <span><strong>HealthIA ONE</strong><small>LIVING SYSTEM</small></span>
+        <span class="brand-orb" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="3" y="3" width="42" height="42" rx="14" fill="url(#livingBrandGradient)"/>
+            <path d="M24 12.5C24.9 18.2 29.4 22.7 35.1 23.6C29.4 24.5 24.9 29 24 34.7C23.1 29 18.6 24.5 12.9 23.6C18.6 22.7 23.1 18.2 24 12.5Z" stroke="white" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs><linearGradient id="livingBrandGradient" x1="7" y1="7" x2="41" y2="41" gradientUnits="userSpaceOnUse"><stop stop-color="#4A628B"/><stop offset="1" stop-color="#2A3C5C"/></linearGradient></defs>
+          </svg>
+        </span>
+        <span class="living-brand-copy"><strong>HealthIA ONE</strong><small>Personal continuity</small></span>
       </a>
+      <div class="living-header-title">
+        <span class="status-dot" aria-hidden="true"></span>
+        <div><strong>Living System</strong><small>Bounded autonomy workspace</small></div>
+      </div>
       <div class="header-signals" aria-label="Runtime guarantees">
-        <span><i class="pulse-dot"></i> Event-driven</span>
-        <span>0 model calls</span>
-        <span>Synthetic patient</span>
+        <span class="status-pill">Evaluation mode</span>
+        <a class="home-link" href="/">Back to workspace</a>
       </div>
     </header>
 
+    <nav class="living-breadcrumb" aria-label="Workspace location">
+      <a href="/">HealthIA workspace</a><span aria-hidden="true">›</span><strong>Living System</strong>
+      <span class="breadcrumb-note">Synthetic evaluation · isolated by design</span>
+    </nav>
+
     <section class="hero">
-      <div>
-        <p class="eyebrow">A HEALTH SYSTEM THAT REMEMBERS, ACTS, WAITS AND VERIFIES</p>
-        <h1>This is not a chatbot.<br><em>It is a living health system.</em></h1>
-        <p class="hero-copy">Watch four authorized signals change the Patient Twin, open a governed mission, stop at the human boundary, and learn only from a persisted receipt.</p>
+      <div class="hero-copy-block">
+        <p class="eyebrow">PERSONAL CONTINUITY · GOVERNED AUTONOMY</p>
+        <h1>A health system that <em>remembers and acts.</em></h1>
+        <p class="hero-copy">Watch authorized signals update the Patient Twin, open a governed mission, pause at the human boundary, and learn only from a persisted receipt.</p>
+        <div class="hero-proof-row" aria-label="System guarantees">
+          <span><i aria-hidden="true">✓</i> Evidence-linked</span>
+          <span><i aria-hidden="true">✓</i> Human-gated</span>
+          <span><i aria-hidden="true">✓</i> Replayable</span>
+        </div>
       </div>
-      <div class="system-vitals" aria-live="polite">
-        <div><span>System</span><strong id="systemStatus">LOCKED</strong></div>
-        <div><span>Twin version</span><strong id="twinVersion">—</strong></div>
-        <div><span>Events verified</span><strong id="eventCount">0 / 14</strong></div>
+      <div class="system-vitals" aria-label="Living System status" aria-live="polite">
+        <div><span>System</span><strong id="systemStatus">LOCKED</strong><small>Capability protected</small></div>
+        <div><span>Twin version</span><strong id="twinVersion">—</strong><small>Canonical memory</small></div>
+        <div><span>Events verified</span><strong id="eventCount">0 / 14</strong><small>Durable replay</small></div>
       </div>
     </section>
 
     <section id="accessPanel" class="access-panel">
-      <div><span class="step-number">01</span><div><strong>Enter evaluation access code</strong><p>The code unlocks only an isolated synthetic patient. It never grants access to real patient records.</p></div></div>
+      <div class="access-copy"><span class="step-number">01</span><div><span class="panel-kicker">PRIVATE EVALUATION GATE</span><strong>Unlock the synthetic workspace</strong><p>The capability opens only an isolated evaluation patient. It never grants access to real patient records.</p></div></div>
       <form id="accessForm">
         <label for="accessKey">Evaluation access code</label>
-        <input id="accessKey" name="accessKey" type="password" autocomplete="off" required>
-        <button type="submit">Unlock Living System</button>
+        <input id="accessKey" name="accessKey" type="password" autocomplete="off" placeholder="Private access code" required aria-describedby="accessHelp">
+        <button class="primary-control" type="submit">Unlock Living System</button>
       </form>
+      <span id="accessHelp" class="access-note"><i aria-hidden="true">⌁</i> Held in page memory only</span>
     </section>
 
     <section id="controlPanel" class="control-panel" hidden>
-      <div class="control-copy"><span class="step-number">02</span><div><strong>Start one bounded autonomous cycle</strong><p>Deterministic, idempotent and durable. The browser renders only events returned by the canonical server state.</p></div></div>
+      <div class="control-copy"><span class="step-number">02</span><div><span class="panel-kicker">AUTONOMOUS CYCLE</span><strong>Start one bounded continuity cycle</strong><p>Deterministic, idempotent and durable. The browser renders only the canonical server replay.</p></div></div>
       <div class="control-actions">
         <button id="activateButton" class="primary-control" type="button">Activate Living System</button>
-        <button id="replayButton" type="button">Reload durable replay</button>
+        <button id="replayButton" class="secondary-control" type="button">Reload durable replay</button>
       </div>
     </section>
 
@@ -57,7 +77,7 @@
     <section id="runtime" class="runtime-grid" hidden>
       <article class="twin-panel panel">
         <header><div><span class="panel-kicker">CANONICAL PATIENT TWIN</span><h2>Memory that changes with evidence</h2></div><span id="twinBadge" class="state-badge">READY</span></header>
-        <div class="version-flow"><div><small>Parent</small><strong id="parentVersion">—</strong></div><span>→</span><div><small>Current</small><strong id="currentVersion">—</strong></div></div>
+        <div class="version-flow" aria-label="Patient Twin version history"><div><small>Parent</small><strong id="parentVersion">—</strong></div><span aria-hidden="true">→</span><div><small>Current</small><strong id="currentVersion">—</strong></div></div>
         <div id="signalGrid" class="signal-grid"></div>
         <div class="twin-layers">
           <section><span>Anatomy</span><strong id="anatomyState">Waiting for evidence</strong></section>
@@ -72,18 +92,18 @@
         <p id="missionAction">HealthIA will act only after evidence arrives and policy allows it.</p>
         <div id="agentPlan" class="agent-plan"></div>
         <form id="humanForm" class="human-boundary" hidden>
-          <div><span class="boundary-icon">◆</span><div><strong>Human boundary reached</strong><p>The system stopped. Provide a repeat measurement to create the canonical receipt.</p></div></div>
+          <div class="boundary-heading"><span class="boundary-icon" aria-hidden="true">◆</span><div><strong>Human boundary reached</strong><p>The system stopped. Provide a repeat measurement to create the canonical receipt.</p></div></div>
           <div class="measurement-fields">
             <label>Systolic<input id="systolic" type="number" min="70" max="250" value="132" required></label>
             <label>Diastolic<input id="diastolic" type="number" min="40" max="150" value="82" required></label>
             <label>Pulse<input id="pulse" type="number" min="30" max="220" value="70"></label>
-            <button type="submit">Persist evidence & resume</button>
+            <button class="primary-control" type="submit">Persist evidence &amp; resume</button>
           </div>
         </form>
       </article>
 
       <article class="event-panel panel">
-        <header><div><span class="panel-kicker">LIVE AGENT ACTIVITY</span><h2>Event → policy → action → proof</h2></div><span class="live-label"><i class="pulse-dot"></i> DURABLE REPLAY</span></header>
+        <header><div><span class="panel-kicker">LIVE AGENT ACTIVITY</span><h2>Event → policy → action → proof</h2></div><span class="live-label"><i class="pulse-dot" aria-hidden="true"></i> DURABLE REPLAY</span></header>
         <ol id="eventFeed" class="event-feed" aria-live="polite" aria-label="Living Twin event replay"></ol>
       </article>
 
