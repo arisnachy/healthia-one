@@ -14,3 +14,10 @@ Use Google Cloud Text-to-Speech voice `en-US-Chirp3-HD-Charon` (male). Fail clos
 
 ## ADR-005 — Living System story
 Sell magnitude through one causal patient story, not a catalog. A synthetic Health Connect event enters the real product, evidence and missions accumulate, consent gates real Google work, relogin proves continuity, and exact-head Judge Mode proves unattended execution. Never imply that Judge Mode itself performs mutations or that a synthetic device event is a clinical-grade sensor reading.
+## ADR-006 — Core v0.1 is the manifesto's first vertical slice
+
+The hackathon candidate implements canonical Twin, event, policy, provenance, obligation, mission and verification contracts. The promoted runtime actors are SENSE, TWIN, GUARDIAN, SAFETY and VERIFY. MEDS means structured monitoring plus a professional-review boundary, never autonomous medication action. Longevity, N=1, Future Simulator and ONE COLLECTIVE extend the same contracts but remain non-live until separately validated and governed.
+
+## ADR-007 — Preserve the user's stale checkout through a clean worktree
+
+Implementation proceeds in `healthia-one-living-system` on `codex/living-system-core` from `origin/main` `ec233508497a982a3f026b4bad9895e748e15ea6`. The original checkout and its user-owned changes are not reset, overwritten or automatically carried into the candidate.

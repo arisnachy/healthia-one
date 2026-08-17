@@ -1,23 +1,19 @@
 # KIRA State
 
 ## Objective
-Publish a sub-four-minute Living System video that makes HealthIA ONE's breadth visible through one truthful, continuous, exact-head Cloud Run product journey.
+Build HealthIA ONE Core v0.1 as the first functional vertical slice of the complete Patient Digital Twin OS manifesto, deploy it economically to Google Cloud, and prove the exact candidate through one judge-visible Living System journey.
 
 ## Current checkpoint
-- Clean implementation branch starts from merged `main` at `8f4b468336499eb9175ae9be1caaac745f24782e`.
-- The recorder now shows a synthetic Health Connect event entering the real product before chat, Google mission consent and execution, evidence-first multimodal handling, record/timeline continuity after relogin, and exact-head no-prompt autonomy proof.
-- Narration frames the journey as one living system rather than a feature catalog.
-- First exact-head Living System render passed Cloud CUTLOCK at 3:55; visual QA found Judge Mode overlay occlusion and mixed-language timeline copy.
-- Both polish defects are repaired and the English timeline is fully localized.
-- Exact runtime candidate `8bcc34490dda0c83442babf48708b9a09592a268` passed full verification in run `31982406727` with 547 tests.
-- Final live demo run `31982406725` passed at 3:55 with Google Cloud Charon, CUTLOCK, anonymous byte-identical publication and MP4 SHA-256 `7d7d014880cdba34642ee03041c398c8358b0c3a6c450b48423193f287b5be37`.
-- Independent visual review returned `PASS VISUAL FINAL`; independent JUDGE returned `CONDITIONAL_PASS` with no functional or merge blocker, conditioned only on recording this final checkpoint.
+- Original checkout at `bd1ce0614be330142ed2f49a87979423e91ba192` remains untouched with user-owned modifications.
+- Clean worktree `healthia-one-living-system` and branch `codex/living-system-core` start at fetched `origin/main` `ec233508497a982a3f026b4bad9895e748e15ea6`.
+- `docs/HEALTHIA_ONE_LIVING_SYSTEM_CLOUD_VICTORY_PLAN.md` defines the 12 evidence gates.
+- `docs/MANIFEST_TRACEABILITY.md` maps the complete Master Document to live, implemented-not-promoted, contract-only, research-only, and prohibited commitments.
+- Gate 1 repository reconciliation and candidate documentation validation passed; this checkpoint is ready for its focused commit.
+- Product implementation, exact-SHA cloud deployment, and final Living System proof remain pending.
 
 ## Victory gate
-- Final branch HEAD green in full CI.
-- Continuous real-browser demo shows Google Cloud and exact-head autonomous proof.
-- Product-visible device, record and timeline scenes pass CUTLOCK.
-- Charon voice is required; no local TTS fallback.
-- Public MP4 is anonymously readable and byte-identical.
-- Duration remains 215–240 seconds.
-- Independent JUDGE passes before publication is called complete.
+- Exact candidate SHA passes focused, regression, clinical, security, accessibility, and cost tests.
+- A clean external browser sees the authorized event update the versioned Twin, open and advance the durable mission, stop at human authority, record a receipt, verify closure, and preserve state across relogin/restart.
+- Cloud Run revision, image digest, Firestore/GCS evidence, public UI, video, repository and Devpost claims agree on the same SHA.
+- Dormant operation sends zero model requests; durable quotas protect the evaluation budget.
+- Independent clinical/security reviewers and JUDGE pass before the Living System is called complete.
