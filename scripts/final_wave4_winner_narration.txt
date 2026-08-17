@@ -20,6 +20,8 @@ Next, a synthetic clinical document enters through the real product. HealthIA pr
 
 The patient signs out and returns. The product reconstructs one coherent health story: authorized device signals, original clinical evidence, the longitudinal timeline, and the exact unfinished mission. This is not prompt memory. It is durable continuity owned by the patient.
 
+And now that living system is visible inside the main patient workspace. The real Patient Twin, evidence, active mission, autonomous receipts and the decision waiting for the human appear together in one HealthIA interface. This is not a detached demonstration page; it is how the product carries the patient's story forward.
+
 Now the moment that makes HealthIA different. HealthIA noticed an overdue blood-pressure follow-up. Nobody prompted it. For an explicitly opted-in synthetic patient, deterministic reconciliation created one durable mission. Eventarc woke a private Cloud Run worker. A real Gmail follow-up was sent under standing consent. The reply returned through Gmail users dot watch and authenticated Pub/Sub. HealthIA correlated the exact thread, stored a canonical measurement, and completed the same mission.
 
 That unattended mission crossed five durable boundaries, while detecting that the follow-up was due required zero model calls. The Judge Mode shown here is running on Cloud Run from this exact source SHA. It is synthetic, read-only and credential-free; the operational workers remain private.
