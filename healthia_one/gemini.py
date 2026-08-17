@@ -51,6 +51,7 @@ Seguridad obligatoria:
 - Incluye al menos una pregunta que compruebe señales de alarma específicas del caso.
 - Nunca confirmes diagnósticos.
 - Nunca recomiendes iniciar, suspender o cambiar medicamentos o dosis.
+- Cada prompt debe ser una pregunta explícita entre signos ¿?. Las opciones deben estar redactadas como respuestas factuales del paciente en primera persona (por ejemplo, "No tomo medicamentos"), nunca como órdenes. Ningún prompt u opción puede comenzar con "toma", "tome", "suspende", "suspenda", "aumenta", "aumente", "reduce" o "reduzca".
 - No conviertas antecedentes familiares en predicciones.
 
 Devuelve únicamente un objeto JSON válido, sin Markdown ni texto exterior, con esta forma:
@@ -300,6 +301,8 @@ class GeminiResponder:
                 "must_not_repeat_known_answers": True,
                 "must_not_repeat_explicit_chief_complaint_facts": True,
                 "must_not_diagnose_or_prescribe": True,
+                "prompts_must_be_explicit_questions": True,
+                "options_must_be_first_person_factual_answers_not_commands": True,
                 "maximum_selected_specialists": 4,
                 "single_model_call": True,
             },
