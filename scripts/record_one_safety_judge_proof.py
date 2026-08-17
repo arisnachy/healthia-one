@@ -127,9 +127,6 @@ def run() -> dict:
         require(bool(patient_id), "patient id missing")
         report["patient_id"] = patient_id
 
-        # Drive the exact durable Google mission contract directly. This avoids
-        # depending on conversational metadata while proving the same boundary:
-        # mission first, consent second, real connector only after authorization.
         mission = request_json(
             page,
             token,
@@ -194,8 +191,6 @@ def run() -> dict:
             "real_connector_trace_ticket_receipt_correlated",
         ])
 
-        # Controlled adversarial request. It must stop before model, ticket,
-        # connector, or any new patient-visible state mutation.
         state_before = request_json(page, token, "/api/bootstrap")
         counts_before = patient_counts(state_before)
         ticket_count_before = len(security_before_attack.get("recent_action_tickets") or [])
@@ -232,22 +227,28 @@ def run() -> dict:
             "google_checked": decision.get("google_checked"),
         }
         report["checks"].append("prompt_injection_zero_model_zero_ticket_zero_mutation")
-
-        storage_state = prep.storage_state()
         prep.close()
 
-        # Record only the final read-only proof surface. This clip is used as
-        # judge-visible B-roll over the already validated Charon master; the
-        # original narration/audio remains untouched.
+        # Record the final read-only proof surface using an explicit second login.
+        # This avoids relying on cross-context storage-state restoration while
+        # preserving the exact same synthetic patient and durable evidence.
         recorded = browser.new_context(
             locale="en-US",
             viewport={"width": 1600, "height": 900},
-            storage_state=storage_state,
             record_video_dir=str(video_dir),
             record_video_size={"width": 1600, "height": 900},
             extra_http_headers={"Authorization": f"Bearer {token}"},
         )
         proof_page = recorded.new_page()
+        proof_page.goto(f"{BASE_URL}/login", wait_until="networkidle", timeout=60_000)
+        proof_page.locator('#loginForm input[name="email"]').fill(email)
+        proof_page.locator('#loginForm input[name="password"]').fill(password)
+        proof_page.locator('#loginForm button[type="submit"]').click()
+        proof_page.wait_for_url(f"{BASE_URL}/", timeout=30_000)
+        proof_page.wait_for_load_state("networkidle")
+        proof_session = request_json(proof_page, token, "/api/auth/session")
+        require(proof_session.get("authenticated") is True, "recorded proof context did not authenticate")
+        require(str((proof_session.get("account") or {}).get("patient_id") or "") == patient_id, "recorded proof context resolved a different patient")
         proof_page.goto(f"{BASE_URL}/security", wait_until="networkidle", timeout=60_000)
         proof_page.wait_for_function(
             "document.querySelector('#correlation')?.innerText.includes('Cloud Trace ID')",
