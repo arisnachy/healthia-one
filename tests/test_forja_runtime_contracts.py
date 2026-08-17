@@ -132,8 +132,10 @@ def test_runtime_affordances_are_real_locale_aware_and_not_decorative() -> None:
 def test_cloud_demo_is_vertex_native_scale_to_zero_and_easy_to_destroy() -> None:
     deploy = (ROOT / "deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
     remove = (ROOT / "deployment/remove-cloud-demo.ps1").read_text(encoding="utf-8")
-    assert '"--min", "0"' in deploy
-    assert '"--max", "1"' in deploy
+    assert '"--min-instances", "0"' in deploy
+    assert '"--max-instances", "1"' in deploy
+    assert '"--min", "0"' not in deploy
+    assert '"--max", "1"' not in deploy
     assert "HEALTHIA_COST_MODE=cloud_demo" in deploy
     assert "HEALTHIA_PROACTIVE_ENABLED=false" in deploy
     assert "HEALTHIA_MODEL=gemini-3.5-flash" in deploy

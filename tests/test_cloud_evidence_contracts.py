@@ -115,3 +115,36 @@ def test_cloud_deploy_requires_authenticated_durable_evidence_and_strict_proof()
     assert '"gcs_patient_scoped_original_evidence"' in verifier
     assert '"clinical_twin_provenance"' in verifier
     assert '"original_evidence_roundtrip"' in verifier
+
+
+def test_cloud_identity_token_is_not_passed_in_process_arguments() -> None:
+    deploy = Path("deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
+    provider = Path("deployment/verify_cloud_provider_binding.py").read_text(encoding="utf-8")
+    assert '$env:HEALTHIA_CLOUD_ID_TOKEN = $providerIdentityToken' in deploy
+    assert '$env:HEALTHIA_CLOUD_ID_TOKEN = $identityToken' in deploy
+    assert 'Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN' in deploy
+    assert '$env:HEALTHIA_CLOUD_ACCESS_TOKEN = $cloudAccessToken' in deploy
+    assert 'Remove-Item Env:HEALTHIA_CLOUD_ACCESS_TOKEN' in deploy
+    assert '$providerProofArgs += @("--identity-token"' not in deploy
+    assert '$proofArgs += @("--identity-token"' not in deploy
+    assert 'default=os.getenv("HEALTHIA_CLOUD_ID_TOKEN", "")' in provider
+    verifier = Path("deployment/verify_cloud_demo.py").read_text(encoding="utf-8")
+    assert 'os.getenv("HEALTHIA_CLOUD_ACCESS_TOKEN", "")' in verifier
+    assert "credentials=_cloud_credentials()" in verifier
+
+
+def test_strict_cloud_proof_cleans_secrets_when_token_acquisition_fails() -> None:
+    deploy = Path("deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
+    strict_block = deploy.split("if (-not $SkipStrictProof) {", 1)[1].split(
+        'Write-Host ""', 1
+    )[0]
+    try_index = strict_block.index("    try {")
+    secret_fetch_index = strict_block.index("gcloud secrets versions access latest")
+    access_token_index = strict_block.index("gcloud auth print-access-token")
+    finally_index = strict_block.index("    finally {")
+
+    assert try_index < secret_fetch_index < finally_index
+    assert try_index < access_token_index < finally_index
+    assert strict_block.count("Remove-Item Env:HEALTHIA_EVALUATION_ACCESS_KEY") == 1
+    assert strict_block.count("Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN") == 1
+    assert strict_block.count("Remove-Item Env:HEALTHIA_CLOUD_ACCESS_TOKEN") == 1

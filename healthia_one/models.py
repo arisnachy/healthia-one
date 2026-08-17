@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -478,6 +478,189 @@ class HealthMission(BaseModel):
     closure_evidence: list[str] = Field(default_factory=list)
 
 
+class OrganSystemState(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("system"))
+    patient_id: str = "patient_demo"
+    system: str = Field(min_length=2, max_length=80)
+    status: Literal["stable", "watch", "changed", "insufficient_data"] = "insufficient_data"
+    summary: str = Field(default="", max_length=500)
+    trajectory: Literal["improving", "stable", "worsening", "uncertain"] = "uncertain"
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class AnatomyState(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("anatomy"))
+    patient_id: str = "patient_demo"
+    body_structure: str = Field(min_length=2, max_length=160)
+    status: Literal["present", "removed", "altered", "implanted", "unknown"] = "unknown"
+    modification: str = Field(default="", max_length=300)
+    procedure_id: str | None = None
+    implant: str = Field(default="", max_length=200)
+    effective_at: datetime | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    source: SourceRef = Field(default_factory=lambda: SourceRef(source_type="clinical_record", source_id="anatomy_state"))
+
+
+class MedicationExpectation(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("med_expectation"))
+    patient_id: str = "patient_demo"
+    medication_id: str
+    expected_outcome: str = Field(min_length=2, max_length=300)
+    monitoring_metric: str = Field(default="", max_length=120)
+    review_due_at: datetime | None = None
+    observed_outcome: str = Field(default="", max_length=300)
+    status: Literal["pending", "consistent", "not_observed", "needs_professional_review"] = "pending"
+    professional_review_required: bool = True
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class PatientBaseline(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("baseline"))
+    patient_id: str = "patient_demo"
+    metric: str = Field(min_length=1, max_length=120)
+    value: float
+    unit: str = Field(default="", max_length=40)
+    window_start: datetime
+    window_end: datetime
+    sample_count: int = Field(ge=1)
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    source_event_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_window(self):
+        if self.window_end < self.window_start:
+            raise ValueError("baseline window_end must be on or after window_start")
+        return self
+
+
+class TwinDeviation(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("deviation"))
+    patient_id: str = "patient_demo"
+    metric: str = Field(min_length=1, max_length=120)
+    observed_value: float
+    baseline_value: float
+    unit: str = Field(default="", max_length=40)
+    direction: Literal["higher", "lower", "changed"]
+    magnitude: float | None = None
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    status: Literal["observed", "correlated", "dismissed", "resolved"] = "observed"
+    evidence_ids: list[str] = Field(default_factory=list)
+    detected_at: datetime = Field(default_factory=utc_now)
+
+
+class TwinTrajectory(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("trajectory"))
+    patient_id: str = "patient_demo"
+    metric: str = Field(min_length=1, max_length=120)
+    direction: Literal["improving", "stable", "worsening", "uncertain"] = "uncertain"
+    slope: float | None = None
+    unit: str = Field(default="", max_length=40)
+    window_start: datetime
+    window_end: datetime
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_window(self):
+        if self.window_end < self.window_start:
+            raise ValueError("trajectory window_end must be on or after window_start")
+        return self
+
+
+class ClinicalEventEdge(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("edge"))
+    patient_id: str = "patient_demo"
+    source_event_id: str
+    target_entity_id: str
+    relation: Literal[
+        "derived_from",
+        "updates",
+        "creates_obligation",
+        "monitors",
+        "follows",
+        "supported_by",
+    ]
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    causal_claim: Literal[False] = False
+    evidence_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class HealthObligation(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("obligation"))
+    patient_id: str = "patient_demo"
+    reason: str = Field(min_length=2, max_length=300)
+    required_action: str = Field(min_length=2, max_length=300)
+    due_at: datetime | None = None
+    status: Literal["open", "watch", "waiting", "completed", "cancelled"] = "open"
+    dependency_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    closure_condition: str = Field(default="", max_length=300)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class LivingTwinEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: new_id("twin_event"))
+    schema_version: Literal["1.0"] = "1.0"
+    event_type: Literal[
+        "event_received",
+        "policy_checked",
+        "observation_normalized",
+        "twin_versioned",
+        "baseline_compared",
+        "signals_correlated",
+        "deviation_detected",
+        "guardian_investigation_opened",
+        "mission_opened",
+        "human_boundary",
+        "bounded_action_executed",
+        "receipt_recorded",
+        "mission_verified",
+        "twin_updated_from_verified_outcome",
+    ]
+    patient_namespace: str = Field(min_length=3, max_length=160)
+    correlation_id: str = Field(min_length=3, max_length=160)
+    mission_id: str | None = None
+    actor: Literal["ONE_SENSE", "ONE_TWIN", "ONE_GUARDIAN", "ONE_SAFETY", "ONE_VERIFY"]
+    policy_decision: Literal["not_applicable", "allowed", "blocked", "human_required"] = "not_applicable"
+    evidence_ids: list[str] = Field(default_factory=list)
+    source_event_ids: list[str] = Field(default_factory=list)
+    status: Literal["accepted", "completed", "blocked", "pending", "failed"]
+    occurred_at: datetime = Field(default_factory=utc_now)
+    payload_hash: str = Field(default="", max_length=128)
+
+
+class EvaluationSession(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("evaluation"))
+    patient_namespace: str
+    status: Literal["armed", "active", "waiting_human", "completed", "exhausted", "expired", "closed"] = "armed"
+    issued_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    max_runs: int = Field(default=1, ge=1, le=5)
+    runs_used: int = Field(default=0, ge=0)
+    model_call_limit: Literal[0] = 0
+    model_calls_used: Literal[0] = 0
+    mission_id: str | None = None
+    correlation_id: str | None = None
+    release_sha: str = "local"
+    runtime_revision: str = "local"
+    completed_at: datetime | None = None
+
+
+class EvaluationBudget(BaseModel):
+    release_sha: str = "local"
+    sessions_created: int = Field(default=0, ge=0)
+    runs_used: int = Field(default=0, ge=0)
+    max_sessions: int = Field(default=2, ge=1, le=5)
+    max_runs: int = Field(default=2, ge=1, le=5)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: new_id("msg"))
     patient_id: str = "patient_demo"
@@ -492,6 +675,10 @@ class ChatMessage(BaseModel):
 
 
 class PatientState(BaseModel):
+    twin_schema_version: Literal["1.0"] = "1.0"
+    twin_version: int = Field(default=1, ge=1)
+    twin_parent_version: int | None = Field(default=None, ge=1)
+    twin_source_event_ids: list[str] = Field(default_factory=list)
     profile: PatientProfile = Field(default_factory=PatientProfile)
     consent: PatientConsent = Field(default_factory=PatientConsent)
     vitals: list[VitalRecord] = Field(default_factory=list)
@@ -508,6 +695,17 @@ class PatientState(BaseModel):
     appointments: list[Appointment] = Field(default_factory=list)
     goals: list[HealthGoal] = Field(default_factory=list)
     missions: list[HealthMission] = Field(default_factory=list)
+    organ_system_states: list[OrganSystemState] = Field(default_factory=list)
+    anatomy_states: list[AnatomyState] = Field(default_factory=list)
+    medication_expectations: list[MedicationExpectation] = Field(default_factory=list)
+    baselines: list[PatientBaseline] = Field(default_factory=list)
+    trajectories: list[TwinTrajectory] = Field(default_factory=list)
+    deviations: list[TwinDeviation] = Field(default_factory=list)
+    clinical_event_edges: list[ClinicalEventEdge] = Field(default_factory=list)
+    obligations: list[HealthObligation] = Field(default_factory=list)
+    living_twin_events: list[LivingTwinEvent] = Field(default_factory=list)
+    evaluation_session: EvaluationSession | None = None
+    evaluation_budget: EvaluationBudget | None = None
     messages: list[ChatMessage] = Field(default_factory=list)
     audit_events: list[AuditEvent] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)
@@ -526,6 +724,16 @@ class DevicePairingClaim(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class EvaluationRunRequest(BaseModel):
+    session_id: str = Field(min_length=3, max_length=160)
+
+
+class EvaluationCompleteRequest(EvaluationRunRequest):
+    systolic: int = Field(ge=70, le=250)
+    diastolic: int = Field(ge=40, le=150)
+    pulse: int | None = Field(default=None, ge=30, le=220)
 
 
 class ChatResponse(BaseModel):

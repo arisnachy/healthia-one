@@ -8,13 +8,62 @@ NARRATION = (ROOT / "scripts/final_wave4_winner_narration.txt").read_text(encodi
 
 
 def test_winner_demo_deploys_exact_candidate_with_real_maps_secret() -> None:
+    assert "pull_request:" not in WORKFLOW
+    assert "push:" in WORKFLOW
+    assert "branches: [main]" in WORKFLOW
+    assert "if: github.ref == 'refs/heads/main'" in WORKFLOW
     assert "Prove checked-out SHA is the candidate SHA" in WORKFLOW
     assert "HEALTHIA_EXACT_HEAD_PASS" in WORKFLOW
     assert "HEALTHIA_EXACT_REVISION_BOUND" in WORKFLOW
     assert "GOOGLE_MAPS_API_KEY=${MAPS_SECRET_NAME}:latest" in WORKFLOW
     assert "--no-allow-unauthenticated" in WORKFLOW
-    assert "--min 0" in WORKFLOW
-    assert "--max 1" in WORKFLOW
+    assert "--min-instances 0" in WORKFLOW
+    assert "--max-instances 1" in WORKFLOW
+
+
+def test_validation_and_publication_have_separate_least_privilege_jobs() -> None:
+    assert "contents: read" in WORKFLOW
+    assert "publish-winner:" in WORKFLOW
+    assert "needs: exact-candidate-live-demo" in WORKFLOW
+    assert "contents: write" in WORKFLOW
+    assert "actions/download-artifact@v4" in WORKFLOW
+    publish = WORKFLOW.index("publish-winner:")
+    publish_block = WORKFLOW[publish:]
+    assert "actions/checkout" not in publish_block
+    assert "python scripts/" not in publish_block
+    assert "SOURCE_SHA: ${{ github.sha }}" in publish_block
+
+
+def test_winner_demo_enables_bounded_living_system_with_secret_manager_capability() -> None:
+    assert "EVALUATION_SECRET_NAME: healthia-evaluation-access-key" in WORKFLOW
+    assert "HEALTHIA_EVALUATION_ENABLED=true" in WORKFLOW
+    assert "HEALTHIA_RELEASE_SHA=${SOURCE_SHA}" in WORKFLOW
+    assert "HEALTHIA_EVALUATION_ACCESS_KEY=${EVALUATION_SECRET_NAME}:latest" in WORKFLOW
+    assert "--min-instances 0" in WORKFLOW
+    assert "--max-instances 1" in WORKFLOW
+    assert "Materialize evaluator capability in a protected temporary file" in WORKFLOW
+    assert "gcloud secrets versions access latest" in WORKFLOW
+    assert "HEALTHIA_EVALUATION_ACCESS_KEY_FILE: ${{ runner.temp }}/healthia-evaluation-access-key" in WORKFLOW
+    assert "shred -u \"$HEALTHIA_EVALUATION_KEY_FILE\"" in WORKFLOW
+    assert "gh release upload \"$RELEASE_TAG\" \"$base/report.json\" \"$base/public-video-proof.json\"" in WORKFLOW
+
+
+def test_tokens_stay_in_protected_files_and_never_github_outputs_or_curl_argv() -> None:
+    assert "HEALTHIA_CLOUD_ID_TOKEN_FILE" in WORKFLOW
+    assert "HEALTHIA_JUDGE_ID_TOKEN_FILE" in WORKFLOW
+    assert "echo \"token=" not in WORKFLOW
+    assert "steps.cloud.outputs.token" not in WORKFLOW
+    assert "steps.judge.outputs.token" not in WORKFLOW
+    assert 'curl --fail --silent --show-error -H "Authorization: Bearer ${token}"' not in WORKFLOW
+    assert 'curl --fail --silent --show-error \\\n            -H "Authorization: Bearer ${access_token}"' not in WORKFLOW
+    assert "--config \"$curl_config\"" in WORKFLOW
+    assert "--config \"$voices_config\"" in WORKFLOW
+    assert "--config \"$request_config\"" in WORKFLOW
+    assert 'token_from_file(IDENTITY_TOKEN_FILE' in RECORDER
+    assert 'token_from_file(JUDGE_TOKEN_FILE' in RECORDER
+    assert 'os.getenv("HEALTHIA_CLOUD_ID_TOKEN"' not in RECORDER
+    assert 'os.getenv("HEALTHIA_JUDGE_ID_TOKEN"' not in RECORDER
+    assert 'path.unlink()' not in RECORDER
 
 
 def test_winner_recorder_is_continuous_wave4_taskmaster_story() -> None:
@@ -42,6 +91,28 @@ def test_winner_recorder_is_continuous_wave4_taskmaster_story() -> None:
     assert 'page.wait_for_timeout(11_000)' in RECORDER
     assert 'page.wait_for_timeout(10_000)' in RECORDER
     assert 'overlay(page, "HealthIA noticed the follow-up was overdue.' not in RECORDER
+
+
+def test_recorder_proves_real_living_system_boundary_and_receipt() -> None:
+    for marker in (
+        'page.goto(f"{BASE_URL}/living"',
+        "locked.status == 403",
+        'X-HealthIA-Evaluation-Key',
+        "patient_eval_living",
+        "10 / 14",
+        "waiting_human",
+        "14 / 14",
+        'completed_twin.get("version") == 3',
+        'completed.get("model_calls") == 0',
+        'completed_session.get("release_sha") == CANDIDATE_SHA',
+        "living_system_capability_not_persisted_in_browser",
+        "living_system_durable_replay_visible",
+    ):
+        assert marker in RECORDER
+    assert '"access_control": "403_without_capability"' in RECORDER
+    assert '"capability_transport": "password_input_then_in_memory_only"' in RECORDER
+    assert '"X-HealthIA-Evaluation-Key": access_key' in RECORDER
+    assert '"evaluation_access_key"' not in RECORDER
 
 
 def test_cutlock_requires_real_candidates_and_no_preconsent_execution() -> None:
@@ -82,16 +153,18 @@ def test_winner_narration_requires_named_google_cloud_charon_male_voice() -> Non
 
 def test_publication_happens_only_after_cutlock_and_is_anonymously_reverified() -> None:
     cutlock = WORKFLOW.index("CUTLOCK — reject unsupported or weak winner demo")
-    publish = WORKFLOW.index("Publish winner video as stable GitHub Release")
-    public_proof = WORKFLOW.index("Prove public winner video is anonymous and byte-identical")
+    publish = WORKFLOW.index("publish-winner:")
+    public_proof = WORKFLOW.index("HEALTHIA_PUBLIC_EVIDENCE_SANITIZED_PASS")
     assert cutlock < publish < public_proof
     assert "gh release upload" in WORKFLOW
     assert "--clobber" in WORKFLOW
     assert "curl --fail --location --silent --show-error \"$public_url\"" in WORKFLOW
     assert "HEALTHIA_PUBLIC_WINNER_VIDEO_PASS" in WORKFLOW
-    assert "SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in WORKFLOW
-    assert "'source_sha':os.environ['SOURCE_HEAD_SHA']" in WORKFLOW
-    assert "'source_sha':os.environ.get('GITHUB_SHA'" not in WORKFLOW
+    assert "SOURCE_SHA: ${{ github.sha }}" in WORKFLOW
+    assert "--arg sha \"$SOURCE_SHA\"" in WORKFLOW
+    assert "github.event.pull_request" not in WORKFLOW
+    assert "HEALTHIA_PUBLIC_EVIDENCE_SANITIZED_PASS" in WORKFLOW
+    assert 'test "$(jq -r \'.source_sha\' "$base/public-video-proof.json")" = "$SOURCE_SHA"' in WORKFLOW
 
 
 def test_demo_removes_temporary_cloud_service_even_on_failure() -> None:

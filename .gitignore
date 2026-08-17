@@ -15,3 +15,7 @@ uploads/*
 *.log
 coverage.xml
 htmlcov/
+.playwright-cli/
+dist/dialogbench/
+deployment/cloud-provider-binding-latest.json
+deployment/cloud-proof-latest.json

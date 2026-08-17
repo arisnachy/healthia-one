@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     cost_control_ui: bool = True
     ai_max_output_tokens: int = 1400
 
+    # Explicit, bounded, synthetic-only evaluation capability. Disabled unless
+    # the deployment owner deliberately enables it and supplies an access key.
+    evaluation_enabled: bool = False
+    evaluation_access_key: str = ""
+    evaluation_session_minutes: int = 30
+    evaluation_max_sessions: int = 2
+    evaluation_max_runs: int = 2
+    release_sha: str = "local"
+
     # Patient account boundary. Tests and static demo can leave auth disabled;
     # the secure local launcher and Cloud deployment enable it explicitly.
     auth_required: bool = False

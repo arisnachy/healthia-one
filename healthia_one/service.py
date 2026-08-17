@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from healthia_one.adk_gemini import AdkGeminiResponder
-from healthia_one.auth import PatientPrincipal, current_patient_id, principal_scope
+from healthia_one.auth import PatientPrincipal, current_patient_id, patient_scope, principal_scope
 from healthia_one.config import Settings
-from healthia_one.continuity import evaluate_continuity
 from healthia_one.devices import ingest_health_connect_batch
+from healthia_one.living_system import (
+    EVALUATION_PATIENT_ID,
+    arm_evaluation,
+    complete_living_scenario,
+    living_system_snapshot,
+    run_living_scenario,
+)
 from healthia_one.control import audit, finding_allowed, snooze_consent, sync_consent_to_profile
 from healthia_one.models import (
     ActivityRecord,
@@ -217,6 +224,30 @@ SORT_KEYS: dict[str, Callable] = {
 }
 
 
+def seed_evaluation_state() -> PatientState:
+    state = seed_state()
+    state.profile.id = EVALUATION_PATIENT_ID
+    for collection_name in (
+        "vitals",
+        "weights",
+        "activity",
+        "results",
+        "family_members",
+        "documents",
+        "medication_plans",
+        "medication_checkins",
+        "appointments",
+        "goals",
+        "missions",
+        "messages",
+        "audit_events",
+    ):
+        for item in getattr(state, collection_name):
+            if hasattr(item, "patient_id"):
+                item.patient_id = EVALUATION_PATIENT_ID
+    return state
+
+
 class HealthIAService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -252,6 +283,97 @@ class HealthIAService:
 
     async def snapshot(self) -> PatientState:
         return await self.store.load()
+
+    async def arm_living_evaluation(self) -> dict:
+        with patient_scope(EVALUATION_PATIENT_ID):
+            async with self._mutation_lock:
+                state = await self.store.load()
+                if (
+                    state.profile.id != EVALUATION_PATIENT_ID
+                    or (state.evaluation_budget and state.evaluation_budget.release_sha != self.settings.release_sha)
+                ):
+                    state = seed_evaluation_state()
+                arm_evaluation(
+                    state,
+                    session_minutes=self.settings.evaluation_session_minutes,
+                    max_runs=self.settings.evaluation_max_runs,
+                    max_sessions=self.settings.evaluation_max_sessions,
+                    release_sha=self.settings.release_sha,
+                    runtime_revision=os.getenv("K_REVISION", "local"),
+                )
+                audit(
+                    state,
+                    actor="evaluation_controller",
+                    action="arm_living_evaluation",
+                    resource_type="evaluation_session",
+                    resource_id=state.evaluation_session.id,
+                    details={"synthetic": True, "model_call_limit": 0},
+                )
+                await self.store.save(state)
+                payload = living_system_snapshot(state)
+        await self.broker.publish({"type": "state", "section": "living_system"}, patient_id=EVALUATION_PATIENT_ID)
+        return payload
+
+    async def run_living_evaluation(self, session_id: str) -> dict:
+        with patient_scope(EVALUATION_PATIENT_ID):
+            async with self._mutation_lock:
+                state = await self.store.load()
+                if not state.evaluation_session or state.evaluation_session.release_sha != self.settings.release_sha:
+                    raise PermissionError("Evaluation session does not belong to the active release")
+                payload = run_living_scenario(state, session_id)
+                audit(
+                    state,
+                    actor="evaluation_controller",
+                    action="run_living_evaluation",
+                    resource_type="evaluation_session",
+                    resource_id=session_id,
+                    details={"synthetic": True, "event_count": len(state.living_twin_events)},
+                )
+                await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "living_system"}, patient_id=EVALUATION_PATIENT_ID)
+        return payload
+
+    async def complete_living_evaluation(
+        self,
+        session_id: str,
+        *,
+        systolic: int,
+        diastolic: int,
+        pulse: int | None,
+    ) -> dict:
+        with patient_scope(EVALUATION_PATIENT_ID):
+            async with self._mutation_lock:
+                state = await self.store.load()
+                if not state.evaluation_session or state.evaluation_session.release_sha != self.settings.release_sha:
+                    raise PermissionError("Evaluation session does not belong to the active release")
+                payload = complete_living_scenario(
+                    state,
+                    session_id,
+                    systolic=systolic,
+                    diastolic=diastolic,
+                    pulse=pulse,
+                )
+                audit(
+                    state,
+                    actor="evaluation_controller",
+                    action="complete_living_evaluation",
+                    resource_type="evaluation_session",
+                    resource_id=session_id,
+                    details={"synthetic": True, "persisted_receipt": True, "clinical_source_verified": False},
+                )
+                await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "living_system"}, patient_id=EVALUATION_PATIENT_ID)
+        return payload
+
+    async def living_evaluation_snapshot(self) -> dict:
+        with patient_scope(EVALUATION_PATIENT_ID):
+            state = await self.store.load()
+            if (
+                state.profile.id != EVALUATION_PATIENT_ID
+                or (state.evaluation_budget and state.evaluation_budget.release_sha != self.settings.release_sha)
+            ):
+                state = seed_evaluation_state()
+            return living_system_snapshot(state)
 
     async def reset_demo(self) -> PatientState:
         async with self._mutation_lock:

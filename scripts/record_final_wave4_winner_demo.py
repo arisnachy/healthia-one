@@ -16,14 +16,131 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "dist" / "final-live-english-demo"
 REPORT = OUTPUT / "report.json"
 BASE_URL = os.getenv("HEALTHIA_CLOUD_URL", "").rstrip("/")
-IDENTITY_TOKEN = os.getenv("HEALTHIA_CLOUD_ID_TOKEN", "")
+IDENTITY_TOKEN = ""
 CANDIDATE_SHA = os.getenv("HEALTHIA_CANDIDATE_SHA", "")
 CLOUD_REVISION = os.getenv("HEALTHIA_CLOUD_REVISION", "")
 CLOUD_IMAGE = os.getenv("HEALTHIA_CLOUD_IMAGE", "")
 CLOUD_PROJECT = os.getenv("HEALTHIA_CLOUD_PROJECT", "")
 CLOUD_REGION = os.getenv("HEALTHIA_CLOUD_REGION", "")
 JUDGE_URL = os.getenv("HEALTHIA_JUDGE_URL", "").rstrip("/")
-JUDGE_TOKEN = os.getenv("HEALTHIA_JUDGE_ID_TOKEN", "")
+JUDGE_TOKEN = ""
+IDENTITY_TOKEN_FILE = os.getenv("HEALTHIA_CLOUD_ID_TOKEN_FILE", "")
+JUDGE_TOKEN_FILE = os.getenv("HEALTHIA_JUDGE_ID_TOKEN_FILE", "")
+EVALUATION_ACCESS_KEY_FILE = os.getenv("HEALTHIA_EVALUATION_ACCESS_KEY_FILE", "")
+
+
+def evaluation_access_key() -> str:
+    """Read the evaluator capability without putting it in argv/report/video."""
+    if EVALUATION_ACCESS_KEY_FILE:
+        path = Path(EVALUATION_ACCESS_KEY_FILE)
+        return path.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def token_from_file(path_value: str, label: str) -> str:
+    if not path_value:
+        raise RuntimeError(f"{label} token file is required")
+    value = Path(path_value).read_text(encoding="utf-8").strip()
+    if not value:
+        raise RuntimeError(f"{label} token file is empty")
+    return value
+
+
+def evaluation_json(page: Page, path: str, access_key: str, *, method: str = "GET", body: dict | None = None) -> dict:
+    headers = {
+        "Authorization": f"Bearer {IDENTITY_TOKEN}",
+        "X-HealthIA-Evaluation-Key": access_key,
+    }
+    response = page.request.fetch(
+        f"{BASE_URL}{path}",
+        method=method,
+        headers=headers,
+        data=json.dumps(body) if body is not None else None,
+    )
+    payload: dict = {}
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    require(response.ok, f"Living System request failed: {path} HTTP {response.status}")
+    return payload
+
+
+def record_living_system(page: Page, report: dict, access_key: str) -> None:
+    """Record the real bounded Living System path before the broader product story."""
+    require(access_key, "Living System evaluator capability is required")
+    page.goto(f"{BASE_URL}/living", wait_until="networkidle", timeout=60_000)
+    page.wait_for_selector("#accessForm", timeout=20_000)
+
+    # The endpoint must fail closed before the capability is entered.
+    locked = page.request.get(
+        f"{BASE_URL}/api/evaluation/state",
+        headers={"Authorization": f"Bearer {IDENTITY_TOKEN}"},
+    )
+    require(locked.status == 403, f"Living System did not fail closed without capability: HTTP {locked.status}")
+    report["living_system"] = {
+        "access_control": "403_without_capability",
+        "capability_transport": "password_input_then_in_memory_only",
+        "synthetic_namespace": "patient_eval_living",
+    }
+    report["checks"].append("living_system_locked_without_capability")
+    checkpoint(report)
+    overlay(page, "A living system, safely locked", "The evaluator surface is present, but its synthetic patient remains unreachable until the capability is entered. No key is displayed or recorded.", 6)
+    clear_overlay(page)
+
+    page.locator("#accessKey").fill(access_key)
+    page.locator("#accessForm button[type='submit']").click()
+    page.wait_for_selector("#controlPanel:not([hidden])", timeout=20_000)
+    # Keep the capability only in the page's closure; it is not left in the DOM or browser storage.
+    page.locator("#accessKey").fill("")
+    storage = page.evaluate("({local: Object.keys(localStorage), session: Object.keys(sessionStorage)})")
+    require(not any("evaluation" in str(item).lower() for item in storage["local"] + storage["session"]), "evaluation capability entered browser storage")
+    report["checks"].append("living_system_capability_not_persisted_in_browser")
+    checkpoint(report)
+    overlay(page, "Capability granted — synthetic patient only", "The capability is held in memory for this page and unlocks no real patient record. The server still enforces the isolated evaluation namespace.", 6)
+    clear_overlay(page)
+
+    page.locator("#activateButton").click()
+    page.wait_for_function("document.querySelector('#eventCount')?.textContent === '10 / 14'", timeout=30_000)
+    page.wait_for_function("document.querySelector('#missionStatus')?.textContent === 'WAITING HUMAN'", timeout=10_000)
+    waiting = evaluation_json(page, "/api/evaluation/state", access_key)
+    waiting_session = waiting.get("session") or {}
+    waiting_twin = waiting.get("twin") or {}
+    require(waiting_session.get("status") == "waiting_human", f"Living System did not stop for a human: {waiting_session}")
+    require(len(waiting.get("events") or []) == 10, "Living System did not reach the 10/14 human boundary")
+    require(waiting_twin.get("version") == 2, "Living Twin did not version to v2 at the human boundary")
+    report["living_system"].update({"waiting_event_count": 10, "waiting_status": waiting_session.get("status"), "waiting_twin_version": waiting_twin.get("version")})
+    report["checks"].extend(["living_system_arm_run_waiting_human", "living_system_waiting_boundary_visible_10_of_14"])
+    checkpoint(report)
+    overlay(page, "10 / 14 · WAITING FOR HUMAN", "Signals changed the canonical Twin and opened a governed mission. HealthIA stopped exactly where authority changes hands; it did not diagnose or prescribe.", 9)
+    clear_overlay(page)
+
+    page.locator("#humanForm").locator("button[type='submit']").click()
+    page.wait_for_function("document.querySelector('#eventCount')?.textContent === '14 / 14'", timeout=30_000)
+    page.wait_for_function("document.querySelector('#twinVersion')?.textContent === 'v3'", timeout=10_000)
+    page.wait_for_function("document.querySelector('#systemStatus')?.textContent === 'VERIFIED'", timeout=10_000)
+    completed = evaluation_json(page, "/api/evaluation/state", access_key)
+    completed_session = completed.get("session") or {}
+    completed_twin = completed.get("twin") or {}
+    event_types = completed.get("event_types") or [item.get("event_type") for item in completed.get("events") or []]
+    require(completed_session.get("status") == "completed", f"Living System did not complete: {completed_session}")
+    require(len(event_types) == 14 and completed_twin.get("version") == 3, "Living System did not reach 14/14 Twin v3")
+    require(completed.get("model_calls") == 0, "Living System consumed a model call")
+    require(completed_session.get("release_sha") == CANDIDATE_SHA, "Living System is not bound to exact candidate SHA")
+    report["living_system"].update({"completed_event_count": 14, "completed_status": completed_session.get("status"), "completed_twin_version": completed_twin.get("version"), "model_calls": completed.get("model_calls"), "release_sha": completed_session.get("release_sha"), "runtime_revision": completed_session.get("runtime_revision")})
+    report["checks"].extend(["living_system_human_receipt_reaches_14_of_14", "living_system_twin_v3_visible", "living_system_zero_model_calls", "living_system_exact_sha_binding"])
+    checkpoint(report)
+    overlay(page, "14 / 14 · TWIN v3 VERIFIED", "A synthetic human-entered measurement became a persisted receipt. The Twin learned from evidence, the mission closed, and the full replay remains visible.", 10)
+    clear_overlay(page)
+    page.locator("#replayButton").click()
+    page.wait_for_function("document.querySelector('#eventCount')?.textContent === '14 / 14'", timeout=15_000)
+    report["checks"].append("living_system_durable_replay_visible")
+    checkpoint(report)
+    overlay(page, "Living means continuity", "Event, policy, mission, human boundary, receipt and verification are one durable chain — not a scripted chatbot response.", 8)
+    clear_overlay(page)
+
+    # Leave the evaluator page so the same continuous real-app recording continues.
+    page.goto(f"{BASE_URL}/login", wait_until="networkidle", timeout=60_000)
 
 
 def checkpoint(report: dict) -> None:
@@ -156,7 +273,10 @@ def latest_result_state(page: Page, filename: str, timeout_s: float = 80.0) -> t
 
 
 def run() -> dict:
+    global IDENTITY_TOKEN, JUDGE_TOKEN
     require(BASE_URL.startswith("https://") and ".run.app" in BASE_URL, "exact-candidate Cloud Run URL is required")
+    IDENTITY_TOKEN = token_from_file(IDENTITY_TOKEN_FILE, "Cloud Run identity")
+    JUDGE_TOKEN = token_from_file(JUDGE_TOKEN_FILE, "Judge Mode")
     require(bool(IDENTITY_TOKEN), "Cloud Run identity token is required")
     require(bool(CANDIDATE_SHA), "candidate SHA is required")
 
@@ -192,6 +312,8 @@ def run() -> dict:
     }
     checkpoint(report)
     started = time.monotonic()
+    access_key = evaluation_access_key()
+    require(access_key, "HealthIA evaluation capability is required for the Living System recording")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -206,7 +328,10 @@ def run() -> dict:
         page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-        # 1. Exact-candidate live application.
+        # 1. Exact-candidate Living System: real UI, bounded capability and durable replay.
+        record_living_system(page, report, access_key)
+
+        # 2. Exact-candidate live application.
         page.goto(f"{BASE_URL}/login", wait_until="networkidle", timeout=60_000)
         page.wait_for_function("document.documentElement.lang === 'en'")
         require(page.locator("#registerTab").is_visible(), "registration UI missing")
@@ -239,7 +364,7 @@ def run() -> dict:
         overlay(page, "Bounded intelligence", "Gemini 3.5 Flash + Google ADK reason when useful. Firestore holds durable patient state and private Cloud Storage preserves original evidence.", 5)
         clear_overlay(page)
 
-        # 2. A real product event reaches the longitudinal record before any chat prompt.
+        # 3. A real product event reaches the longitudinal record before any chat prompt.
         device_sync = api_post_json(page, "/api/demo/device-sync")
         require(int(device_sync.get("accepted") or 0) >= 3, f"synthetic Health Connect event did not persist: {device_sync}")
         require(
@@ -265,7 +390,7 @@ def run() -> dict:
         clear_overlay(page)
         page.locator('.main-nav [data-open="chat"]').click()
 
-        # 3. Flagship Taskmaster mission: real navigation must stop at consent.
+        # 4. Flagship Taskmaster mission: real navigation must stop at consent.
         before = latest_assistant(page)
         send_chat(page, "Find a center for autism support near Santiago de los Caballeros.")
         blocked_reply = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=100.0)
@@ -287,7 +412,7 @@ def run() -> dict:
         overlay(page, "The human boundary", "HealthIA created a durable mission, then stopped. Location belongs to the patient. No Google Places result exists before mission-scoped consent.", 7)
         clear_overlay(page)
 
-        # 4. Exact consent resumes the SAME mission and executes real Google Places.
+        # 5. Exact consent resumes the SAME mission and executes real Google Places.
         before_consent = latest_assistant(page)
         send_chat(page, "I authorize my location for this mission.")
         consent_reply = wait_for_assistant_after(page, str(before_consent.get("id") or ""), timeout_s=100.0)
@@ -317,7 +442,7 @@ def run() -> dict:
         overlay(page, "Same mission, real Google Places", f"Consent resumed mission {mission_id[:12]}… and surfaced {len(candidates)} verifiable candidates with Google Maps links. This is a real read-only Google action.", 8)
         clear_overlay(page)
 
-        # 5. "The second one" is deterministic intent, not another LLM problem.
+        # 6. "The second one" is deterministic intent, not another LLM problem.
         expected_second_id = candidate_ids[1]
         before_choice = latest_assistant(page)
         send_chat(page, "The second one.")
@@ -340,7 +465,7 @@ def run() -> dict:
         overlay(page, "Exact human choice", "“The second one” bypasses Gemini. Deterministic policy selects exactly candidate #2 from the already-discovered list and preserves it in the same mission.", 8)
         clear_overlay(page)
 
-        # 6. Evidence first: preserve original bytes before AI interpretation.
+        # 7. Evidence first: preserve original bytes before AI interpretation.
         page.locator('.main-nav [data-open="results"]').click()
         page.wait_for_timeout(500)
         page.locator("#resultFile").set_input_files(str(pdf_path))
@@ -356,7 +481,7 @@ def run() -> dict:
         overlay(page, "Evidence before interpretation", "The synthetic original is preserved in private Cloud Storage before Gemini extraction. Firestore keeps the derived result linked back to the source document.", 8)
         clear_overlay(page)
 
-        # 7. Durable continuity survives logout/login.
+        # 8. Durable continuity survives logout/login.
         page.locator("#accountPill").click()
         page.locator("#logoutButton").click()
         page.wait_for_url(f"{BASE_URL}/login", timeout=20_000)
@@ -390,7 +515,7 @@ def run() -> dict:
         overlay(page, "Continuity is durable", "The exact Google mission and selected resource also survived. HealthIA carries unfinished work across time instead of starting over with every prompt.", 7)
         clear_overlay(page)
 
-        # 8. Final exact-candidate proof.
+        # 9. Final exact-candidate proof.
         readiness = api_json(page, "/api/readiness")
         page.locator('.main-nav [data-open="chat"]').click()
         cloud_summary = (
@@ -402,7 +527,7 @@ def run() -> dict:
         report["checks"].append("visible_exact_candidate_cloud_proof")
         clear_overlay(page)
 
-        # 9. Exact-head autonomous continuity proof stays public, read-only and synthetic.
+        # 10. Exact-head autonomous continuity proof stays public, read-only and synthetic.
         require(JUDGE_URL.startswith("https://") and ".run.app" in JUDGE_URL, "exact-head Judge Mode URL is required")
         require(bool(JUDGE_TOKEN), "private exact-head Judge Mode identity token is required")
         page.set_extra_http_headers({"Authorization": f"Bearer {JUDGE_TOKEN}"})
