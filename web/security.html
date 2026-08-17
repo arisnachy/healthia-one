@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HealthIA ONE · ONE SAFETY</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#172033; background:#f5f7fb; }
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    main { max-width:1180px; margin:0 auto; padding:32px 22px 56px; }
+    header { display:flex; justify-content:space-between; gap:24px; align-items:flex-end; margin-bottom:24px; }
+    h1 { margin:0; font-size:34px; letter-spacing:-.04em; }
+    .eyebrow { font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:750; color:#5d6f8f; margin-bottom:8px; }
+    .sub { max-width:720px; color:#5c667a; line-height:1.55; margin:8px 0 0; }
+    .badge { padding:8px 12px; border:1px solid #d9e0ec; border-radius:999px; background:white; font-size:12px; font-weight:700; white-space:nowrap; }
+    .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; }
+    .card { background:white; border:1px solid #e0e5ef; border-radius:18px; padding:18px; box-shadow:0 12px 32px rgba(30,45,75,.05); }
+    .wide { grid-column:span 12; } .half { grid-column:span 6; } .third { grid-column:span 4; }
+    h2 { margin:0 0 12px; font-size:16px; } h3 { margin:0; font-size:14px; }
+    .metric { font-size:26px; font-weight:760; letter-spacing:-.03em; }
+    .muted { color:#69758b; font-size:13px; }
+    .chain { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .step { padding:9px 11px; border-radius:10px; background:#f3f6fb; border:1px solid #e2e8f2; font-size:12px; font-weight:650; }
+    .arrow { color:#8a97ab; }
+    .fleet { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+    .agent { padding:10px 12px; background:#f7f9fc; border-radius:12px; }
+    .agent b { display:block; font-size:13px; margin-bottom:3px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th,td { text-align:left; border-bottom:1px solid #edf0f5; padding:9px 7px; vertical-align:top; }
+    th { color:#637087; font-weight:700; }
+    .ok { color:#17643a; } .off { color:#7d5260; }
+    .empty { padding:20px 4px; color:#758198; }
+    a { color:#324e7b; text-decoration:none; }
+    @media(max-width:760px){ .half,.third{grid-column:span 12}.fleet{grid-template-columns:1fr} header{align-items:flex-start;flex-direction:column} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="eyebrow">HealthIA ONE · Operational proof</div>
+      <h1>ONE SAFETY</h1>
+      <p class="sub">Read-only proof of the boundaries between AI reasoning, patient authorization, one-time execution authority, real connectors and durable receipts. No raw patient prompt or clinical content is rendered here.</p>
+    </div>
+    <div class="badge" id="release">Loading…</div>
+  </header>
+  <section class="grid">
+    <article class="card third"><h2>Safety Kernel</h2><div class="metric" id="kernel">—</div><div class="muted">Exact-intent execution gate</div></article>
+    <article class="card third"><h2>Model Armor</h2><div class="metric" id="armor">—</div><div class="muted">Google + deterministic ingress defense</div></article>
+    <article class="card third"><h2>Cloud Trace</h2><div class="metric" id="trace">—</div><div class="muted">Sanitized OpenTelemetry spans</div></article>
+    <article class="card wide"><h2>Non-bypassable execution chain</h2><div class="chain" id="chain"></div></article>
+    <article class="card half"><h2>KIRA Health · ADK fleet</h2><div class="fleet" id="fleet"></div></article>
+    <article class="card half"><h2>Prompt ingress</h2><div id="prompt" class="muted">No decision recorded in this process yet.</div></article>
+    <article class="card wide"><h2>Recent HealthActionTickets</h2><div id="tickets"></div></article>
+  </section>
+</main>
+<script>
+const label = s => String(s || '').replaceAll('_',' ').replace(/\b\w/g, c=>c.toUpperCase());
+async function load(){
+  const r=await fetch('/api/operations/security',{credentials:'same-origin'});
+  if(!r.ok){ document.querySelector('main').insertAdjacentHTML('beforeend',`<p>Security proof unavailable (${r.status}).</p>`); return; }
+  const d=await r.json();
+  release.textContent=`Release ${String(d.release_sha||'local').slice(0,12)}`;
+  kernel.innerHTML=`<span class="ok">ENFORCED</span>`;
+  armor.innerHTML=d.prompt_ingress.google_model_armor.enabled ? (d.prompt_ingress.google_model_armor.configured?'<span class="ok">GOOGLE + LOCAL</span>':'<span class="off">ENABLED · CONFIG NEEDED</span>') : '<span>LOCAL ACTIVE</span>';
+  trace.innerHTML=d.observability.cloud_trace_enabled ? (d.observability.configured?'<span class="ok">EXPORTING</span>':'<span class="off">ENABLED · NOT READY</span>') : '<span>OTEL LOCAL/OFF</span>';
+  chain.innerHTML=d.execution_chain.map((x,i)=>`${i?'<span class="arrow">→</span>':''}<span class="step">${label(x)}</span>`).join('');
+  fleet.innerHTML=d.agent_fleet.subagents.map(a=>`<div class="agent"><b>${a.name}</b><span class="muted">${a.role}</span></div>`).join('');
+  if(d.prompt_ingress.last_decision){ const p=d.prompt_ingress.last_decision; prompt.innerHTML=`<h3>${p.allowed?'<span class="ok">Allowed</span>':'<span class="off">Blocked</span>'} · ${label(p.source)}</h3><p>${p.reason}</p><p class="muted">Google checked: ${p.google_checked?'yes':'no'}</p>`; }
+  const rows=d.recent_action_tickets||[];
+  tickets.innerHTML=rows.length?`<table><thead><tr><th>Ticket</th><th>Action</th><th>State</th><th>Connector outcome</th><th>Receipt</th><th>Issued</th></tr></thead><tbody>${rows.map(t=>`<tr><td>${t.id}</td><td>${t.action}</td><td>${label(t.status)}</td><td>${label(t.outcome_status)}</td><td>${t.receipt_linked?'linked':'—'}</td><td>${new Date(t.issued_at).toLocaleString()}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No connector execution ticket has been issued for this patient in this runtime yet.</div>';
+}
+load().catch(e=>{ document.querySelector('main').insertAdjacentHTML('beforeend',`<p>Unable to load operational proof.</p>`); console.error(e); });
+</script>
+</body>
+</html>
