@@ -1,31 +1,29 @@
-Most health apps wake up when the patient opens them. HealthIA ONE can wake up because the patient's health story changed. Your health should never start over.
+Most health apps wake up when the patient opens them. HealthIA ONE can wake up because the patient’s health story changed. Your health should never start over.
 
-First, watch the Living System unlock safely. The page is real, served by the exact candidate on Cloud Run. Without its evaluation capability, the server returns a hard 403. The capability is entered into a password field, held only in page memory, and never stored in browser storage, a report, a command line or this video. It opens one isolated synthetic patient namespace — never a real patient record.
+This is the real Living System, running from the exact candidate on Google Cloud. Before access is granted, the evaluator surface fails closed. Its capability stays in page memory and opens only an isolated synthetic patient — never a real patient record.
 
-Now the system is alive. Four authorized signals enter the real application and the Patient Twin changes version. HealthIA runs the bounded cycle until the event replay reaches ten of fourteen. The mission is open, but the status reads, “WAITING FOR HUMAN.” Autonomy does not mean crossing a clinical boundary. The system stops, visibly and deliberately, before any unsafe conclusion.
+Now the system is alive. Authorized signals enter the application, the Patient Twin changes version, and the replay advances to ten of fourteen events. Then HealthIA stops: WAITING FOR HUMAN. Autonomy does not mean crossing a clinical boundary.
 
-The human enters one synthetic repeat measurement. A persisted receipt resumes the same chain. The replay reaches fourteen of fourteen, the Patient Twin advances to version three, the mission verifies, and the durable replay can be reloaded. This is the moment: a live system sensed, reasoned through policy, waited for authority, learned from evidence and proved the result — with zero model calls in this deterministic safety loop.
+A human enters one synthetic repeat measurement. A persisted receipt resumes the same chain. The replay reaches fourteen of fourteen. The Twin advances to version three. The mission verifies. The entire sequence remains durable and replayable, with zero model calls in this deterministic safety loop.
 
-Everything on screen is the exact GitHub candidate running as a real application on Google Cloud — no slide deck and no mock screens. Cloud Run serves the product. Firestore holds patient-owned state. Private Cloud Storage preserves original evidence. Gemini 3.5 Flash and Google ADK reason only where reasoning adds value.
+Everything you see is the real application. Cloud Run serves the product. Firestore holds patient-owned state. Private Cloud Storage preserves original evidence. Gemini and Google ADK are used only where reasoning adds value.
 
-Before the patient types a message, a synthetic Health Connect event enters the real Cloud application. HealthIA accepts only the authorized metric types, preserves source and time, and updates the longitudinal record. The device surface keeps an important truth visible: authenticating a phone does not prove clinical sensor accuracy. HealthIA can listen continuously without pretending that every signal is medical truth.
+Before the patient types anything, a synthetic Health Connect event enters the system. HealthIA accepts only authorized metrics, preserves source and time, and updates the longitudinal record. Device authentication is not treated as proof of clinical sensor accuracy.
 
-Now the patient asks for an autism support center near Santiago de los Caballeros. HealthIA does not simply search. It creates a durable mission, recognizes that location belongs to the patient, and stops. There are zero Google Places candidates because consent has not been granted. The system remembers the unfinished work without crossing the boundary.
+Now the patient asks for an autism support center near Santiago de los Caballeros. HealthIA creates a durable mission — but does not search yet. Location requires consent, so the mission stops with zero Google Places candidates.
 
-The patient authorizes location for this mission. The same mission resumes — it does not start over. Only now does HealthIA execute a bounded, real Google Places lookup. The live product displays verifiable candidates, addresses and Google Maps links. This is resource discovery, not an invented clinical referral.
+The patient authorizes location. The same mission resumes. Only then does HealthIA perform a real, bounded Google Places lookup and show verifiable candidates, addresses and Google Maps links.
 
-The patient says only, “The second one.” HealthIA does not waste another model call on a bounded ordinal choice. Deterministic policy selects exactly candidate number two, verifies its persisted identifier and keeps the choice inside the same mission. Intelligence here means knowing when not to use AI.
+The patient says, “The second one.” No extra model call is needed. Deterministic policy selects candidate number two and keeps the choice inside the same durable mission. Intelligence also means knowing when not to use AI.
 
-Next, a synthetic clinical document enters through the real product. HealthIA preserves the original bytes in private Cloud Storage before interpretation. Gemini performs bounded multimodal extraction, while Firestore links the structured result back to its source. If interpretation is unreliable, the system fails closed instead of manufacturing a finding.
+Next, a synthetic clinical document enters the product. The original file is preserved before interpretation. Gemini performs bounded multimodal extraction, and Firestore links the structured result back to its source. If the evidence is unreliable, HealthIA fails closed.
 
-The patient signs out and returns. The product reconstructs one coherent health story: authorized device signals, original clinical evidence, the longitudinal timeline, and the exact unfinished mission. This is not prompt memory. It is durable continuity owned by the patient.
+The patient signs out and returns. HealthIA reconstructs the same health story: device signals, clinical evidence, the longitudinal timeline and unfinished work. This is not prompt memory. It is durable continuity owned by the patient.
 
-And now that living system is visible inside the main patient workspace. The real Patient Twin, evidence, active mission, autonomous receipts and the decision waiting for the human appear together in one HealthIA interface. This is not a detached demonstration page; it is how the product carries the patient's story forward.
+Now watch what makes HealthIA different. The system notices an overdue blood-pressure follow-up without being prompted. For an opted-in synthetic patient, a durable mission is created. Eventarc wakes a private Cloud Run worker. A real Gmail follow-up is sent under standing consent. The reply returns through authenticated Pub/Sub. HealthIA correlates the exact thread, stores the measurement and completes the same mission.
 
-Now the moment that makes HealthIA different. HealthIA noticed an overdue blood-pressure follow-up. Nobody prompted it. For an explicitly opted-in synthetic patient, deterministic reconciliation created one durable mission. Eventarc woke a private Cloud Run worker. A real Gmail follow-up was sent under standing consent. The reply returned through Gmail users dot watch and authenticated Pub/Sub. HealthIA correlated the exact thread, stored a canonical measurement, and completed the same mission.
+Across Google Places, Gmail, Pub/Sub, Calendar and Google Tasks, authorization is never confused with execution evidence. HealthIA requires the real connector, durable state and a receipt before real-world work can be considered complete.
 
-That unattended mission crossed five durable boundaries, while detecting that the follow-up was due required zero model calls. The Judge Mode shown here is running on Cloud Run from this exact source SHA. It is synthetic, read-only and credential-free; the operational workers remain private.
+This is one living system. Signals become evidence. Evidence becomes missions. Safe work continues. Sensitive decisions stop for the human. And the patient’s story survives every session.
 
-HealthIA also carries verified execution evidence across Google Places, Gmail, Pub/Sub, Calendar and Google Tasks, plus evidence-first records, device pathways, opportunity discovery and human-reviewed clinical workflows. Those are not decorative integrations. Across every plane, authorization is not execution evidence, and a model cannot declare real-world work complete. HealthIA requires the real connector, durable state and a receipt.
-
-This is one living system: signals become evidence; evidence becomes missions; safe work continues; sensitive decisions stop for the human; and the patient’s story survives every session. HealthIA ONE does not wait for another prompt. It carries health forward, so the patient never starts over.
+HealthIA ONE does not wait for another prompt. It carries health forward, so the patient never starts over.
