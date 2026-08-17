@@ -246,12 +246,27 @@ Write-Host "Cloud Run listo: $url" -ForegroundColor Green
 Write-Host "Revision: $revision" -ForegroundColor Green
 
 Write-Host "Verificando binding proveedor: HEAD limpio -> source archive -> Cloud Build -> digest -> revision..." -ForegroundColor Cyan
-& python deployment/verify_cloud_provider_binding.py `
-    --project $ProjectId `
-    --region $Region `
-    --service $ServiceName `
-    --expected-sha $releaseSha `
-    --output deployment/cloud-provider-binding-latest.json | Out-Host
+$providerProofArgs = @(
+    "deployment/verify_cloud_provider_binding.py",
+    "--project", $ProjectId,
+    "--region", $Region,
+    "--service", $ServiceName,
+    "--expected-sha", $releaseSha,
+    "--output", "deployment/cloud-provider-binding-latest.json"
+)
+if (-not $PublicDemo) {
+    $providerIdentityToken = (& gcloud auth print-identity-token).Trim()
+    if ([string]::IsNullOrWhiteSpace($providerIdentityToken)) {
+        throw "No se pudo obtener identity token para el binding del proveedor privado."
+    }
+    $providerProofArgs += @("--identity-token", $providerIdentityToken)
+}
+try {
+    & python @providerProofArgs | Out-Host
+}
+finally {
+    $providerIdentityToken = $null
+}
 if ($LASTEXITCODE -ne 0) {
     throw "La revision existe pero no supero el binding exact-SHA independiente del proveedor."
 }

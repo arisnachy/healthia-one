@@ -101,7 +101,14 @@ def _provider_source_matches_clean_head(source_uri: str, expected_sha: str) -> d
         }
 
 
-def verify(*, project: str, region: str, service_name: str, expected_sha: str) -> dict[str, Any]:
+def verify(
+    *,
+    project: str,
+    region: str,
+    service_name: str,
+    expected_sha: str,
+    identity_token: str = "",
+) -> dict[str, Any]:
     service = _gcloud_json(
         "run",
         "services",
@@ -149,7 +156,10 @@ def verify(*, project: str, region: str, service_name: str, expected_sha: str) -
 
     url = str(status.get("url") or "").rstrip("/")
     _require(url, "Cloud Run provider did not return a service URL")
-    with urllib.request.urlopen(f"{url}/api/readiness", timeout=45) as response:
+    request = urllib.request.Request(f"{url}/api/readiness")
+    if identity_token:
+        request.add_header("Authorization", f"Bearer {identity_token}")
+    with urllib.request.urlopen(request, timeout=45) as response:
         readiness = json.loads(response.read().decode("utf-8"))
     _require(readiness.get("release_sha") == expected_sha, "Runtime readiness SHA differs from clean HEAD")
 
@@ -185,6 +195,7 @@ def main() -> int:
     parser.add_argument("--region", required=True)
     parser.add_argument("--service", required=True)
     parser.add_argument("--expected-sha", required=True)
+    parser.add_argument("--identity-token", default="")
     parser.add_argument("--output", default="deployment/cloud-provider-binding-latest.json")
     args = parser.parse_args()
     try:
@@ -193,6 +204,7 @@ def main() -> int:
             region=args.region,
             service_name=args.service,
             expected_sha=args.expected_sha,
+            identity_token=args.identity_token,
         )
     except (ProviderBindingError, OSError, ValueError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
         print(f"HEALTHIA_PROVIDER_BINDING_FAILED {exc}", file=sys.stderr)
