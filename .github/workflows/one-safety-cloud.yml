@@ -1,0 +1,125 @@
+name: ONE SAFETY cloud substrate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/one-safety-cloud.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-one-safety-cloud
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: Provision Model Armor and Cloud Trace
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      TEMPLATE_ID: healthia-one-safety
+      RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+    steps:
+      - name: Check out exact main
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Ensure required APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          for api in modelarmor.googleapis.com cloudtrace.googleapis.com; do
+            if ! grep -qx "$api" <<<"$enabled"; then
+              echo "Enabling $api"
+              gcloud services enable "$api" --project "$PROJECT_ID" --quiet
+            fi
+          done
+          enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
+          grep -qx 'modelarmor.googleapis.com' <<<"$enabled"
+          grep -qx 'cloudtrace.googleapis.com' <<<"$enabled"
+          echo "HEALTHIA_ONE_SAFETY_APIS_PASS"
+
+      - name: Grant least-privilege runtime roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          for role in roles/modelarmor.user roles/cloudtrace.agent; do
+            gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+              --member "serviceAccount:$RUNTIME_SA" \
+              --role "$role" \
+              --condition=None \
+              --quiet >/dev/null
+          done
+          policy="$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --format='value(bindings.role,bindings.members)')"
+          grep -F "roles/modelarmor.user" <<<"$policy" | grep -F "$RUNTIME_SA" >/dev/null
+          grep -F "roles/cloudtrace.agent" <<<"$policy" | grep -F "$RUNTIME_SA" >/dev/null
+          echo "HEALTHIA_ONE_SAFETY_IAM_PASS"
+
+      - name: Create or harden Model Armor template
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gcloud model-armor templates describe "$TEMPLATE_ID" \
+            --project "$PROJECT_ID" --location "$REGION" --format='value(name)' >/dev/null 2>&1; then
+            gcloud model-armor templates update "$TEMPLATE_ID" \
+              --project "$PROJECT_ID" \
+              --location "$REGION" \
+              --pi-and-jailbreak-filter-settings-enforcement=enabled \
+              --pi-and-jailbreak-filter-settings-confidence-level=high \
+              --malicious-uri-filter-settings-enforcement=enabled \
+              --template-metadata-log-sanitize-operations \
+              --quiet >/dev/null
+          else
+            gcloud model-armor templates create "$TEMPLATE_ID" \
+              --project "$PROJECT_ID" \
+              --location "$REGION" \
+              --pi-and-jailbreak-filter-settings-enforcement=enabled \
+              --pi-and-jailbreak-filter-settings-confidence-level=high \
+              --malicious-uri-filter-settings-enforcement=enabled \
+              --template-metadata-log-sanitize-operations \
+              --quiet >/dev/null
+          fi
+          name="$(gcloud model-armor templates describe "$TEMPLATE_ID" \
+            --project "$PROJECT_ID" --location "$REGION" --format='value(name)')"
+          test "$name" = "projects/$PROJECT_ID/locations/$REGION/templates/$TEMPLATE_ID"
+          echo "HEALTHIA_ONE_MODEL_ARMOR_TEMPLATE_PASS $name"
+
+      - name: Prove real Model Armor sanitization
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/model-armor-benign.json"
+          gcloud model-armor templates sanitize-user-prompt "$TEMPLATE_ID" \
+            --project "$PROJECT_ID" \
+            --location "$REGION" \
+            --user-prompt-data-text="HealthIA ONE bounded benign security probe." \
+            --format=json > "$out"
+          test -s "$out"
+          grep -q 'sanitizationResult\|sanitization_result' "$out"
+          echo "HEALTHIA_ONE_MODEL_ARMOR_LIVE_PASS"
+
+      - name: Cloud substrate summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ONE SAFETY cloud substrate is ready."
+          echo "- Google Model Armor template: $TEMPLATE_ID ($REGION)"
+          echo "- Runtime role: roles/modelarmor.user"
+          echo "- Runtime role: roles/cloudtrace.agent"
+          echo "- Cloud Trace API enabled"
