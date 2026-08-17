@@ -4,6 +4,11 @@
 Build HealthIA ONE Core v0.1 as the first functional vertical slice of the complete Patient Digital Twin OS manifesto, deploy it economically to Google Cloud, and prove the exact candidate through one judge-visible Living System journey.
 
 ## Current checkpoint
+- Final native candidate checkpoint: `origin/main` `fa560a9ece334d62c38e8d17c784f1566aaea287` contains the Living System inside the authenticated primary HealthIA shell. The native view projects the patient-scoped Twin, persisted evidence, active missions, autonomous receipts and human-review decisions from `/api/bootstrap`; it does not use evaluator credentials or synthetic evaluator state.
+- PRs `#75` and `#76` passed remote CI. Local full regression passed, `scripts/full_system_check.py` passed `14/14`, visual browser verification showed the native Spanish surface without console errors, and the adaptive interview contract was hardened so answer options remain factual rather than imperative while deterministic medication and diagnosis guards remain fail-closed.
+- Exact provider binding passed for Cloud Run revision `healthia-one-demo-00038-tm4`, release `fa560a9ece334d62c38e8d17c784f1566aaea287`, Cloud Build `12f557a9-c6d9-4a38-98e7-a0dfb07aaa11` and Artifact Registry digest `sha256:1175d839ecb42cec60f705078f92031b236bc7c12ae36ed33f9e42a83a33363b`.
+- The strict main-service proof now passes live Gemini 3.5, ADK execution, two adaptive memory-preserving blocks, multimodal PDF, authenticated A/B isolation, Firestore/GCS provider rereads, device identity, original-evidence roundtrip and Living System `14/14`, Twin `v3`, exact main revision, persisted human receipt and zero Living model calls.
+- Final video workflow run `32030016758` passed CUTLOCK against that exact source revision: real English product capture, no static screenshots, native Living surface visible, Google Cloud Charon male without fallback, `235s`, `1600x900`, and MP4 SHA-256 `4c4a09121cdf650e93f705357c347d943aa5bca36bec9cdaa61ebc913b3c0f57`. YouTube and Devpost remain intentionally unchanged until owner preview approval.
 - Original checkout at `bd1ce0614be330142ed2f49a87979423e91ba192` remains untouched with user-owned modifications.
 - Clean worktree `healthia-one-living-system` and branch `codex/living-system-core` start at fetched `origin/main` `ec233508497a982a3f026b4bad9895e748e15ea6`.
 - `docs/HEALTHIA_ONE_LIVING_SYSTEM_CLOUD_VICTORY_PLAN.md` defines the 12 evidence gates.
@@ -16,7 +21,7 @@ Build HealthIA ONE Core v0.1 as the first functional vertical slice of the compl
 - Exact-SHA cloud deployment and provider reread passed twice during hardening. The latest pre-integration proof bound clean SHA `3644fed65ff64007e9ae7eaba0ef394fc417b891` to Cloud Build `51637721-3675-443e-95cf-bcd24e58cbb2`, revision `healthia-one-demo-00031-ttc`, Artifact Registry digest `sha256:a4e7e23097d360632f5f92d3b479a7c88e8023c56a758e9b740c7dd3d4f44781`, and 379 provider files compared byte-for-byte.
 - The strict live proof passed authenticated A/B isolation, anonymous rejection, Gemini 3.5 + ADK, multimodal PDF, Firestore/GCS rereads, device identity, and Living System 14/14, Twin v3, persisted receipt and zero model calls.
 - Vigia security review passed after proof credentials were moved to temporary environment variables with guaranteed `finally` cleanup.
-- Independent JUDGE classified the technical core and Cloud as `CONDITIONAL_PASS`; integration into `main`, exact-head Living video publication and synchronized public evidence remain the final delivery gates.
+- The earlier independent JUDGE classified the pre-integration core as `CONDITIONAL_PASS`; a new independent final JUDGE is required after native integration and exact-head cloud/video evidence.
 - Generated cloud JSON remains outside Git to avoid post-deployment-attestation SHA recursion. Sanitized copies must be published with the final release and tied to the exact candidate SHA.
 
 ## Victory gate
