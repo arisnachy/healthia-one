@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -41,6 +41,11 @@ from healthia_one.google_mission_actions import calendar_event_payload, followup
 from healthia_one.google_mission_runtime import FirestoreMissionStore, GoogleHealthMission, GoogleHealthMissionCoordinator, MemoryMissionStore
 from healthia_one.google_navigation_coordinator import HealthIAGoogleMissionCoordinator
 from healthia_one.google_oauth_credentials import FirestoreOAuthConnectionStore, MemoryOAuthConnectionStore, SecretManagerOAuthTokenProvider
+from healthia_one.safety_kernel import (
+    FirestoreHealthActionTicketStore,
+    HealthIASafetyKernel,
+    MemoryHealthActionTicketStore,
+)
 
 
 _CURRENT_GOOGLE_PATIENT: ContextVar[str] = ContextVar("healthia_google_patient", default="")
@@ -55,6 +60,7 @@ class GoogleConstellationRuntime:
     oauth_connection_store: object
     raw_executor: GoogleActionExecutor
     guarded_executor: GuardedGoogleActionExecutor
+    action_ticket_store: object = field(default_factory=MemoryHealthActionTicketStore)
 
 
 class GoogleConstellationService:
@@ -104,7 +110,7 @@ class GoogleConstellationService:
         return self.runtime.grant_store.list_for_patient(patient_id)
 
     def authorize(self, patient_id: str, mission_id: str, action: GoogleAction, *, payload: dict[str, Any], ttl_minutes: int = 15, one_time: bool = True) -> GoogleActionAuthorization:
-        mission = self.load_mission(patient_id, mission_id)
+        self.load_mission(patient_id, mission_id)
         exact_request = GoogleActionRequest(patient_id=patient_id, mission_id=mission_id, action=action, payload=dict(payload))
         ttl = min(max(int(ttl_minutes), 1), 1440)
         authorization = GoogleActionAuthorization(
@@ -116,6 +122,7 @@ class GoogleConstellationService:
             expires_at=utc_now() + timedelta(minutes=ttl),
         )
         self.runtime.authorization_store.save(authorization)
+        mission = self.load_mission(patient_id, mission_id)
         self.coordinator.authorize_action(mission, action, authorization.id)
         return authorization
 
@@ -146,14 +153,22 @@ def _stores(settings):
             FirestoreGoogleGrantStore(project=project),
             FirestoreGoogleReceiptStore(project=project),
             FirestoreGoogleAuthorizationStore(project=project),
+            FirestoreHealthActionTicketStore(project=project),
             FirestoreOAuthConnectionStore(project=project),
             FirestoreMissionStore(project=project),
         )
-    return MemoryGoogleGrantStore(), MemoryGoogleReceiptStore(), MemoryGoogleAuthorizationStore(), MemoryOAuthConnectionStore(), MemoryMissionStore()
+    return (
+        MemoryGoogleGrantStore(),
+        MemoryGoogleReceiptStore(),
+        MemoryGoogleAuthorizationStore(),
+        MemoryHealthActionTicketStore(),
+        MemoryOAuthConnectionStore(),
+        MemoryMissionStore(),
+    )
 
 
 def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
-    grant_store, receipt_store, authorization_store, oauth_store, mission_store = _stores(settings)
+    grant_store, receipt_store, authorization_store, action_ticket_store, oauth_store, mission_store = _stores(settings)
     patient_token_provider = SecretManagerOAuthTokenProvider(connection_store=oauth_store)
     server_token_provider = ServerAdcTokenProvider()
     connectors: dict[GoogleService, object] = {}
@@ -195,13 +210,21 @@ def build_google_constellation_runtime(settings) -> GoogleConstellationRuntime:
                 _CURRENT_GOOGLE_PATIENT.reset(token)
 
     raw = PatientContextExecutor(connectors=connectors, receipt_store=receipt_store)
-    guard = GuardedGoogleActionExecutor(executor=raw, grant_store=grant_store, authorization_store=authorization_store, receipt_store=receipt_store)
+    safety_kernel = HealthIASafetyKernel(action_ticket_store)
+    guard = GuardedGoogleActionExecutor(
+        executor=raw,
+        grant_store=grant_store,
+        authorization_store=authorization_store,
+        receipt_store=receipt_store,
+        safety_kernel=safety_kernel,
+    )
     coordinator = HealthIAGoogleMissionCoordinator(GuardedMissionExecutorAdapter(guard), store=mission_store)
     return GoogleConstellationRuntime(
         coordinator=coordinator,
         grant_store=grant_store,
         receipt_store=receipt_store,
         authorization_store=authorization_store,
+        action_ticket_store=action_ticket_store,
         oauth_connection_store=oauth_store,
         raw_executor=raw,
         guarded_executor=guard,

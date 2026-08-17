@@ -26,6 +26,20 @@ class Settings(BaseSettings):
     cost_control_ui: bool = True
     ai_max_output_tokens: int = 1400
 
+    # Enterprise AI ingress defense. The local deterministic injection filter is
+    # always available; Google Model Armor is opt-in and fails closed once
+    # enabled unless the deployment explicitly chooses otherwise.
+    model_armor_enabled: bool = False
+    model_armor_fail_closed: bool = True
+    model_armor_location: str = "us-central1"
+    model_armor_template_id: str = ""
+
+    # OpenTelemetry is opt-in locally. Cloud deployments can export the same
+    # sanitized spans to Google Cloud Trace without placing PHI in attributes.
+    otel_enabled: bool = False
+    cloud_trace_enabled: bool = False
+    otel_service_name: str = "healthia-one"
+
     # Explicit, bounded, synthetic-only evaluation capability. Disabled unless
     # the deployment owner deliberately enables it and supplies an access key.
     evaluation_enabled: bool = False
@@ -48,6 +62,12 @@ class Settings(BaseSettings):
         import os
 
         return os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    @property
+    def google_cloud_project(self) -> str:
+        import os
+
+        return os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
 
     @property
     def adk_ready(self) -> bool:

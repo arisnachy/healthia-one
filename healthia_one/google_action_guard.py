@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from healthia_one.google_constellation import (
+    ACTION_POLICIES,
     GoogleActionReceipt,
     GoogleActionRequest,
     build_google_receipt,
@@ -14,15 +15,18 @@ from healthia_one.google_constellation_store import (
     GoogleReceiptStore,
     build_action_intent_key,
 )
+from healthia_one.observability import span
+from healthia_one.safety_kernel import HealthIASafetyKernel, MemoryHealthActionTicketStore
 
 
 class GuardedGoogleActionExecutor:
-    """Durable authorization boundary around the raw connector executor.
+    """Durable authorization + one-time execution boundary around connectors.
 
-    The authorization is bound to patient + mission + action + exact material
-    payload. Replays of the exact completed request return the durable receipt;
-    changing destination, content, appointment time, file or task changes the
-    intent fingerprint and requires a new patient authorization.
+    Patient authorization is bound to patient + mission + action + exact
+    material payload. Immediately before a connector call, ONE SAFETY issues
+    and atomically consumes a short-lived HealthActionTicket bound to the same
+    intent and idempotency key. A ticket is authority to *attempt* one call;
+    only the durable connector receipt proves the external action completed.
     """
 
     def __init__(
@@ -32,11 +36,13 @@ class GuardedGoogleActionExecutor:
         grant_store: GoogleGrantStore,
         authorization_store: GoogleAuthorizationStore,
         receipt_store: GoogleReceiptStore,
+        safety_kernel: HealthIASafetyKernel | None = None,
     ) -> None:
         self.executor = executor
         self.grant_store = grant_store
         self.authorization_store = authorization_store
         self.receipt_store = receipt_store
+        self.safety_kernel = safety_kernel or HealthIASafetyKernel(MemoryHealthActionTicketStore())
         self.executor.receipt_store = receipt_store
 
     def _authorization_id(self, request: GoogleActionRequest) -> str:
@@ -59,6 +65,16 @@ class GuardedGoogleActionExecutor:
         return authorization
 
     def execute(self, request: GoogleActionRequest) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
+        # Trace attributes are deliberately limited to non-PHI operational facts.
+        with span(
+            "google.action.guarded_execute",
+            action=request.action.value,
+            service=request.service.value,
+            external_mutation=ACTION_POLICIES[request.action].mutates_external_state,
+        ):
+            return self._execute_guarded(request)
+
+    def _execute_guarded(self, request: GoogleActionRequest) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
         key = build_idempotency_key(request)
         completed = self.receipt_store.get(request.patient_id, key)
         if completed is not None and completed.status == "completed":
@@ -83,8 +99,25 @@ class GuardedGoogleActionExecutor:
                 self.receipt_store.save(receipt)
                 return receipt, None
 
+        try:
+            ticket = self.safety_kernel.issue(
+                request,
+                authorization_id=authorization_id,
+                idempotency_key=key,
+            )
+            self.safety_kernel.consume(ticket, request, idempotency_key=key)
+        except (KeyError, PermissionError, ValueError) as exc:
+            receipt = build_google_receipt(
+                request,
+                status="blocked",
+                safe_summary=f"ONE SAFETY blocked connector execution: {exc}",
+            )
+            self.receipt_store.save(receipt)
+            return receipt, None
+
         grants = self.grant_store.list_for_patient(request.patient_id)
         receipt, outcome = self.executor.execute(request, grants)
+        self.safety_kernel.record_outcome(ticket, receipt_id=receipt.id, status=receipt.status)
 
         if receipt.status == "completed" and authorization_id:
             authorization = self.authorization_store.get(request.patient_id, authorization_id)
