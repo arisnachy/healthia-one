@@ -1,0 +1,250 @@
+name: ONE SAFETY enhanced judge master
+
+on:
+  workflow_run:
+    workflows: ["Final live English hackathon demo"]
+    types: [completed]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: healthia-one-safety-enhanced-master
+  cancel-in-progress: true
+
+jobs:
+  enhance:
+    name: Prove ONE SAFETY and build ~4-minute master
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-safety-proof
+      BUCKET_NAME: healthia-6088a-healthia-evidence
+      MAPS_SECRET_NAME: healthia-google-maps-api-key
+      EVALUATION_SECRET_NAME: healthia-evaluation-access-key
+      BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
+      RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      RELEASE_TAG: healthia-one-autonomous-winner-demo-2026
+      BASE_ARTIFACT: HealthIA-ONE-autonomous-winner-demo-Charon
+      OUTPUT_ASSET: HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4
+      VOICE_NAME: en-US-Chirp3-HD-Charon
+    steps:
+      - name: Check out exact successful demo SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Prove exact SHA binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "${{ github.event.workflow_run.head_sha }}"
+          echo "HEALTHIA_ONE_SAFETY_ENHANCED_EXACT_SHA_PASS $actual"
+
+      - name: Download validated base winner artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/base-winner
+          gh run download "${{ github.event.workflow_run.id }}" --repo "${{ github.repository }}" --name "$BASE_ARTIFACT" --dir dist/base-winner
+          base="$(find dist/base-winner -type f -name 'HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4' -print -quit)"
+          test -s "$base"
+          echo "HEALTHIA_BASE_WINNER_MP4=$base" >> "$GITHUB_ENV"
+          echo "HEALTHIA_ONE_SAFETY_BASE_ARTIFACT_PASS"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Deploy exact candidate with ONE SAFETY mandatory
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="${{ github.event.workflow_run.head_sha }}"
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --build-service-account "$BUILD_SA" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --service-account "$RUNTIME_SA" \
+            --min-instances 0 --max-instances 1 --concurrency 20 --cpu 1 --memory 512Mi --timeout 600 \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=20,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_EVALUATION_ENABLED=true,HEALTHIA_EVALUATION_SESSION_MINUTES=30,HEALTHIA_EVALUATION_MAX_SESSIONS=2,HEALTHIA_EVALUATION_MAX_RUNS=2,HEALTHIA_RELEASE_SHA=${SOURCE_SHA},HEALTHIA_GCS_BUCKET=${BUCKET_NAME},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
+            --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest,HEALTHIA_EVALUATION_ACCESS_KEY=${EVALUATION_SECRET_NAME}:latest,GOOGLE_MAPS_API_KEY=${MAPS_SECRET_NAME}:latest" \
+            --no-allow-unauthenticated --quiet
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          test -n "$url"
+          token_file="$RUNNER_TEMP/healthia-one-safety-id-token"
+          umask 077
+          gcloud auth print-identity-token --audiences="$url" > "$token_file"
+          chmod 600 "$token_file"
+          test -s "$token_file"
+          echo "HEALTHIA_CLOUD_URL=$url" >> "$GITHUB_ENV"
+          echo "HEALTHIA_CLOUD_ID_TOKEN_FILE=$token_file" >> "$GITHUB_ENV"
+          echo "HEALTHIA_CANDIDATE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "HEALTHIA_ONE_SAFETY_EXACT_CLOUD_PASS $url"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install proof recorder and media tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg jq
+
+      - name: Record live Trace Ticket Receipt and no-mutation proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/record_one_safety_judge_proof.py
+          jq -e '.status == "PASS"' dist/one-safety-judge-proof/report.json >/dev/null
+          trace_id="$(jq -r '.one_safety_proof.trace_id' dist/one-safety-judge-proof/report.json)"
+          ticket_id="$(jq -r '.one_safety_proof.ticket_id' dist/one-safety-judge-proof/report.json)"
+          receipt_id="$(jq -r '.one_safety_proof.receipt_id' dist/one-safety-judge-proof/report.json)"
+          test "${#trace_id}" -eq 32 && test -n "$ticket_id" && test -n "$receipt_id"
+          echo "HEALTHIA_PROOF_TRACE_ID=$trace_id" >> "$GITHUB_ENV"
+          echo "HEALTHIA_PROOF_TICKET_ID=$ticket_id" >> "$GITHUB_ENV"
+          echo "HEALTHIA_PROOF_RECEIPT_ID=$receipt_id" >> "$GITHUB_ENV"
+          echo "HEALTHIA_ONE_SAFETY_VISIBLE_CORRELATION_PASS trace=$trace_id ticket=$ticket_id receipt=$receipt_id"
+
+      - name: Acquire temporary Cloud Trace read capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          provisioner="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
+          test -n "$provisioner"
+          echo "TRACE_PROVISIONER=$provisioner" >> "$GITHUB_ENV"
+          existing="$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.role=roles/cloudtrace.user AND bindings.members=serviceAccount:$provisioner" --format='value(bindings.members)' | head -n1)"
+          if [[ "$existing" == "serviceAccount:$provisioner" ]]; then
+            echo "TRACE_TEMP_READER_GRANTED=false" >> "$GITHUB_ENV"
+          else
+            gcloud projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$provisioner" --role roles/cloudtrace.user --condition=None --quiet >/dev/null
+            echo "TRACE_TEMP_READER_GRANTED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Read back the exact exported Cloud Trace
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/exact-trace.json"
+          found=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            token="$(gcloud auth print-access-token)"
+            code="$(curl -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer $token" "https://cloudtrace.googleapis.com/v1/projects/${PROJECT_ID}/traces/${HEALTHIA_PROOF_TRACE_ID}")"
+            if [[ "$code" == "200" ]] && jq -e --arg tid "$HEALTHIA_PROOF_TRACE_ID" '.traceId == $tid' "$out" >/dev/null 2>&1 && jq -e '.spans[] | select(.name == "google.action.guarded_execute")' "$out" >/dev/null 2>&1; then
+              found=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$found" != "true" ]]; then
+            echo "Exact Cloud Trace did not become readable." >&2
+            cat "$out" >&2 || true
+            exit 1
+          fi
+          jq '{projectId, traceId, spans: [.spans[] | {spanId, name, startTime, endTime}]}' "$out" > dist/one-safety-judge-proof/cloud-trace-proof.json
+          echo "HEALTHIA_ONE_SAFETY_CLOUD_TRACE_READBACK_PASS $HEALTHIA_PROOF_TRACE_ID"
+
+      - name: Remove temporary Cloud Trace read capability
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${TRACE_TEMP_READER_GRANTED:-false}" == "true" && -n "${TRACE_PROVISIONER:-}" ]]; then
+            gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$TRACE_PROVISIONER" --role roles/cloudtrace.user --condition=None --quiet >/dev/null
+            echo "HEALTHIA_ONE_SAFETY_TEMP_TRACE_READER_REMOVED"
+          fi
+
+      - name: Synthesize compact Charon ONE SAFETY narration
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          request="$RUNNER_TEMP/one-safety-tts.json"
+          response="$RUNNER_TEMP/one-safety-tts-response.json"
+          jq -n --arg voice "$VOICE_NAME" '{input:{text:"ONE SAFETY binds authorized intent to one execution ticket. Cloud Trace follows the attempt; only the real connector receipt proves completion."},voice:{languageCode:"en-US",name:$voice},audioConfig:{audioEncoding:"MP3",speakingRate:0.98}}' > "$request"
+          curl -fsS -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data-binary "@$request" "https://texttospeech.googleapis.com/v1/text:synthesize" > "$response"
+          jq -e '.audioContent | length > 0' "$response" >/dev/null
+          jq -r '.audioContent' "$response" | base64 -d > dist/one-safety-judge-proof/one-safety-charon.mp3
+          test -s dist/one-safety-judge-proof/one-safety-charon.mp3
+          echo "HEALTHIA_ONE_SAFETY_CHARON_PASS $VOICE_NAME"
+
+      - name: Build enhanced approximately four-minute judge master
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_webm="$(find dist/one-safety-judge-proof/video -type f -name '*.webm' -print -quit)"
+          test -s "$proof_webm"
+          base_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$HEALTHIA_BASE_WINNER_MP4")"
+          available="$(python - "$base_duration" <<'PY'
+          import sys
+          base=float(sys.argv[1])
+          print(max(0.0, min(11.5, 239.5-base)))
+          PY
+          )"
+          python - "$available" <<'PY'
+          import sys
+          value=float(sys.argv[1])
+          if value < 8.0:
+              raise SystemExit(f"base winner leaves too little room for ONE SAFETY proof: {value:.2f}s")
+          PY
+          mkdir -p dist/one-safety-enhanced
+          proof_mp4=dist/one-safety-enhanced/one-safety-segment.mp4
+          ffmpeg -y -i "$proof_webm" -i dist/one-safety-judge-proof/one-safety-charon.mp3 -filter_complex "[0:v]fps=25,scale=1600:900:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2[v];[1:a]aresample=48000,apad[a]" -map '[v]' -map '[a]' -t "$available" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 160k -ar 48000 "$proof_mp4"
+          final="dist/one-safety-enhanced/$OUTPUT_ASSET"
+          ffmpeg -y -i "$HEALTHIA_BASE_WINNER_MP4" -i "$proof_mp4" -filter_complex "[0:v]fps=25,scale=1600:900,setsar=1[v0];[0:a]aresample=48000[a0];[1:v]fps=25,scale=1600:900,setsar=1[v1];[1:a]aresample=48000[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]" -map '[v]' -map '[a]' -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 160k -ar 48000 -movflags +faststart "$final"
+          duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$final")"
+          python - "$duration" <<'PY'
+          import sys
+          d=float(sys.argv[1])
+          if not (235.0 <= d <= 240.0):
+              raise SystemExit(f"enhanced judge master duration out of target: {d:.3f}s")
+          print(f"HEALTHIA_ONE_SAFETY_ENHANCED_DURATION_PASS {d:.3f}s")
+          PY
+          sha256sum "$final" | tee dist/one-safety-enhanced/sha256.txt
+          echo "HEALTHIA_ENHANCED_MASTER=$final" >> "$GITHUB_ENV"
+
+      - name: Upload enhanced proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthIA-ONE-ONE-SAFETY-enhanced-judge-master
+          path: |
+            dist/one-safety-enhanced/${{ env.OUTPUT_ASSET }}
+            dist/one-safety-enhanced/sha256.txt
+            dist/one-safety-judge-proof/report.json
+            dist/one-safety-judge-proof/cloud-trace-proof.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish enhanced master beside canonical release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" "$HEALTHIA_ENHANCED_MASTER" --clobber --repo "${{ github.repository }}"
+          echo "HEALTHIA_ONE_SAFETY_ENHANCED_RELEASE_PASS $OUTPUT_ASSET"
+
+      - name: Remove temporary proof service
+        if: always()
+        shell: bash
+        run: gcloud run services delete "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet || true
