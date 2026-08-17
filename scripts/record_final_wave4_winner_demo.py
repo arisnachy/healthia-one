@@ -92,7 +92,9 @@ def record_living_system(page: Page, report: dict, access_key: str) -> None:
     page.locator("#accessForm button[type='submit']").click()
     page.wait_for_selector("#controlPanel:not([hidden])", timeout=20_000)
     # Keep the capability only in the page's closure; it is not left in the DOM or browser storage.
-    page.locator("#accessKey").fill("")
+    # Unlock hides the access panel. Clear its DOM value without waiting for a
+    # hidden element to become actionable; the page closure retains the key.
+    page.locator("#accessKey").evaluate("element => { element.value = ''; }")
     storage = page.evaluate("({local: Object.keys(localStorage), session: Object.keys(sessionStorage)})")
     require(not any("evaluation" in str(item).lower() for item in storage["local"] + storage["session"]), "evaluation capability entered browser storage")
     report["checks"].append("living_system_capability_not_persisted_in_browser")
