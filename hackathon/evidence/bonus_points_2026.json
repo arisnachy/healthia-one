@@ -10,11 +10,14 @@
     "required_declaration": "This piece of content was created for the purposes of entering the All Things Agentic Hackathon 2026."
   },
   "social_media": {
-    "status": "READY_NOT_PUBLISHED",
+    "status": "PUBLISHED_USER_CONFIRMED",
+    "platform": "X",
+    "public_url": "https://x.com/i/status/2089481967821545835",
+    "published_date": "2026-08-17",
     "required_hashtag": "#AllThingsAgenticHackathon",
-    "public_url": null,
-    "claim_bonus_now": false,
-    "draft_document": "docs/HACKATHON_BONUS_POINTS.md"
+    "required_hashtag_present_in_prepared_published_copy": true,
+    "claim_bonus_now": true,
+    "verification_note": "Publication and public status URL were confirmed by the project owner. X did not expose the status body to this session's independent web fetch/index when this manifest was updated; no independent content-fetch claim is made."
   },
   "google_ai_bonus": {
     "status": "LIVE_PROVEN",
@@ -41,6 +44,8 @@
   "canonical_links": {
     "judges": "https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md",
     "youtube_demo": "https://youtu.be/dOIhP22SxZ8",
+    "public_build_article": "https://github.com/arisnachy/healthia-one/issues/93",
+    "x_post": "https://x.com/i/status/2089481967821545835",
     "repository": "https://github.com/arisnachy/healthia-one"
   }
 }
