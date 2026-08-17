@@ -8,8 +8,10 @@ Build HealthIA ONE Core v0.1 as the first functional vertical slice of the compl
 - Clean worktree `healthia-one-living-system` and branch `codex/living-system-core` start at fetched `origin/main` `ec233508497a982a3f026b4bad9895e748e15ea6`.
 - `docs/HEALTHIA_ONE_LIVING_SYSTEM_CLOUD_VICTORY_PLAN.md` defines the 12 evidence gates.
 - `docs/MANIFEST_TRACEABILITY.md` maps the complete Master Document to live, implemented-not-promoted, contract-only, research-only, and prohibited commitments.
-- Gate 1 repository reconciliation and candidate documentation validation passed; this checkpoint is ready for its focused commit.
-- Product implementation, exact-SHA cloud deployment, and final Living System proof remain pending.
+- Gate 1 repository reconciliation and candidate documentation are committed at `c10b623`.
+- Gate 2 first contract slice is implemented: additive versioned Twin fields, organ/system and anatomy state, medication monitoring expectations, baselines, trajectories, deviations, obligations, non-causal Clinical Event Graph edges, a closed sanitized event catalog, idempotent version advancement, and enriched Twin projection.
+- Focused tests, the full Python suite, Ruff, compileall, and the 14-check full-system verifier pass locally.
+- Runtime emission of the complete 14-event sequence, interactive Living System UI, exact-SHA cloud deployment, and final browser/provider proof remain pending.
 
 ## Victory gate
 - Exact candidate SHA passes focused, regression, clinical, security, accessibility, and cost tests.

@@ -21,3 +21,7 @@ The hackathon candidate implements canonical Twin, event, policy, provenance, ob
 ## ADR-007 — Preserve the user's stale checkout through a clean worktree
 
 Implementation proceeds in `healthia-one-living-system` on `codex/living-system-core` from `origin/main` `ec233508497a982a3f026b4bad9895e748e15ea6`. The original checkout and its user-owned changes are not reset, overwritten or automatically carried into the candidate.
+
+## ADR-008 — Extend PatientState instead of creating a second Twin store
+
+Core v0.1 adds backward-compatible canonical fields to `PatientState` and keeps `clinical_twin_summary()` as a derived projection. Old persisted states load through defaults. State-changing Living Twin events use stable IDs, reject unknown public fields and causal claims, enforce patient namespace, and advance the Twin version idempotently.
