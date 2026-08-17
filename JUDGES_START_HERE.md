@@ -2,92 +2,167 @@
 
 > **Your health never starts over.**
 
-HealthIA ONE is a **Taskmaster** agent for patient-owned health continuity. It is not a chatbot demo with a long prompt. It turns a patient goal into durable work, preserves the evidence behind that work, advances safe steps autonomously, stops at genuine human authorization boundaries, resumes the **same mission** after the patient decides, and records durable receipts for real external actions.
+HealthIA ONE is a **Taskmaster** system for patient-owned health continuity. It is not a chatbot with medical memory. It turns changing health context into durable, consent-aware missions; preserves original evidence; completes safe work through real connectors; stops at genuine human authority boundaries; and carries the same patient story across sessions.
 
-## The 20-second mental model
+## Start with HealthIA ONE
+
+**Latest enhanced judge master (3:55, synthetic data only):**  
+https://github.com/arisnachy/healthia-one/releases/download/healthia-one-autonomous-winner-demo-2026/HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4
+
+**Embedded Devpost/YouTube demo:** the project page contains the current public YouTube submission. The GitHub Release master above is the byte-verifiable exact-candidate evidence artifact and includes the ONE SAFETY proof overlay.
+
+**Public read-only synthetic Judge Mode:**  
+https://healthia-one-judge-1038180719788.us-central1.run.app
+
+The core mental model is:
 
 ```text
-patient need
-  → safety + patient-scoped context
-  → Gemini 3.5 Flash + Google ADK reasoning
-  → original evidence preserved before interpretation
-  → durable mission in Firestore
-  → safe autonomous work
-  → explicit human boundary when required
-  → same mission resumes after consent
-  → real Google tool execution
-  → durable receipt / patient-visible outcome
+Sense
+  → Understand
+  → Decide
+  → Authorize
+  → ONE SAFETY
+  → one-time HealthActionTicket
+  → real connector
+  → durable receipt
+  → Patient Twin continues
 ```
 
-HealthIA deliberately uses three forms of decision-making:
+HealthIA deliberately separates four things that an LLM must never be allowed to collapse:
 
-1. **AI reasoning** when interpretation or planning is valuable.
-2. **Deterministic logic** when intent must be exact.
-3. **Human consent** when the decision belongs to the patient.
+```text
+authorization != execution ticket != connector execution != completion evidence
+```
 
-That separation is the core product idea.
-
----
-
-## Start with the Living System
-
-Open: https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app/living
-
-The owner supplies the evaluation access code privately. The code unlocks only
-an isolated synthetic patient and does not authorize access to patient records.
-
-1. Unlock and arm the evaluator.
-2. Run the authorized signals and watch the Twin advance while the durable
-   mission stops at `WAITING_HUMAN`, event 10/14.
-3. Add the explicitly synthetic human-entered measurement receipt.
-4. Watch the same mission resume, the Twin advance to v3 and the replay close
-   at event 14/14.
-5. Reload and re-enter the code to reread the persisted replay.
-
-This bounded circuit uses zero model calls. It is autonomy with an observable
-human authority boundary, not autonomous diagnosis or prescribing. The broader
-authenticated product separately proves Gemini 3.5 Flash, Google ADK,
-multimodal evidence, Firestore and private GCS.
-
----
-
-## Preserved proof: an unattended mission
-
-> **HealthIA noticed the follow-up was overdue. Nobody prompted it.**
-
-For an explicitly opted-in synthetic patient, a deterministic clock found an overdue blood-pressure follow-up and committed the mission before external work. Eventarc woke a private Cloud Run worker, real Gmail delivered the follow-up under standing consent, Gmail `users.watch` and authenticated Pub/Sub recovered the exact-thread reply, a canonical `VitalRecord` was stored, and the same mission became `COMPLETED`.
-
-This single mission crossed **5 durable boundaries** and required **0 model calls** to decide that the follow-up was due.
-
-- Public, read-only, synthetic Judge Mode: https://healthia-one-judge-1038180719788.us-central1.run.app
-- Continuous live-app video narrated with Google Cloud male voice `en-US-Chirp3-HD-Charon`: https://github.com/arisnachy/healthia-one/releases/download/healthia-one-autonomous-winner-demo-2026/HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4
-- Full architecture and fail-closed boundaries: `docs/AUTONOMOUS_CONTINUITY.md`
-
-The proof surface carries no connector secrets or mutation routes. Operational workers remain private behind Cloud Run IAM.
+The model may reason. The patient owns sensitive authority. ONE SAFETY grants one exact execution attempt. A real connector performs the action. Only durable evidence can close the loop.
 
 ---
 
 ## What to judge first
 
-### 1. A mission survives the chat
+### 1. The patient story is durable, not prompt-local
 
-A mission is not `COMPLETED` because an LLM generated convincing text. Completion requires a durable, evidence-backed outcome.
+Patient-owned state is persisted in Firestore. Original clinical evidence is stored in private Google Cloud Storage **before** AI interpretation. Device signals, clinical results, missions, consent, selected resources, external-action receipts and the longitudinal Patient Twin survive logout/login and process replacement.
 
-Patient-scoped mission state is stored in Firestore. Original clinical evidence is preserved in private Google Cloud Storage before AI interpretation. Result/twin provenance, human decisions and selected resources survive logout/login and process replacement.
+A convincing model response cannot mark a mission complete by itself.
 
-### 2. Autonomy stops before the human boundary
+### 2. Autonomy has a non-bypassable execution boundary
 
-In the Wave 4 resource-navigation proof, HealthIA creates the mission but performs **zero Google Places searches before mission-scoped location consent**.
+A mutating or consent-scoped Google action does not jump from Gemini to a connector.
 
-After consent, the same mission resumes and performs bounded real Google Places discovery. The patient can then say only:
+```text
+patient/event intent
+  → deterministic policy
+  → patient authorization when required
+  → ONE SAFETY kernel
+  → short-lived exact-intent HealthActionTicket
+  → connector
+  → durable receipt
+```
+
+`HealthActionTicket` is bound to patient, mission, action, exact material payload, authorization, idempotency key and expiry. It can be consumed only once. The ticket authorizes an **attempt**; it is not proof that the outside world changed.
+
+### 3. Trace → Ticket → Receipt is visible and correlated
+
+The enhanced proof creates a real patient-scoped Google navigation mission, authorizes location, performs a bounded real Google Places discovery, and persists the active OpenTelemetry Trace ID into the one-time HealthActionTicket. The same execution records the connector receipt ID.
+
+The protected ONE SAFETY console renders:
+
+```text
+Cloud Trace ID → HealthActionTicket → durable receipt → connector outcome
+```
+
+The proof harness then reads the **same trace ID back from Google Cloud Trace** and requires a `google.action.guarded_execute` span before promotion.
+
+No prompt text, clinical content or PHI is exported as trace attributes.
+
+### 4. Prompt injection fails before model or execution authority
+
+HealthIA uses two ingress layers:
+
+1. deterministic local policy;
+2. Google Model Armor in Cloud.
+
+The real Model Armor adversarial gate sends a synthetic instruction asking the system to ignore prior instructions, reveal hidden rules, bypass authorization and execute tools without consent. Promotion requires Google Model Armor to return `MATCH_FOUND` on its prompt-injection/jailbreak filter.
+
+A separate application proof submits a controlled hostile chat request and requires all of the following:
+
+- HTTP `400` at `prompt_ingress`;
+- `model_called=false`;
+- **zero new HealthActionTickets**;
+- **zero patient-state mutation**;
+- **zero connector execution**.
+
+### 5. Human boundaries remain human
+
+In resource navigation, HealthIA can create durable work before it has permission to use location. It does not perform Google Places discovery until mission-scoped location consent exists. After consent the **same mission** resumes.
+
+For bounded intent, HealthIA deliberately avoids unnecessary model calls. A patient can say:
 
 > **“The second one.”**
 
-HealthIA deterministically selects exactly the second candidate that was shown rather than spending another model call reinterpreting a bounded ordinal choice.
+and deterministic policy selects exactly the second candidate already shown.
 
-### 3. Real action requires a real receipt
+### 6. Evidence exists before interpretation
 
-The preserved Google Health Constellation LIVE proof demonstrates the extended action loop against real Google services:
+For a synthetic clinical PDF or image:
+
+1. original bytes are preserved in private GCS;
+2. Gemini 3.5 Flash on Vertex AI performs bounded multimodal extraction;
+3. structured state is persisted in Firestore;
+4. the Patient Twin links derived observations back to the original source;
+5. unreadable/failed extraction stays pending or fails closed rather than inventing a finding.
+
+---
+
+## ONE SAFETY: current exact proof lineage
+
+### Exact product candidate used for the final live proof
+
+- Candidate SHA: `a851947c9e1476d2fed05f74b2b40383c408387f`
+- Final live exact-candidate workflow: `32051146792`
+- Continuous real-browser demo: **PASS**
+- Charon master: **PASS**
+- CUTLOCK: **PASS**
+- Base master duration: **235.000 s**
+- Base master SHA-256: `809d35ff7b2a3242eb61f52443c64f48a0ca45fc2e078ad1165ae76f724b1565`
+- Narration voice: Google Cloud TTS `en-US-Chirp3-HD-Charon`, male, no fallback
+
+The enhanced master overlays ONE SAFETY visually during the existing authorization/receipt narration. It does **not** add or accelerate speech. The pipeline requires the AAC Charon stream hash to remain byte-identical to the validated base master and requires the total duration to remain 3:55.
+
+### Real Google Model Armor adversarial gate
+
+- Workflow: `32051146784`
+- Regional template: `healthia-one-safety` in `us-central1`
+- Prompt-injection/jailbreak adversarial probe: **PASS / MATCH_FOUND**
+- Temporary provisioning privilege removed after the proof
+
+### Enhanced Trace → Ticket → Receipt proof
+
+- Workflow: `32053089428`
+- Proof harness: current `main`
+- Runtime under test: exact candidate `a851947c9e1476d2fed05f74b2b40383c408387f`
+- Real Google Places action: required
+- Canonical 32-hex Trace ID on `HealthActionTicket`: required
+- Durable connector receipt correlation: required
+- Exact Google Cloud Trace read-back: required
+- Controlled prompt-injection no-model/no-ticket/no-mutation proof: required
+- Charon audio byte-identity gate: required
+- Enhanced 3:55 Release publication: required
+
+The proof harness and product candidate are intentionally separated: current judge tooling may improve without silently changing the exact product runtime being demonstrated.
+
+---
+
+## Broader autonomous action proof
+
+HealthIA also preserves an unattended blood-pressure continuation proof:
+
+> **HealthIA noticed the follow-up was overdue. Nobody prompted it.**
+
+For an opted-in synthetic patient, a deterministic clock creates durable work. Eventarc wakes a private Cloud Run worker. Gmail sends under standing consent. Gmail `users.watch` and authenticated Pub/Sub recover the reply. Gmail history correlates the exact thread. HealthIA stores a canonical VitalRecord and completes the same mission only after durable evidence exists.
+
+The preserved broader Google action loop includes:
 
 ```text
 Safety
@@ -98,58 +173,13 @@ Safety
 → Pub/Sub
 → Gmail history / exact thread correlation
 → Calendar FreeBusy
-→ Calendar event
-→ Google Task
+→ Calendar event create + reread
+→ Google Task create + reread
 → durable receipts
 → COMPLETED
 ```
 
-The proof includes a real Gmail send, real reply recovery through Pub/Sub + Gmail history, a Calendar event created and reread, a Google Task created and reread, and idempotent handling of duplicate Pub/Sub delivery.
-
-**Authorization is not execution evidence.** HealthIA only projects an external action as completed when the connector returns a durable outcome.
-
-### 4. Evidence exists before interpretation
-
-For a synthetic PDF or image:
-
-1. original bytes are stored first in private GCS;
-2. Gemini 3.5 Flash on Vertex AI performs bounded multimodal extraction;
-3. structured patient state is written to Firestore;
-4. the clinical twin links derived state back to the original;
-5. extraction failure stays pending/fails closed rather than inventing a finding.
-
----
-
-## Exact proof lineage
-
-### Historical Wave 4 product candidate
-
-- Exact tested SHA: `a48710eeb5a2e8429a91f5004129064e5af37c1a`
-- Final Wave 4 PR: `#41`
-- Full verification / CI run: `31562277991` — **SUCCESS**
-- Wave 4 real Google Places proof: `31562277909` — **SUCCESS**
-- Opportunity Autopilot contract: `31562277915` — **SUCCESS**
-- `main` incorporates the exact Wave 4 SHA as a merge parent; the tested SHA was not rewritten.
-
-Wave 4 LIVE resource proof recorded:
-
-- 0 external Places searches before location consent;
-- 4 bounded real Places searches after consent;
-- 9 deduplicated real candidates;
-- 9/9 Google Maps URIs;
-- 6 website URIs returned by Google;
-- 9 phone numbers returned by Google;
-- resource families spanning care, community support, government/financial support and general support.
-
-### Preserved real Google action-loop ancestor
-
-- Golden LIVE SHA: `891745e1ab93dc78b9aa4e54d65b315befa885f2`
-- Evidence PR: `#37`
-- This SHA is an ancestor of the Wave 4 candidate above.
-
-The Golden proof verified real Google OAuth, Places, Gmail send/watch/history, authenticated Pub/Sub push, exact reply correlation, Calendar FreeBusy + event creation/reread, Google Tasks creation/reread and durable receipts.
-
-The older PR is closed only to reduce repository clutter; the commit lineage and evidence remain preserved.
+Authorization is never treated as proof of execution.
 
 ---
 
@@ -157,41 +187,37 @@ The older PR is closed only to reduce repository clutter; the commit lineage and
 
 | Layer | HealthIA ONE |
 |---|---|
-| Agent reasoning | Gemini 3.5 Flash on Vertex AI |
+| Reasoning | Gemini 3.5 Flash on Vertex AI |
 | Agent framework | Google Agent Development Kit (ADK) + Google GenAI SDK |
 | Runtime | Cloud Run |
-| Durable state | Firestore |
-| Original evidence | Private Google Cloud Storage |
+| Durable patient state | Firestore |
+| Original clinical evidence | Private Google Cloud Storage |
 | Secrets | Secret Manager |
+| AI ingress defense | Google Model Armor + deterministic local policy |
+| Execution authority | ONE SAFETY + one-time HealthActionTicket |
+| Observability | OpenTelemetry + Google Cloud Trace |
 | Resource navigation | Google Places / Maps Platform |
 | External workflow | Gmail + Pub/Sub + Calendar + Google Tasks |
-| Device path | Android / Health Connect bridge + Firebase/FCM contracts |
+| Device path | Android / Health Connect + Firebase/FCM contracts |
+| Specialist reasoning | KIRA Health Google ADK fleet, demand-driven |
 
-Cloud execution uses service identity / ADC rather than embedding a Gemini API key in Cloud Run.
+Cloud execution uses service identity / ADC. HealthIA does not embed a Gemini API key in Cloud Run.
 
-## Why the architecture is intentionally not a permanent agent swarm
-
-HealthIA is demand/event-driven. Work begins from a patient message, evidence upload, device event, explicit follow-up or authorized external event. This reduces unnecessary model calls, makes tool execution easier to audit and keeps patient consent visible.
-
-The code separates:
-
-- authentication and policy;
-- deterministic clinical safety;
-- Gemini/ADK reasoning;
-- canonical durable state;
-- original evidence;
-- external connector execution;
-- receipts and idempotency.
+HealthIA is intentionally event/demand-driven rather than a permanently active model swarm. More model calls are not automatically more agentic.
 
 ---
 
-## Opportunity Autopilot
+## Living System is a proof surface, not a separate product
 
-HealthIA also contains an evidence-bounded opportunity layer for research and support resources.
+`/living` is an isolated synthetic evaluator circuit **inside the HealthIA evidence strategy**. It is not another app and it is no longer the recommended starting point.
 
-It can watch patient/family topics, discover scientific opportunities from sources such as PubMed/NLM, Europe PMC and ClinicalTrials.gov, and surface assistance-program candidates. Program eligibility is not treated as known until requirements are verified against an official source; status remains `MATCHED`, `UNMET` or `UNKNOWN`.
+Open only if you want to inspect a bounded deterministic replay:
 
-HealthIA does **not** claim an external benefits/application submission unless a real adapter returns a durable receipt.
+https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app/living
+
+With the privately supplied evaluation capability, the synthetic replay advances to event `10/14`, stops at `WAITING_HUMAN`, accepts one explicitly synthetic human measurement receipt, resumes the **same mission**, advances the Twin to v3 and closes at `14/14` with zero model calls in that deterministic safety circuit.
+
+That circuit demonstrates an observable human authority boundary; the broader HealthIA product proves Gemini/ADK, multimodal evidence, real Google connectors and durable continuity.
 
 ---
 
@@ -205,13 +231,7 @@ python -m pip install -e ".[test]"
 HEALTHIA_LLM_BACKEND=mock HEALTHIA_COST_MODE=local HEALTHIA_AI_REQUEST_LIMIT=0 uvicorn app.main:app --port 8000
 ```
 
-Windows also includes:
-
-```powershell
-.\deployment\run-local-secure.ps1
-```
-
-Run the technical gate:
+Run the deterministic technical gates:
 
 ```bash
 pytest
@@ -220,26 +240,34 @@ python scripts/dialogbench.py
 python scripts/judge_omega.py
 ```
 
-Controlled Cloud proofs are explicit opt-in and request-capped.
+Cloud proof workflows are isolated, synthetic, request-bounded and fail closed.
+
+---
+
+## Feature freeze
+
+HealthIA is now in **evidence-first hackathon feature freeze**. Until judging, accepted changes are limited to verified bugs, security, reliability, tests, exact proof and judge-facing clarity. New agents, new connector families, new clinical autonomy and architectural rewrites wait unless a verified judging gap requires them.
+
+See: `docs/HACKATHON_FEATURE_FREEZE.md`.
 
 ---
 
 ## Where to inspect next
 
-- `README.md` — project overview and reproducible setup.
-- `docs/ARCHITECTURE.md` — architecture and evidence-flow diagrams.
-- `docs/AUTONOMOUS_CONTINUITY.md` — unattended five-boundary mission, clock, consent and Judge Mode.
-- `docs/GOOGLE_HEALTH_CONSTELLATION.md` — real Google action-loop architecture/evidence.
-- `docs/OPPORTUNITY_AUTOPILOT.md` — evidence-bounded opportunity system.
-- `docs/WINNING_ONE_TAKE.md` — the judge-demo north star.
-- `hackathon/evidence/` — sanitized permanent machine-readable evidence.
-- `scripts/record_submission_demo.py` — continuous real-browser judge journey.
+- `docs/ARCHITECTURE.md` — current architecture and ONE SAFETY trust boundaries.
+- `docs/AUTONOMOUS_CONTINUITY.md` — unattended continuation proof.
+- `docs/GOOGLE_HEALTH_CONSTELLATION.md` — real Google action-loop design.
+- `docs/HACKATHON_FEATURE_FREEZE.md` — competition freeze contract.
+- `healthia_one/safety_kernel.py` — one-time execution ticket.
+- `healthia_one/model_armor.py` — local + Google Model Armor ingress gate.
+- `healthia_one/observability.py` — sanitized OpenTelemetry / Cloud Trace.
+- `web/operations/security.html` — judge-visible Trace → Ticket → Receipt surface.
 
 ---
 
 ## Clinical truth boundary
 
-HealthIA ONE is a patient continuity system and hackathon prototype. It is not a physician, emergency service or autonomous prescription engine. It does not autonomously diagnose, prescribe, start/stop/change medication or replace professional/emergency evaluation.
+HealthIA ONE is a patient continuity system and hackathon prototype. It is not a physician, emergency service, regulated medical device or autonomous prescription engine. It does not autonomously diagnose, prescribe, start/stop/change medication or replace professional/emergency evaluation.
 
 Hackathon demonstrations use synthetic patient data.
 
@@ -247,4 +275,4 @@ Hackathon demonstrations use synthetic patient data.
 
 ## The one sentence to remember
 
-**HealthIA does not win by talking longer: it wins by carrying unfinished health work forward, doing every safe step it can prove, stopping exactly where the human must decide, and preserving the outcome so the patient never starts over.**
+**HealthIA carries health forward: signals become evidence, evidence becomes safe missions, authorized missions become verifiable action, and the patient never starts over.**
