@@ -33,3 +33,7 @@ The interactive Living System never mutates the public read-only Judge Mode. It 
 ## ADR-010 — Autonomous does not mean clinically unbounded
 
 The demonstrator may ingest, normalize, version, compare, correlate, open an investigation and create an obligation without human intervention. It must stop before clinical interpretation or treatment. Only a plausible human-entered measurement can create the receipt that allows VERIFY to close the mission and advance the Twin again.
+
+## ADR-011 — Living continuity is native product state
+
+The authenticated primary HealthIA shell owns the patient-facing Living surface. It derives Twin, evidence, missions, activity receipts and human checkpoints only from the logged-in patient's ordinary bootstrap and mission data. The capability-protected synthetic evaluator remains a separate proof harness and must never be required by, leak into, or visually replace the normal patient workspace.
