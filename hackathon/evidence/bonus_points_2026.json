@@ -1,0 +1,46 @@
+{
+  "hackathon": "All Things Agentic Hackathon 2026",
+  "project": "HealthIA ONE",
+  "generated_at": "2026-08-17",
+  "feature_freeze_respected": true,
+  "public_build_content": {
+    "status": "PUBLISHED",
+    "url": "https://github.com/arisnachy/healthia-one/issues/93",
+    "required_declaration_present": true,
+    "required_declaration": "This piece of content was created for the purposes of entering the All Things Agentic Hackathon 2026."
+  },
+  "social_media": {
+    "status": "READY_NOT_PUBLISHED",
+    "required_hashtag": "#AllThingsAgenticHackathon",
+    "public_url": null,
+    "claim_bonus_now": false,
+    "draft_document": "docs/HACKATHON_BONUS_POINTS.md"
+  },
+  "google_ai_bonus": {
+    "status": "LIVE_PROVEN",
+    "model_family": "Veo",
+    "provider": "Vertex AI Veo",
+    "model": "Veo 3.1 Fast",
+    "model_id": "veo-3.1-fast-generate-001",
+    "feature": "HealthIA Explain patient-education media",
+    "duration_seconds": 8,
+    "resolution": "720p",
+    "sample_count": 1,
+    "synthetic_only": true,
+    "patient_data_sent": false,
+    "person_generation": "disallow",
+    "evidence_lineage": "https://github.com/arisnachy/healthia-one/pull/43",
+    "implementation_paths": [
+      "healthia_one/education_video_google.py",
+      ".github/workflows/healthia-explain-live-veo-sample.yml",
+      ".github/healthia-explain-live-veo-trigger.txt",
+      ".github/workflows/final-devpost-comprehensive-demo.yml"
+    ],
+    "claim_scope": "Implemented and LIVE-proven HealthIA ONE bonus integration preserved in its own evidence lineage; not claimed as the exact frozen ONE SAFETY judging runtime."
+  },
+  "canonical_links": {
+    "judges": "https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md",
+    "youtube_demo": "https://youtu.be/dOIhP22SxZ8",
+    "repository": "https://github.com/arisnachy/healthia-one"
+  }
+}
