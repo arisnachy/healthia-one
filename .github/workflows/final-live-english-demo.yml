@@ -332,6 +332,8 @@ jobs:
               'exact_second_candidate_selected_without_model_interpretation',
               'multimodal_original_result_and_provenance',
               'logout_login_restores_evidence_and_selected_google_mission',
+              'synthetic_health_connect_event_visible_with_provenance',
+              'unified_record_and_timeline_visible_after_relogin',
               'visible_exact_candidate_cloud_proof',
               'exact_head_autonomous_continuity_judge_mode',
               'zero_browser_console_or_page_errors',
@@ -353,16 +355,16 @@ jobs:
           base=dist/final-live-english-demo
           final="$base/$RELEASE_ASSET"
           expected="$(awk '{print $1}' "$base/final-video.sha256")"
-          notes="Continuous exact-head autonomous Taskmaster judge demo with Google Cloud male voice en-US-Chirp3-HD-Charon. Exact source SHA: ${SOURCE_SHA}. GitHub Actions run: ${GITHUB_RUN_ID}. Proven gates: no Google Places candidates before mission-scoped consent; same durable mission resumes after consent; real Google Places candidates with Maps URIs; exact deterministic selection of candidate #2; multimodal original evidence provenance; logout/login continuity; zero browser console/page errors. Video SHA-256: ${expected}. Synthetic patient data only."
+          notes="Continuous exact-head Living System judge demo with Google Cloud male voice en-US-Chirp3-HD-Charon. Exact source SHA: ${SOURCE_SHA}. GitHub Actions run: ${GITHUB_RUN_ID}. Proven gates: synthetic Health Connect event through the real product; no Google Places candidates before mission-scoped consent; same durable mission resumes after consent; real Google Places candidates with Maps URIs; exact deterministic selection of candidate #2; multimodal original evidence provenance; unified record and timeline after logout/login; exact-head no-prompt autonomy proof; zero browser console/page errors. Video SHA-256: ${expected}. Synthetic patient data only."
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --title 'HealthIA ONE — Autonomous Taskmaster Winner Demo — Charon' \
+              --title 'HealthIA ONE — The Living Health System — Charon' \
               --notes "$notes" \
               --latest=false
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --target "$SOURCE_SHA" \
-              --title 'HealthIA ONE — Autonomous Taskmaster Winner Demo — Charon' \
+              --title 'HealthIA ONE — The Living Health System — Charon' \
               --notes "$notes" \
               --latest=false
           fi

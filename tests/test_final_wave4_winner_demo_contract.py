@@ -28,12 +28,20 @@ def test_winner_recorder_is_continuous_wave4_taskmaster_story() -> None:
         '"exact_second_candidate_selected_without_model_interpretation"',
         '"multimodal_original_result_and_provenance"',
         '"logout_login_restores_evidence_and_selected_google_mission"',
+        '"synthetic_health_connect_event_visible_with_provenance"',
+        '"unified_record_and_timeline_visible_after_relogin"',
     ):
         assert marker in RECORDER
     assert 'record_video_dir=str(video_dir)' in RECORDER
     assert '"live_app_only": True' in RECORDER
     assert '"static_screenshots_used": False' in RECORDER
     assert "set_input_files(str(pdf_path))" in RECORDER
+    assert 'api_post_json(page, "/api/demo/device-sync")' in RECORDER
+    assert '.main-nav [data-open="devices"]' in RECORDER
+    assert '.main-nav [data-open="timeline"]' in RECORDER
+    assert 'page.wait_for_timeout(11_000)' in RECORDER
+    assert 'page.wait_for_timeout(10_000)' in RECORDER
+    assert 'overlay(page, "HealthIA noticed the follow-up was overdue.' not in RECORDER
 
 
 def test_cutlock_requires_real_candidates_and_no_preconsent_execution() -> None:
@@ -67,6 +75,9 @@ def test_winner_narration_requires_named_google_cloud_charon_male_voice() -> Non
     assert "the second one" in NARRATION.lower()
     assert "authorization is not execution evidence" in NARRATION.lower()
     assert "nobody prompted it" in NARRATION.lower()
+    assert "one living system" in NARRATION.lower()
+    assert "before the patient types a message" in NARRATION.lower()
+    assert "no slide deck and no mock screens" in NARRATION.lower()
 
 
 def test_publication_happens_only_after_cutlock_and_is_anonymously_reverified() -> None:

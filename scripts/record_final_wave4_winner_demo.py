@@ -40,8 +40,8 @@ def overlay(page: Page, title: str, body: str, seconds: float = 4.0) -> None:
             box.id = 'healthia-winner-caption';
             box.style.cssText = [
               'position:fixed','right:28px','bottom:28px','z-index:2147483647',
-              'width:min(600px,46vw)','background:rgba(12,22,39,.95)','color:white',
-              'border:1px solid rgba(147,197,253,.45)','border-radius:18px','padding:17px 19px',
+              'width:min(520px,36vw)','background:rgba(12,22,39,.92)','color:white',
+              'border:1px solid rgba(147,197,253,.45)','border-radius:18px','padding:14px 16px',
               'box-shadow:0 18px 54px rgba(0,0,0,.28)','font-family:Inter,system-ui,sans-serif',
               'pointer-events:none'
             ].join(';');
@@ -56,6 +56,19 @@ def overlay(page: Page, title: str, body: str, seconds: float = 4.0) -> None:
 
 def clear_overlay(page: Page) -> None:
     page.evaluate("document.getElementById('healthia-winner-caption')?.remove()")
+
+
+def api_post_json(page: Page, path: str) -> dict:
+    return page.evaluate(
+        """async path => {
+          const r = await fetch(path, {method:'POST', credentials:'same-origin'});
+          let body = {};
+          try { body = await r.json(); } catch (_) {}
+          if (!r.ok) throw new Error(`${path} HTTP ${r.status}: ${JSON.stringify(body)}`);
+          return body;
+        }""",
+        path,
+    )
 
 
 def latest_assistant(page: Page) -> dict:
@@ -226,7 +239,33 @@ def run() -> dict:
         overlay(page, "Bounded intelligence", "Gemini 3.5 Flash + Google ADK reason when useful. Firestore holds durable patient state and private Cloud Storage preserves original evidence.", 5)
         clear_overlay(page)
 
-        # 2. Flagship Taskmaster mission: real navigation must stop at consent.
+        # 2. A real product event reaches the longitudinal record before any chat prompt.
+        device_sync = api_post_json(page, "/api/demo/device-sync")
+        require(int(device_sync.get("accepted") or 0) >= 3, f"synthetic Health Connect event did not persist: {device_sync}")
+        require(
+            {"steps", "heart_rate", "weight"}.issubset(set(device_sync.get("granted_metrics") or [])),
+            f"authorized Health Connect metric contract missing: {device_sync}",
+        )
+        page.reload(wait_until="networkidle", timeout=60_000)
+        page.wait_for_selector('.main-nav [data-open="devices"]', timeout=20_000)
+        page.locator('.main-nav [data-open="devices"]').click()
+        page.wait_for_selector("#view-devices.is-active #deviceRoot .device-stats", timeout=20_000)
+        device_state = api_json(page, "/api/devices")
+        require(int(device_state.get("record_count") or 0) >= 3, f"device records are not durable: {device_state}")
+        require(page.locator("#deviceRoot .device-metric").count() >= 3, "authorized device metrics are not visible")
+        report["device_sync"] = {
+            "accepted": device_sync.get("accepted"),
+            "granted_metrics": device_sync.get("granted_metrics"),
+            "record_count": device_state.get("record_count"),
+            "synthetic": True,
+        }
+        report["checks"].append("synthetic_health_connect_event_visible_with_provenance")
+        checkpoint(report)
+        overlay(page, "The system is already listening", "A synthetic Health Connect event entered the real Cloud application before any chat request. HealthIA preserved source, time and patient-authorized metrics, updated the longitudinal record, and kept the sensor truth boundary visible.", 8)
+        clear_overlay(page)
+        page.locator('.main-nav [data-open="chat"]').click()
+
+        # 3. Flagship Taskmaster mission: real navigation must stop at consent.
         before = latest_assistant(page)
         send_chat(page, "Find a center for autism support near Santiago de los Caballeros.")
         blocked_reply = wait_for_assistant_after(page, str(before.get("id") or ""), timeout_s=100.0)
@@ -248,7 +287,7 @@ def run() -> dict:
         overlay(page, "The human boundary", "HealthIA created a durable mission, then stopped. Location belongs to the patient. No Google Places result exists before mission-scoped consent.", 7)
         clear_overlay(page)
 
-        # 3. Exact consent resumes the SAME mission and executes real Google Places.
+        # 4. Exact consent resumes the SAME mission and executes real Google Places.
         before_consent = latest_assistant(page)
         send_chat(page, "I authorize my location for this mission.")
         consent_reply = wait_for_assistant_after(page, str(before_consent.get("id") or ""), timeout_s=100.0)
@@ -278,7 +317,7 @@ def run() -> dict:
         overlay(page, "Same mission, real Google Places", f"Consent resumed mission {mission_id[:12]}… and surfaced {len(candidates)} verifiable candidates with Google Maps links. This is a real read-only Google action.", 8)
         clear_overlay(page)
 
-        # 4. "The second one" is deterministic intent, not another LLM problem.
+        # 5. "The second one" is deterministic intent, not another LLM problem.
         expected_second_id = candidate_ids[1]
         before_choice = latest_assistant(page)
         send_chat(page, "The second one.")
@@ -301,7 +340,7 @@ def run() -> dict:
         overlay(page, "Exact human choice", "“The second one” bypasses Gemini. Deterministic policy selects exactly candidate #2 from the already-discovered list and preserves it in the same mission.", 8)
         clear_overlay(page)
 
-        # 5. Evidence first: preserve original bytes before AI interpretation.
+        # 6. Evidence first: preserve original bytes before AI interpretation.
         page.locator('.main-nav [data-open="results"]').click()
         page.wait_for_timeout(500)
         page.locator("#resultFile").set_input_files(str(pdf_path))
@@ -317,7 +356,7 @@ def run() -> dict:
         overlay(page, "Evidence before interpretation", "The synthetic original is preserved in private Cloud Storage before Gemini extraction. Firestore keeps the derived result linked back to the source document.", 8)
         clear_overlay(page)
 
-        # 6. Durable continuity survives logout/login.
+        # 7. Durable continuity survives logout/login.
         page.locator("#accountPill").click()
         page.locator("#logoutButton").click()
         page.wait_for_url(f"{BASE_URL}/login", timeout=20_000)
@@ -335,12 +374,23 @@ def run() -> dict:
         require(str((restored_mission.get("selected_place") or {}).get("id") or "") == expected_second_id, "selected Google Places candidate disappeared after relogin")
         report["checks"].append("logout_login_restores_evidence_and_selected_google_mission")
         checkpoint(report)
+        page.locator('.main-nav [data-open="record"]').click()
+        page.wait_for_selector("#view-record.is-active #recordGrid .record-card", timeout=20_000)
+        overlay(page, "One patient record, assembled while life happens", "The device event, preserved clinical result and mission now live together in the patient-controlled record. HealthIA is not a collection of disconnected chats.", 6)
+        clear_overlay(page)
+        page.wait_for_selector('.main-nav [data-open="timeline"]', timeout=20_000)
+        page.locator('.main-nav [data-open="timeline"]').click()
+        page.wait_for_selector("#view-timeline.is-active #timelineRoot .timeline-event", timeout=20_000)
+        require(page.locator("#timelineRoot .timeline-event").count() >= 3, "unified longitudinal timeline is not visibly populated")
+        overlay(page, "A living longitudinal timeline", "Measurements, evidence and missions become one provenance-linked chronology. After logout and login, the same patient state is still here.", 6)
+        clear_overlay(page)
         page.locator('.main-nav [data-open="missions"]').click()
         page.wait_for_timeout(600)
-        overlay(page, "Continuity is durable", "After logout and login, HealthIA restores the patient evidence and the exact selected resource. The mission never depended on one prompt window.", 8)
+        report["checks"].append("unified_record_and_timeline_visible_after_relogin")
+        overlay(page, "Continuity is durable", "The exact Google mission and selected resource also survived. HealthIA carries unfinished work across time instead of starting over with every prompt.", 7)
         clear_overlay(page)
 
-        # 7. Final exact-candidate proof.
+        # 8. Final exact-candidate proof.
         readiness = api_json(page, "/api/readiness")
         page.locator('.main-nav [data-open="chat"]').click()
         cloud_summary = (
@@ -352,7 +402,7 @@ def run() -> dict:
         report["checks"].append("visible_exact_candidate_cloud_proof")
         clear_overlay(page)
 
-        # 8. Exact-head autonomous continuity proof stays public, read-only and synthetic.
+        # 9. Exact-head autonomous continuity proof stays public, read-only and synthetic.
         require(JUDGE_URL.startswith("https://") and ".run.app" in JUDGE_URL, "exact-head Judge Mode URL is required")
         require(bool(JUDGE_TOKEN), "private exact-head Judge Mode identity token is required")
         page.set_extra_http_headers({"Authorization": f"Bearer {JUDGE_TOKEN}"})
@@ -371,10 +421,9 @@ def run() -> dict:
         body = page.locator("body").inner_text()
         require("HealthIA noticed the follow-up was overdue. Nobody prompted it." in body, "autonomous judge sentence is not visible")
         require("JUDGE MODE · READ ONLY · SYNTHETIC" in body, "public truth boundary is not visible")
-        overlay(page, "HealthIA noticed the follow-up was overdue. Nobody prompted it.", "One opted-in blood-pressure mission crossed five durable boundaries: Firestore, Eventarc, private Cloud Run, real Gmail with Pub/Sub reply recovery, and a canonical measurement — with zero model calls to detect that follow-up was due.", 10)
-        clear_overlay(page)
+        page.wait_for_timeout(11_000)
         page.locator(".grid").scroll_into_view_if_needed()
-        overlay(page, "Bounded autonomy, inspectable proof", "The operational workers stay private. This exact-head Cloud Run surface is synthetic, GET-only, credential-free, and independently stamps the source SHA and LIVE proof run.", 8)
+        page.wait_for_timeout(10_000)
         report["judge_health"] = judge_health
         report["autonomous_proof"] = {key: autonomous_proof.get(key) for key in ("boundary_count", "model_calls_for_trigger", "source_sha", "live_proof_run", "judge_mode")}
         report["checks"].append("exact_head_autonomous_continuity_judge_mode")
