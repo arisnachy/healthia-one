@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,8 +34,13 @@ class ProviderBindingError(RuntimeError):
 
 
 def _command(*args: str) -> str:
+    executable = args[0]
+    if executable == "gcloud":
+        executable = shutil.which("gcloud.cmd") or shutil.which("gcloud") or executable
+    elif executable == "git":
+        executable = shutil.which("git.exe") or shutil.which("git") or executable
     completed = subprocess.run(
-        list(args),
+        [executable, *args[1:]],
         cwd=ROOT,
         capture_output=True,
         text=True,
