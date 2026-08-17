@@ -155,15 +155,23 @@ def test_winner_narration_requires_named_google_cloud_charon_male_voice() -> Non
     assert "gcloud services enable" not in WORKFLOW
     assert "VOICE_PART_1" not in WORKFLOW
     assert "VOICE_PART_2" not in WORKFLOW
-    assert "your health should never start over" in NARRATION.lower()
-    assert "the second one" in NARRATION.lower()
-    assert "authorization is not execution evidence" in NARRATION.lower()
-    assert "nobody prompted it" in NARRATION.lower()
-    assert "one living system" in NARRATION.lower()
-    assert "before the patient types a message" in NARRATION.lower()
-    assert "no slide deck and no mock screens" in NARRATION.lower()
-    assert "inside the main patient workspace" in NARRATION.lower()
-    assert "not a detached demonstration page" in NARRATION.lower()
+
+    # Keep this contract aligned with the concise narration that preserves the
+    # native Charon cadence. It asserts the same proof obligations without
+    # forcing legacy wording that made the voice track unnecessarily long.
+    narration = NARRATION.lower()
+    for marker in (
+        "your health should never start over",
+        "the second one",
+        "authorization is never confused with execution evidence",
+        "without being prompted",
+        "one living system",
+        "before the patient types anything",
+        "everything you see is the real application",
+        "the same mission resumes",
+        "a receipt before real-world work can be considered complete",
+    ):
+        assert marker in narration
 
 
 def test_publication_happens_only_after_cutlock_and_is_anonymously_reverified() -> None:
