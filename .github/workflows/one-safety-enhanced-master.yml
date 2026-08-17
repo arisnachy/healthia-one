@@ -30,6 +30,8 @@ jobs:
       RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
       RELEASE_TAG: healthia-one-autonomous-winner-demo-2026
       BASE_ARTIFACT: HealthIA-ONE-autonomous-winner-demo-Charon
+      BASE_RELEASE_ASSET: HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4
+      BASE_SHA256: 809d35ff7b2a3242eb61f52443c64f48a0ca45fc2e078ad1165ae76f724b1565
       OUTPUT_ASSET: HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4
       PROOF_OVERLAY_START: "200.0"
       PROOF_OVERLAY_SECONDS: "11.0"
@@ -57,7 +59,7 @@ jobs:
           echo "HEALTHIA_ONE_SAFETY_HARNESS_SHA $harness"
           echo "HEALTHIA_ONE_SAFETY_ENHANCED_EXACT_SHA_PASS $candidate"
 
-      - name: Download validated base winner artifact with bounded retry
+      - name: Resolve validated base winner with exact SHA
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,16 +71,34 @@ jobs:
             rm -rf dist/base-winner/*
             if gh run download "${{ github.event.workflow_run.id }}" --repo "${{ github.repository }}" --name "$BASE_ARTIFACT" --dir dist/base-winner; then
               downloaded=true
+              echo "Base winner resolved from exact Actions artifact."
               break
             fi
             echo "Artifact download attempt $attempt failed; retrying after bounded backoff." >&2
             sleep $((attempt * 3))
           done
+          if [[ "$downloaded" != "true" ]]; then
+            echo "Actions artifact transport unavailable; trying canonical Release asset with the exact expected SHA." >&2
+            target="dist/base-winner/$BASE_RELEASE_ASSET"
+            release_url="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/${BASE_RELEASE_ASSET}"
+            for attempt in 1 2 3 4 5; do
+              rm -f "$target"
+              if curl -fL --retry 2 --retry-delay 2 --retry-all-errors -o "$target" "$release_url"; then
+                downloaded=true
+                echo "Base winner resolved from canonical Release asset."
+                break
+              fi
+              echo "Release download attempt $attempt failed; retrying after bounded backoff." >&2
+              sleep $((attempt * 3))
+            done
+          fi
           test "$downloaded" = "true"
-          base="$(find dist/base-winner -type f -name 'HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4' -print -quit)"
+          base="$(find dist/base-winner -type f -name "$BASE_RELEASE_ASSET" -print -quit)"
           test -s "$base"
+          actual_sha="$(sha256sum "$base" | awk '{print $1}')"
+          test "$actual_sha" = "$BASE_SHA256"
           echo "HEALTHIA_BASE_WINNER_MP4=$base" >> "$GITHUB_ENV"
-          echo "HEALTHIA_ONE_SAFETY_BASE_ARTIFACT_PASS"
+          echo "HEALTHIA_ONE_SAFETY_BASE_MASTER_SHA_PASS $actual_sha"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
