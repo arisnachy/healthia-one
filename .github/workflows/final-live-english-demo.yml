@@ -243,37 +243,83 @@ jobs:
           curl --config "$voices_config"
           jq -e --arg voice "$voice_name" '.voices[] | select(.name == $voice and .ssmlGender == "MALE")' "$voices" >/dev/null
 
-          request="$base/audio/tts-request.json"
-          response="$base/audio/tts-response.json"
-          python - "$request" "$voice_name" <<'PY'
+          request_dir="$base/audio/tts-requests"
+          response_dir="$base/audio/tts-responses"
+          chunk_dir="$base/audio/tts-chunks"
+          mkdir -p "$request_dir" "$response_dir" "$chunk_dir"
+          python - "$request_dir" "$voice_name" <<'PY'
           import json, pathlib, sys
-          text=pathlib.Path('scripts/final_wave4_winner_narration.txt').read_text(encoding='utf-8')
-          payload={
-              'input': {'text': text},
-              'voice': {'languageCode': 'en-US', 'name': sys.argv[2]},
-              'audioConfig': {'audioEncoding': 'MP3', 'speakingRate': 0.98},
-          }
-          pathlib.Path(sys.argv[1]).write_text(json.dumps(payload), encoding='utf-8')
+
+          source=pathlib.Path('scripts/final_wave4_winner_narration.txt').read_text(encoding='utf-8').strip()
+          limit=4300
+          paragraphs=[part.strip() for part in source.split('\n\n') if part.strip()]
+          chunks=[]
+          current=''
+          for paragraph in paragraphs:
+              candidates=[paragraph]
+              if len(paragraph.encode('utf-8')) > limit:
+                  candidates=[]
+                  piece=''
+                  for word in paragraph.split():
+                      trial=f'{piece} {word}'.strip()
+                      if piece and len(trial.encode('utf-8')) > limit:
+                          candidates.append(piece)
+                          piece=word
+                      else:
+                          piece=trial
+                  if piece:
+                      candidates.append(piece)
+              for candidate in candidates:
+                  trial=f'{current}\n\n{candidate}'.strip()
+                  if current and len(trial.encode('utf-8')) > limit:
+                      chunks.append(current)
+                      current=candidate
+                  else:
+                      current=trial
+          if current:
+              chunks.append(current)
+          if not chunks or any(len(chunk.encode('utf-8')) > limit for chunk in chunks):
+              raise SystemExit('unable to create safe Google TTS chunks')
+          output=pathlib.Path(sys.argv[1])
+          for index, text in enumerate(chunks, 1):
+              payload={
+                  'input': {'text': text},
+                  'voice': {'languageCode': 'en-US', 'name': sys.argv[2]},
+                  'audioConfig': {'audioEncoding': 'MP3', 'speakingRate': 0.98},
+              }
+              (output / f'tts-request-{index:03d}.json').write_text(
+                  json.dumps(payload, ensure_ascii=False), encoding='utf-8'
+              )
+          print(f'HEALTHIA_TTS_CHUNKS_READY count={len(chunks)} max_bytes={max(len(c.encode("utf-8")) for c in chunks)}')
           PY
-          {
-            printf 'url = "https://texttospeech.googleapis.com/v1/text:synthesize"\n'
-            printf 'request = "POST"\n'
-            printf 'header = "Authorization: Bearer %s"\n' "$(<"$access_token_file")"
-            printf 'header = "Content-Type: application/json"\n'
-            printf 'data-binary = "@%s"\n' "$request"
-            printf 'output = "%s"\n' "$response"
-            printf 'write-out = "%%{http_code}"\n'
-            printf 'silent\nshow-error\n'
-          } > "$request_config"
-          chmod 600 "$request_config"
-          status="$(curl --config "$request_config")"
-          if [[ "$status" != "200" ]] || [[ -z "$(jq -r '.audioContent // empty' "$response")" ]]; then
-            jq -c '{error: (.error.message // "missing audioContent")}' "$response" >&2 || true
-            echo "Named male Google Cloud voice synthesis failed closed: $voice_name HTTP $status" >&2
-            exit 1
-          fi
-          jq -r '.audioContent' "$response" | base64 -d > "$base/audio/narration-google.mp3"
-          ffmpeg -hide_banner -loglevel error -y -i "$base/audio/narration-google.mp3" -c:a pcm_s16le "$narration"
+          concat_list="$base/audio/tts-concat.txt"
+          : > "$concat_list"
+          for request in "$request_dir"/tts-request-*.json; do
+            stem="$(basename "$request" .json)"
+            response="$response_dir/${stem}.json"
+            mp3="$chunk_dir/${stem}.mp3"
+            {
+              printf 'url = "https://texttospeech.googleapis.com/v1/text:synthesize"\n'
+              printf 'request = "POST"\n'
+              printf 'header = "Authorization: Bearer %s"\n' "$(<"$access_token_file")"
+              printf 'header = "Content-Type: application/json"\n'
+              printf 'data-binary = "@%s"\n' "$request"
+              printf 'output = "%s"\n' "$response"
+              printf 'write-out = "%%{http_code}"\n'
+              printf 'silent\nshow-error\n'
+            } > "$request_config"
+            chmod 600 "$request_config"
+            status="$(curl --config "$request_config")"
+            if [[ "$status" != "200" ]] || [[ -z "$(jq -r '.audioContent // empty' "$response")" ]]; then
+              jq -c '{error: (.error.message // "missing audioContent")}' "$response" >&2 || true
+              echo "Named male Google Cloud voice synthesis failed closed: $voice_name HTTP $status" >&2
+              exit 1
+            fi
+            jq -r '.audioContent' "$response" | base64 -d > "$mp3"
+            test -s "$mp3"
+            printf "file '%s'\n" "$(realpath "$mp3")" >> "$concat_list"
+          done
+          ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$concat_list" -c:a pcm_s16le "$narration"
           test -s "$narration"
           python - "$base/narration-voice-proof.json" "$voice_name" <<'PY'
           import json, pathlib, sys
@@ -291,7 +337,8 @@ jobs:
           print(json.dumps(payload))
           PY
           printf '%s\n' "google-cloud-tts-chirp3-hd-charon-male" > "$base/narration-source.txt"
-          rm -f "$request" "$response" "$voices"
+          rm -rf "$request_dir" "$response_dir" "$chunk_dir"
+          rm -f "$concat_list" "$voices"
           echo "HEALTHIA_NARRATION_VOICE_PASS $voice_name MALE"
 
           raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"

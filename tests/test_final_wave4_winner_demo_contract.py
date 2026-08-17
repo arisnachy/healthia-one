@@ -142,6 +142,10 @@ def test_winner_narration_requires_named_google_cloud_charon_male_voice() -> Non
     assert "'fallback_used':False" in WORKFLOW
     assert "flite-fallback" not in WORKFLOW
     assert "Named male Google Cloud voice synthesis failed closed" in WORKFLOW
+    assert "limit=4300" in WORKFLOW
+    assert "tts-request-{index:03d}.json" in WORKFLOW
+    assert 'for request in "$request_dir"/tts-request-*.json' in WORKFLOW
+    assert "-f concat -safe 0" in WORKFLOW
     assert "gcloud services enable" not in WORKFLOW
     assert "VOICE_PART_1" not in WORKFLOW
     assert "VOICE_PART_2" not in WORKFLOW
