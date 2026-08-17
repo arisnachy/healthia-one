@@ -95,7 +95,7 @@ def install_patient_auth(
                 or evaluation_public
             )
             if settings.auth_required and principal is None and not public:
-                if path == "/":
+                if path in {"/", "/security"}:
                     return RedirectResponse("/login", status_code=303)
                 if path.startswith("/api/"):
                     return JSONResponse(
@@ -223,7 +223,7 @@ def install_patient_auth(
 
     @app.get("/security", include_in_schema=False)
     async def security_console() -> FileResponse:
-        return FileResponse(web_root / "security.html")
+        return FileResponse(web_root / "operations" / "security.html")
 
     @app.get("/api/operations/security")
     async def operational_security() -> dict:
