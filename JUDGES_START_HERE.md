@@ -44,7 +44,7 @@ The model is never allowed to declare a real-world action complete merely becaus
 
 ---
 
-## ONE SAFETY: authorization is not execution evidence
+## ONE SAFETY: Authorization is not execution evidence
 
 A real action must cross a narrow, auditable chain:
 
@@ -153,7 +153,7 @@ For an opted-in synthetic patient, an overdue blood-pressure follow-up can becom
 
 ## Living is an observability probe inside HealthIA — not a separate product
 
-The `/living` surface exists to make one deterministic human-authority circuit easy to inspect: the replay advances, stops at `WAITING_HUMAN`, accepts an explicitly synthetic human-entered measurement receipt, resumes the **same** mission, and closes with zero model calls.
+The `/living` surface exists to make one deterministic human-authority circuit easy to inspect: the replay advances, stops at `WAITING_HUMAN`, accepts an explicitly synthetic human-entered measurement receipt, resumes the **same mission**, and closes with zero model calls.
 
 Judges do **not** need to understand HealthIA by starting at `/living`. It is one transparent probe of the same system described above — useful after the main product and ONE SAFETY architecture are understood.
 
@@ -245,6 +245,17 @@ HealthIA ONE is a synthetic hackathon prototype and patient continuity system. I
 ## Feature freeze
 
 The judging build is now under **feature freeze**. New product capabilities are not being added to improve the score. Remaining work is limited to reproducibility, evidence integrity and keeping public judge materials synchronized with the tested system.
+
+## Historical provenance anchors — retained, not the current judge entry point
+
+The repository keeps older proof anchors because they establish ancestry and protect against rewriting history. They are **not** the current candidate and do not replace the ONE SAFETY package above.
+
+- Historical Wave 4 candidate: `a48710eeb5a2e8429a91f5004129064e5af37c1a`.
+- Preserved Golden LIVE action-loop ancestor: `891745e1ab93dc78b9aa4e54d65b315befa885f2`, an **ancestor of the Wave 4 candidate**.
+- That Wave 4 proof established **0 external Places searches before location consent** and then resumed the **same mission** after consent.
+- Those demonstrations, like the current judging package, use **synthetic patient data**.
+
+These anchors remain here solely for lineage compatibility. The current judge path is HealthIA ONE + ONE SAFETY above.
 
 ## The one sentence to remember
 
