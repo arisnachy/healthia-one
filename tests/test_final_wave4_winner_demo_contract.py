@@ -112,6 +112,7 @@ def test_recorder_proves_real_living_system_boundary_and_receipt() -> None:
     assert '"access_control": "403_without_capability"' in RECORDER
     assert '"capability_transport": "password_input_then_in_memory_only"' in RECORDER
     assert '"X-HealthIA-Evaluation-Key": access_key' in RECORDER
+    assert "element => { element.value = ''; }" in RECORDER
     assert '"evaluation_access_key"' not in RECORDER
 
 
