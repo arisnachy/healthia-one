@@ -259,13 +259,15 @@ if (-not $PublicDemo) {
     if ([string]::IsNullOrWhiteSpace($providerIdentityToken)) {
         throw "No se pudo obtener identity token para el binding del proveedor privado."
     }
-    $providerProofArgs += @("--identity-token", $providerIdentityToken)
+    $env:HEALTHIA_CLOUD_ID_TOKEN = $providerIdentityToken
 }
 try {
     & python @providerProofArgs | Out-Host
 }
 finally {
+    Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN -ErrorAction SilentlyContinue
     $providerIdentityToken = $null
+    $providerProofArgs = $null
 }
 if ($LASTEXITCODE -ne 0) {
     throw "La revision existe pero no supero el binding exact-SHA independiente del proveedor."
@@ -287,7 +289,7 @@ if (-not $SkipStrictProof) {
         "--json"
     )
     if (-not [string]::IsNullOrWhiteSpace($identityToken)) {
-        $proofArgs += @("--identity-token", $identityToken)
+        $env:HEALTHIA_CLOUD_ID_TOKEN = $identityToken
     }
     $proofArgs += @("--release-sha", $releaseSha)
     $evaluationAccessKey = (& gcloud secrets versions access latest `
@@ -306,7 +308,10 @@ if (-not $SkipStrictProof) {
     }
     finally {
         Remove-Item Env:HEALTHIA_EVALUATION_ACCESS_KEY -ErrorAction SilentlyContinue
+        Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN -ErrorAction SilentlyContinue
         $evaluationAccessKey = $null
+        $identityToken = $null
+        $proofArgs = $null
     }
 }
 

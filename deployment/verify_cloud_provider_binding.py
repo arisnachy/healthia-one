@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -195,7 +196,7 @@ def main() -> int:
     parser.add_argument("--region", required=True)
     parser.add_argument("--service", required=True)
     parser.add_argument("--expected-sha", required=True)
-    parser.add_argument("--identity-token", default="")
+    parser.add_argument("--identity-token", default=os.getenv("HEALTHIA_CLOUD_ID_TOKEN", ""))
     parser.add_argument("--output", default="deployment/cloud-provider-binding-latest.json")
     args = parser.parse_args()
     try:

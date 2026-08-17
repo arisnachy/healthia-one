@@ -115,3 +115,14 @@ def test_cloud_deploy_requires_authenticated_durable_evidence_and_strict_proof()
     assert '"gcs_patient_scoped_original_evidence"' in verifier
     assert '"clinical_twin_provenance"' in verifier
     assert '"original_evidence_roundtrip"' in verifier
+
+
+def test_cloud_identity_token_is_not_passed_in_process_arguments() -> None:
+    deploy = Path("deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
+    provider = Path("deployment/verify_cloud_provider_binding.py").read_text(encoding="utf-8")
+    assert '$env:HEALTHIA_CLOUD_ID_TOKEN = $providerIdentityToken' in deploy
+    assert '$env:HEALTHIA_CLOUD_ID_TOKEN = $identityToken' in deploy
+    assert 'Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN' in deploy
+    assert '$providerProofArgs += @("--identity-token"' not in deploy
+    assert '$proofArgs += @("--identity-token"' not in deploy
+    assert 'default=os.getenv("HEALTHIA_CLOUD_ID_TOKEN", "")' in provider
