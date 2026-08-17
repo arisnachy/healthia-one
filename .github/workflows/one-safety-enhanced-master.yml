@@ -33,28 +33,48 @@ jobs:
       OUTPUT_ASSET: HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4
       PROOF_OVERLAY_START: "200.0"
       PROOF_OVERLAY_SECONDS: "11.0"
+      CANDIDATE_DIR: candidate-source
     steps:
-      - name: Check out exact successful demo SHA
+      - name: Check out current proof harness
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Check out exact successful demo candidate separately
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          path: ${{ env.CANDIDATE_DIR }}
 
-      - name: Prove exact SHA binding
+      - name: Prove harness and exact candidate binding
         shell: bash
         run: |
           set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          test "$actual" = "${{ github.event.workflow_run.head_sha }}"
-          echo "HEALTHIA_ONE_SAFETY_ENHANCED_EXACT_SHA_PASS $actual"
+          harness="$(git rev-parse HEAD)"
+          candidate="$(git -C "$CANDIDATE_DIR" rev-parse HEAD)"
+          test "$harness" = "${{ github.sha }}"
+          test "$candidate" = "${{ github.event.workflow_run.head_sha }}"
+          echo "HEALTHIA_ONE_SAFETY_HARNESS_SHA $harness"
+          echo "HEALTHIA_ONE_SAFETY_ENHANCED_EXACT_SHA_PASS $candidate"
 
-      - name: Download validated base winner artifact
+      - name: Download validated base winner artifact with bounded retry
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p dist/base-winner
-          gh run download "${{ github.event.workflow_run.id }}" --repo "${{ github.repository }}" --name "$BASE_ARTIFACT" --dir dist/base-winner
+          downloaded=false
+          for attempt in 1 2 3 4 5; do
+            rm -rf dist/base-winner/*
+            if gh run download "${{ github.event.workflow_run.id }}" --repo "${{ github.repository }}" --name "$BASE_ARTIFACT" --dir dist/base-winner; then
+              downloaded=true
+              break
+            fi
+            echo "Artifact download attempt $attempt failed; retrying after bounded backoff." >&2
+            sleep $((attempt * 3))
+          done
+          test "$downloaded" = "true"
           base="$(find dist/base-winner -type f -name 'HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4' -print -quit)"
           test -s "$base"
           echo "HEALTHIA_BASE_WINNER_MP4=$base" >> "$GITHUB_ENV"
@@ -76,8 +96,9 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE_SHA="${{ github.event.workflow_run.head_sha }}"
+          test "$(git -C "$CANDIDATE_DIR" rev-parse HEAD)" = "$SOURCE_SHA"
           gcloud run deploy "$SERVICE_NAME" \
-            --source . \
+            --source "$CANDIDATE_DIR" \
             --build-service-account "$BUILD_SA" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
