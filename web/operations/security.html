@@ -12,7 +12,7 @@
     header { display:flex; justify-content:space-between; gap:24px; align-items:flex-end; margin-bottom:24px; }
     h1 { margin:0; font-size:34px; letter-spacing:-.04em; }
     .eyebrow { font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:750; color:#5d6f8f; margin-bottom:8px; }
-    .sub { max-width:720px; color:#5c667a; line-height:1.55; margin:8px 0 0; }
+    .sub { max-width:760px; color:#5c667a; line-height:1.55; margin:8px 0 0; }
     .badge { padding:8px 12px; border:1px solid #d9e0ec; border-radius:999px; background:white; font-size:12px; font-weight:700; white-space:nowrap; }
     .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; }
     .card { background:white; border:1px solid #e0e5ef; border-radius:18px; padding:18px; box-shadow:0 12px 32px rgba(30,45,75,.05); }
@@ -20,8 +20,11 @@
     h2 { margin:0 0 12px; font-size:16px; } h3 { margin:0; font-size:14px; }
     .metric { font-size:26px; font-weight:760; letter-spacing:-.03em; }
     .muted { color:#69758b; font-size:13px; }
-    .chain { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .chain,.correlation { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
     .step { padding:9px 11px; border-radius:10px; background:#f3f6fb; border:1px solid #e2e8f2; font-size:12px; font-weight:650; }
+    .proofstep { padding:12px 14px; border-radius:12px; background:#f7faf8; border:1px solid #dcece2; min-width:190px; }
+    .proofstep b { display:block; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#607068; margin-bottom:5px; }
+    .proofstep code { font-size:12px; word-break:break-all; }
     .arrow { color:#8a97ab; }
     .fleet { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
     .agent { padding:10px 12px; background:#f7f9fc; border-radius:12px; }
@@ -29,6 +32,7 @@
     table { width:100%; border-collapse:collapse; font-size:12px; }
     th,td { text-align:left; border-bottom:1px solid #edf0f5; padding:9px 7px; vertical-align:top; }
     th { color:#637087; font-weight:700; }
+    code { font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; }
     .ok { color:#17643a; } .off { color:#7d5260; }
     .empty { padding:20px 4px; color:#758198; }
     @media(max-width:760px){ .half,.third{grid-column:span 12}.fleet{grid-template-columns:1fr} header{align-items:flex-start;flex-direction:column} }
@@ -40,7 +44,7 @@
     <div>
       <div class="eyebrow">HealthIA ONE · Operational proof</div>
       <h1>ONE SAFETY</h1>
-      <p class="sub">Read-only proof of the boundaries between AI reasoning, patient authorization, one-time execution authority, real connectors and durable receipts. No raw patient prompt or clinical content is rendered here.</p>
+      <p class="sub">Read-only proof of the boundary between AI reasoning, patient authorization, one-time execution authority, a real connector and durable completion evidence. No raw patient prompt or clinical content is rendered here.</p>
     </div>
     <div class="badge" id="release">Loading…</div>
   </header>
@@ -48,6 +52,7 @@
     <article class="card third"><h2>Safety Kernel</h2><div class="metric" id="kernel">—</div><div class="muted">Exact-intent execution gate</div></article>
     <article class="card third"><h2>Model Armor</h2><div class="metric" id="armor">—</div><div class="muted">Google + deterministic ingress defense</div></article>
     <article class="card third"><h2>Cloud Trace</h2><div class="metric" id="trace">—</div><div class="muted">Sanitized OpenTelemetry spans</div></article>
+    <article class="card wide"><h2>Trace → Ticket → Receipt</h2><div id="correlation" class="correlation"><div class="empty">Waiting for a completed connector execution for this synthetic patient.</div></div></article>
     <article class="card wide"><h2>Non-bypassable execution chain</h2><div class="chain" id="chain"></div></article>
     <article class="card half"><h2>KIRA Health · ADK fleet</h2><div class="fleet" id="fleet"></div></article>
     <article class="card half"><h2>Prompt ingress</h2><div id="prompt" class="muted">No decision recorded in this process yet.</div></article>
@@ -56,6 +61,7 @@
 </main>
 <script>
 const label = s => String(s || '').replaceAll('_',' ').replace(/\b\w/g, c=>c.toUpperCase());
+const short = (s,n=16) => { s=String(s||''); return s.length>n ? `${s.slice(0,n)}…` : s; };
 async function load(){
   const r=await fetch('/api/operations/security',{credentials:'same-origin'});
   if(!r.ok){ document.querySelector('main').insertAdjacentHTML('beforeend',`<p>Security proof unavailable (${r.status}).</p>`); return; }
@@ -68,7 +74,9 @@ async function load(){
   fleet.innerHTML=d.agent_fleet.subagents.map(a=>`<div class="agent"><b>${a.name}</b><span class="muted">${a.role}</span></div>`).join('');
   if(d.prompt_ingress.last_decision){ const p=d.prompt_ingress.last_decision; prompt.innerHTML=`<h3>${p.allowed?'<span class="ok">Allowed</span>':'<span class="off">Blocked</span>'} · ${label(p.source)}</h3><p>${p.reason}</p><p class="muted">Google checked: ${p.google_checked?'yes':'no'}</p>`; }
   const rows=d.recent_action_tickets||[];
-  tickets.innerHTML=rows.length?`<table><thead><tr><th>Ticket</th><th>Action</th><th>State</th><th>Connector outcome</th><th>Receipt</th><th>Issued</th></tr></thead><tbody>${rows.map(t=>`<tr><td>${t.id}</td><td>${t.action}</td><td>${label(t.status)}</td><td>${label(t.outcome_status)}</td><td>${t.receipt_linked?'linked':'—'}</td><td>${new Date(t.issued_at).toLocaleString()}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No connector execution ticket has been issued for this patient in this runtime yet.</div>';
+  const proof=rows.find(t=>t.correlation_complete);
+  if(proof){ correlation.innerHTML=`<div class="proofstep"><b>Cloud Trace ID</b><code>${proof.trace_id}</code></div><span class="arrow">→</span><div class="proofstep"><b>One-time ticket</b><code>${proof.id}</code></div><span class="arrow">→</span><div class="proofstep"><b>Durable receipt</b><code>${proof.receipt_id}</code></div><span class="arrow">→</span><div class="proofstep"><b>Outcome</b><span class="ok">${label(proof.outcome_status)}</span></div>`; }
+  tickets.innerHTML=rows.length?`<table><thead><tr><th>Trace</th><th>Ticket</th><th>Action</th><th>State</th><th>Connector outcome</th><th>Receipt</th></tr></thead><tbody>${rows.map(t=>`<tr><td><code>${t.trace_id?short(t.trace_id):'—'}</code></td><td><code>${short(t.id)}</code></td><td>${t.action}</td><td>${label(t.status)}</td><td>${label(t.outcome_status)}</td><td><code>${t.receipt_id?short(t.receipt_id):'—'}</code></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No connector execution ticket has been issued for this patient in this runtime yet.</div>';
 }
 load().catch(e=>{ document.querySelector('main').insertAdjacentHTML('beforeend',`<p>Unable to load operational proof.</p>`); console.error(e); });
 </script>
