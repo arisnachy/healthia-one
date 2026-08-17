@@ -24,6 +24,7 @@ jobs:
       REGION: us-central1
       TEMPLATE_ID: healthia-one-safety
       RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      TEMP_TEMPLATE_ROLE: roles/modelarmor.editor
     steps:
       - name: Check out exact main
         uses: actions/checkout@v4
@@ -71,7 +72,7 @@ jobs:
           grep -F "roles/cloudtrace.agent" <<<"$policy" | grep -F "$RUNTIME_SA" >/dev/null
           echo "HEALTHIA_ONE_SAFETY_IAM_PASS"
 
-      - name: Acquire temporary Model Armor template-admin capability
+      - name: Acquire temporary Model Armor template-editor capability
         shell: bash
         run: |
           set -euo pipefail
@@ -85,44 +86,59 @@ jobs:
 
           existing="$(gcloud projects get-iam-policy "$PROJECT_ID" \
             --flatten='bindings[].members' \
-            --filter="bindings.role=roles/modelarmor.admin AND bindings.members=serviceAccount:$provisioner" \
+            --filter="bindings.role=$TEMP_TEMPLATE_ROLE AND bindings.members=serviceAccount:$provisioner" \
             --format='value(bindings.members)' | head -n 1)"
           if [[ "$existing" == "serviceAccount:$provisioner" ]]; then
-            echo "ONE_SAFETY_TEMP_ADMIN_GRANTED=false" >> "$GITHUB_ENV"
-            echo "Provisioner already had Model Armor admin; preserving existing binding."
+            echo "ONE_SAFETY_TEMP_EDITOR_GRANTED=false" >> "$GITHUB_ENV"
+            echo "Provisioner already had Model Armor editor; preserving existing binding."
           else
             gcloud projects add-iam-policy-binding "$PROJECT_ID" \
               --member "serviceAccount:$provisioner" \
-              --role roles/modelarmor.admin \
+              --role "$TEMP_TEMPLATE_ROLE" \
               --condition=None \
               --quiet >/dev/null
-            echo "ONE_SAFETY_TEMP_ADMIN_GRANTED=true" >> "$GITHUB_ENV"
-            echo "Temporary Model Armor admin granted for template bootstrap."
+            echo "ONE_SAFETY_TEMP_EDITOR_GRANTED=true" >> "$GITHUB_ENV"
+            echo "Temporary Model Armor editor granted for template bootstrap."
           fi
 
-      - name: Create or harden Model Armor template
+      - name: Create or harden Model Armor template after IAM propagation
         shell: bash
         run: |
           set -euo pipefail
-          if gcloud model-armor templates describe "$TEMPLATE_ID" \
-            --project "$PROJECT_ID" --location "$REGION" --format='value(name)' >/dev/null 2>&1; then
-            gcloud model-armor templates update "$TEMPLATE_ID" \
-              --project "$PROJECT_ID" \
-              --location "$REGION" \
-              --pi-and-jailbreak-filter-settings-enforcement=enabled \
-              --pi-and-jailbreak-filter-settings-confidence-level=high \
-              --malicious-uri-filter-settings-enforcement=enabled \
-              --template-metadata-log-sanitize-operations \
-              --quiet >/dev/null
-          else
-            gcloud model-armor templates create "$TEMPLATE_ID" \
-              --project "$PROJECT_ID" \
-              --location "$REGION" \
-              --pi-and-jailbreak-filter-settings-enforcement=enabled \
-              --pi-and-jailbreak-filter-settings-confidence-level=high \
-              --malicious-uri-filter-settings-enforcement=enabled \
-              --template-metadata-log-sanitize-operations \
-              --quiet >/dev/null
+          configured=false
+          for attempt in 1 2 3 4 5 6 7 8; do
+            echo "Model Armor template bootstrap attempt $attempt"
+            if gcloud model-armor templates describe "$TEMPLATE_ID" \
+              --project "$PROJECT_ID" --location "$REGION" --format='value(name)' >/dev/null 2>&1; then
+              if gcloud model-armor templates update "$TEMPLATE_ID" \
+                --project "$PROJECT_ID" \
+                --location "$REGION" \
+                --pi-and-jailbreak-filter-settings-enforcement=enabled \
+                --pi-and-jailbreak-filter-settings-confidence-level=high \
+                --malicious-uri-filter-settings-enforcement=enabled \
+                --template-metadata-log-sanitize-operations \
+                --quiet >/dev/null; then
+                configured=true
+                break
+              fi
+            else
+              if gcloud model-armor templates create "$TEMPLATE_ID" \
+                --project "$PROJECT_ID" \
+                --location "$REGION" \
+                --pi-and-jailbreak-filter-settings-enforcement=enabled \
+                --pi-and-jailbreak-filter-settings-confidence-level=high \
+                --malicious-uri-filter-settings-enforcement=enabled \
+                --template-metadata-log-sanitize-operations \
+                --quiet >/dev/null; then
+                configured=true
+                break
+              fi
+            fi
+            sleep $((attempt * 5))
+          done
+          if [[ "$configured" != "true" ]]; then
+            echo "Model Armor template could not be configured after bounded IAM-propagation retries." >&2
+            exit 1
           fi
           name="$(gcloud model-armor templates describe "$TEMPLATE_ID" \
             --project "$PROJECT_ID" --location "$REGION" --format='value(name)')"
@@ -143,20 +159,20 @@ jobs:
           grep -q 'sanitizationResult\|sanitization_result' "$out"
           echo "HEALTHIA_ONE_MODEL_ARMOR_LIVE_PASS"
 
-      - name: Remove temporary Model Armor template-admin capability
+      - name: Remove temporary Model Armor template-editor capability
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${ONE_SAFETY_TEMP_ADMIN_GRANTED:-false}" == "true" && -n "${ONE_SAFETY_PROVISIONER:-}" ]]; then
+          if [[ "${ONE_SAFETY_TEMP_EDITOR_GRANTED:-false}" == "true" && -n "${ONE_SAFETY_PROVISIONER:-}" ]]; then
             gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
               --member "serviceAccount:$ONE_SAFETY_PROVISIONER" \
-              --role roles/modelarmor.admin \
+              --role "$TEMP_TEMPLATE_ROLE" \
               --condition=None \
               --quiet >/dev/null
-            echo "HEALTHIA_ONE_TEMP_ADMIN_REMOVED"
+            echo "HEALTHIA_ONE_TEMP_EDITOR_REMOVED"
           else
-            echo "No temporary admin binding to remove."
+            echo "No temporary editor binding to remove."
           fi
 
       - name: Cloud substrate summary
@@ -168,4 +184,4 @@ jobs:
           echo "- Runtime role: roles/modelarmor.user"
           echo "- Runtime role: roles/cloudtrace.agent"
           echo "- Cloud Trace API enabled"
-          echo "- Temporary provisioning admin removed when added by this run"
+          echo "- Temporary provisioning editor removed when added by this run"
