@@ -26,6 +26,10 @@ def test_timeline_exposes_english_copy_without_removing_spanish_contract():
     activity = next(item for item in events if item["type"] == "activity")
     assert vital["title"].startswith("Presión ") and vital["title_en"].startswith("Blood pressure ")
     assert weight["title"].startswith("Peso ") and weight["title_en"].startswith("Weight ")
+    assert weight["detail_en"] == "Same scale"
+    state.weights[0].note = "Sincronizado desde Smart scale via Health Connect"
+    device_weight = next(item for item in build_timeline(state) if item["id"] == state.weights[0].id)
+    assert device_weight["detail_en"] == "Synced from Smart scale via Health Connect"
     assert "pasos" in activity["title"] and "steps" in activity["title_en"]
 
     packs = condition_pack_summary(state)

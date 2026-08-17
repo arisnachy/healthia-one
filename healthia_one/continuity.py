@@ -99,7 +99,12 @@ def build_timeline(state: PatientState) -> list[dict[str, Any]]:
         bp = f"{item.systolic or '—'}/{item.diastolic or '—'}"
         add(item.id, "vital", item.measured_at, f"Presión {bp}", f"Pulso {item.pulse or '—'}", item.source.source_type, title_en=f"Blood pressure {bp}", detail_en=f"Pulse {item.pulse or '—'}")
     for item in state.weights:
-        add(item.id, "weight", item.measured_at, f"Peso {item.weight_kg:.1f} kg", item.note or "Registro del paciente", item.source.source_type, title_en=f"Weight {item.weight_kg:.1f} kg", detail_en=item.note or "Patient record")
+        weight_detail_en = item.note or "Patient record"
+        if weight_detail_en.startswith("Sincronizado desde "):
+            weight_detail_en = weight_detail_en.replace("Sincronizado desde ", "Synced from ", 1)
+        elif weight_detail_en == "Misma balanza":
+            weight_detail_en = "Same scale"
+        add(item.id, "weight", item.measured_at, f"Peso {item.weight_kg:.1f} kg", item.note or "Registro del paciente", item.source.source_type, title_en=f"Weight {item.weight_kg:.1f} kg", detail_en=weight_detail_en)
     for item in state.activity:
         add(item.id, "activity", item.measured_at, f"Actividad: {item.steps} pasos", f"{item.active_minutes} minutos activos", "patient_entry", title_en=f"Activity: {item.steps} steps", detail_en=f"{item.active_minutes} active minutes")
     for item in state.results:
