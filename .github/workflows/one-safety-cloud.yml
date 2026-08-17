@@ -40,6 +40,16 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
+      - name: Route Model Armor CLI to required regional endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://modelarmor.${REGION}.rep.googleapis.com/"
+          gcloud config set api_endpoint_overrides/modelarmor "$endpoint" --quiet
+          configured="$(gcloud config get api_endpoint_overrides/modelarmor)"
+          test "$configured" = "$endpoint"
+          echo "HEALTHIA_ONE_MODEL_ARMOR_REGIONAL_ENDPOINT_PASS $endpoint"
+
       - name: Ensure required APIs
         shell: bash
         run: |
@@ -180,6 +190,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "ONE SAFETY cloud substrate is ready."
+          echo "- Google Model Armor regional endpoint: modelarmor.${REGION}.rep.googleapis.com"
           echo "- Google Model Armor template: $TEMPLATE_ID ($REGION)"
           echo "- Runtime role: roles/modelarmor.user"
           echo "- Runtime role: roles/cloudtrace.agent"
