@@ -1,6 +1,7 @@
 import pytest
 
 from healthia_one.clinical_planner import normalize_dynamic_question_block
+from healthia_one.gemini import CLINICAL_QUESTION_SYSTEM_INSTRUCTION
 
 
 def payload(first_prompt: str, first_options: list[str] | None = None) -> dict:
@@ -57,3 +58,10 @@ def test_stop_or_dose_change_commands_remain_blocked() -> None:
     for directive in ("Suspenda el medicamento actual.", "Aumente la dosis del medicamento."):
         with pytest.raises(ValueError, match="indicación clínica no permitida"):
             normalize_dynamic_question_block(payload(directive), 1)
+
+
+def test_gemini_contract_requires_questions_and_nonimperative_first_person_options() -> None:
+    instruction = CLINICAL_QUESTION_SYSTEM_INSTRUCTION
+    assert "pregunta explícita entre signos ¿?" in instruction
+    assert "respuestas factuales del paciente en primera persona" in instruction
+    assert 'Ningún prompt u opción puede comenzar con "toma"' in instruction
