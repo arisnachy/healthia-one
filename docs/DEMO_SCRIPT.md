@@ -1,6 +1,29 @@
 # HealthIA ONE — approximately 4-minute unedited judge demo
 
-## Current recording and publication status — PASS
+## Living System replacement contract
+
+The current replacement take must be recorded by the exact-head GitHub Actions
+pipeline with Google Cloud Text-to-Speech voice
+`en-US-Chirp3-HD-Charon` (male). It must visibly use the real `/living` page,
+keep the capability secret off screen and prove:
+
+1. the system begins locked and synthetic-only;
+2. four authorized signals update the versioned Patient Twin;
+3. the same durable mission stops at `WAITING_HUMAN`, event 10/14;
+4. no autonomous diagnosis, prescription or clinical sensor verification is claimed;
+5. a persisted synthetic human measurement receipt resumes the mission;
+6. Twin v3 and event 14/14 are visible;
+7. reload rereads the durable replay;
+8. the closing proof displays the exact candidate SHA, Cloud Run revision and
+   zero model calls for the Living circuit.
+
+The published MP4 and `public-video-proof.json` in release
+`healthia-one-autonomous-winner-demo-2026` are authoritative only after CUTLOCK,
+anonymous download and byte-identical SHA-256 verification pass. The older
+recording below is retained as historical evidence until that replacement is
+published; it must not be described as showing the new `/living` UI.
+
+## Historical recording and publication status — PASS
 
 A continuous, unmocked judge-demo recording has been captured and the exact verified WebM is published at a stable public GitHub Release URL.
 

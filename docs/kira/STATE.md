@@ -13,7 +13,11 @@ Build HealthIA ONE Core v0.1 as the first functional vertical slice of the compl
 - Gates 3–5 local candidate are implemented: an access-key protected, physically separate `patient_eval_living` state; durable per-release session/run budget; real persistence of a four-signal Health Connect-shaped fixture; exact 14-event runtime; Twin versioning; governed mission; explicit human boundary; persisted synthetic receipt; and a dedicated `/living` UI.
 - Runtime and API tests prove expiry, global budget persistence, release binding, patient rejection, demo/evaluator data isolation, idempotence, exact event order, JSON restart replay, fail-closed configuration, capability rejection, zero model calls, and completion only from persisted evidence.
 - Playwright completed the full browser flow at `http://127.0.0.1:8765/living`: 10/14 at the human boundary, 14/14 after evidence, Twin v1→v2→v3, and zero console errors. The access key is not browser-persisted; re-entry rereads the durable server replay. Screenshot: `output/playwright/living-system-isolated-complete.png`.
-- Exact-SHA cloud deployment, Firestore/provider reread, public evaluator acceptance, video synchronization, and final independent reviews remain pending.
+- Exact-SHA cloud deployment and provider reread passed twice during hardening. The latest pre-integration proof bound clean SHA `3644fed65ff64007e9ae7eaba0ef394fc417b891` to Cloud Build `51637721-3675-443e-95cf-bcd24e58cbb2`, revision `healthia-one-demo-00031-ttc`, Artifact Registry digest `sha256:a4e7e23097d360632f5f92d3b479a7c88e8023c56a758e9b740c7dd3d4f44781`, and 379 provider files compared byte-for-byte.
+- The strict live proof passed authenticated A/B isolation, anonymous rejection, Gemini 3.5 + ADK, multimodal PDF, Firestore/GCS rereads, device identity, and Living System 14/14, Twin v3, persisted receipt and zero model calls.
+- Vigia security review passed after proof credentials were moved to temporary environment variables with guaranteed `finally` cleanup.
+- Independent JUDGE classified the technical core and Cloud as `CONDITIONAL_PASS`; integration into `main`, exact-head Living video publication and synchronized public evidence remain the final delivery gates.
+- Generated cloud JSON remains outside Git to avoid post-deployment-attestation SHA recursion. Sanitized copies must be published with the final release and tied to the exact candidate SHA.
 
 ## Victory gate
 - Exact candidate SHA passes focused, regression, clinical, security, accessibility, and cost tests.

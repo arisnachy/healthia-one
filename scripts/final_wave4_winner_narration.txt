@@ -1,5 +1,11 @@
 Most health apps wake up when the patient opens them. HealthIA ONE can wake up because the patient's health story changed. Your health should never start over.
 
+First, watch the Living System unlock safely. The page is real, served by the exact candidate on Cloud Run. Without its evaluation capability, the server returns a hard 403. The capability is entered into a password field, held only in page memory, and never stored in browser storage, a report, a command line or this video. It opens one isolated synthetic patient namespace — never a real patient record.
+
+Now the system is alive. Four authorized signals enter the real application and the Patient Twin changes version. HealthIA runs the bounded cycle until the event replay reaches ten of fourteen. The mission is open, but the status reads, “WAITING FOR HUMAN.” Autonomy does not mean crossing a clinical boundary. The system stops, visibly and deliberately, before any unsafe conclusion.
+
+The human enters one synthetic repeat measurement. A persisted receipt resumes the same chain. The replay reaches fourteen of fourteen, the Patient Twin advances to version three, the mission verifies, and the durable replay can be reloaded. This is the moment: a live system sensed, reasoned through policy, waited for authority, learned from evidence and proved the result — with zero model calls in this deterministic safety loop.
+
 Everything on screen is the exact GitHub candidate running as a real application on Google Cloud — no slide deck and no mock screens. Cloud Run serves the product. Firestore holds patient-owned state. Private Cloud Storage preserves original evidence. Gemini 3.5 Flash and Google ADK reason only where reasoning adds value.
 
 Before the patient types a message, a synthetic Health Connect event enters the real Cloud application. HealthIA accepts only the authorized metric types, preserves source and time, and updates the longitudinal record. The device surface keeps an important truth visible: authenticating a phone does not prove clinical sensor accuracy. HealthIA can listen continuously without pretending that every signal is medical truth.

@@ -29,7 +29,29 @@ That separation is the core product idea.
 
 ---
 
-## Judge this first: an unattended mission
+## Start with the Living System
+
+Open: https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app/living
+
+The owner supplies the evaluation access code privately. The code unlocks only
+an isolated synthetic patient and does not authorize access to patient records.
+
+1. Unlock and arm the evaluator.
+2. Run the authorized signals and watch the Twin advance while the durable
+   mission stops at `WAITING_HUMAN`, event 10/14.
+3. Add the explicitly synthetic human-entered measurement receipt.
+4. Watch the same mission resume, the Twin advance to v3 and the replay close
+   at event 14/14.
+5. Reload and re-enter the code to reread the persisted replay.
+
+This bounded circuit uses zero model calls. It is autonomy with an observable
+human authority boundary, not autonomous diagnosis or prescribing. The broader
+authenticated product separately proves Gemini 3.5 Flash, Google ADK,
+multimodal evidence, Firestore and private GCS.
+
+---
+
+## Preserved proof: an unattended mission
 
 > **HealthIA noticed the follow-up was overdue. Nobody prompted it.**
 
@@ -100,7 +122,7 @@ For a synthetic PDF or image:
 
 ## Exact proof lineage
 
-### Current Wave 4 product candidate
+### Historical Wave 4 product candidate
 
 - Exact tested SHA: `a48710eeb5a2e8429a91f5004129064e5af37c1a`
 - Final Wave 4 PR: `#41`

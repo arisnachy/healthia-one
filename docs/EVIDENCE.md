@@ -2,7 +2,35 @@
 
 This is the judge-facing source of truth for what HealthIA ONE has actually proven. Failed, quota-blocked or superseded experiments are never promoted as passes.
 
-## Current status
+## Current Living System candidate
+
+The judge-facing runtime is `https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app/living`.
+It is a public UI backed by an isolated synthetic evaluator namespace; mutation
+requires the private evaluation capability and never grants access to patient
+records.
+
+The authoritative identity for the current submission is not a hand-edited SHA
+in this document. It is the machine-readable evidence published after the build:
+
+- `deployment/cloud-provider-binding-latest.json` proves clean HEAD to provider
+  source archive, Cloud Build, Artifact Registry digest and Cloud Run revision;
+- `deployment/cloud-proof-latest.json` proves the authenticated product,
+  Firestore/GCS rereads and the exact 14-event Living System replay;
+- release `healthia-one-autonomous-winner-demo-2026` publishes the exact-head
+  Charon video and its anonymous byte-identity proof.
+
+The generated cloud files are intentionally not committed: committing a
+post-deployment attestation would itself create a different HEAD. The final
+release publishes sanitized copies as immutable assets associated with the
+candidate SHA. All three artifacts must name the same candidate, or a merge
+commit whose tree is byte-identical and preserves that candidate in `main`.
+
+The most recent pre-integration cloud validation proved exactly 14 events,
+Twin v3, a persisted human-evidence receipt, isolated `patient_eval_living`
+state and zero model calls. Evidence below is historical lineage and is not the
+identity of the current Living System candidate.
+
+## Historical submission status
 
 - **Primary track:** The Taskmaster
 - **JUDGE Ω evidence-backed score:** **100/100**
@@ -12,7 +40,7 @@ This is the judge-facing source of truth for what HealthIA ONE has actually prov
 
 The score is computed from `hackathon/judge_omega_scorecard.json` by `scripts/judge_omega.py` against the official 40/30/30 rubric.
 
-## 1. Exact-candidate Cloud + unmocked browser proof — PASS
+## 1. Historical exact-candidate Cloud + unmocked browser proof — PASS
 
 **Run:** `31262429792`  
 **Candidate SHA:** `a28955c3641c37a9e5a06f5f0ccf943ccb197bbd`  
@@ -54,7 +82,7 @@ After process replacement, patient A retained its longitudinal marker, multimoda
 
 Sanitized machine evidence: `hackathon/evidence/cloud_revision_continuity_proof.json`.
 
-## 3. Continuous judge demo — PASS
+## 3. Historical continuous judge demo — PASS
 
 **Run:** `31265639488`  
 **Candidate SHA:** `3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e`  
@@ -69,7 +97,7 @@ The continuous Playwright recording visibly covers problem → value proposition
 
 Sanitized machine evidence: `hackathon/evidence/final_judge_demo_proof.json`.
 
-## 4. Stable public judge video — PASS
+## 4. Historical stable public judge video — PASS
 
 **Direct public video URL:**  
 `https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm`

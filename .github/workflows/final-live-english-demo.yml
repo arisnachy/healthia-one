@@ -1,7 +1,7 @@
 name: Final live English hackathon demo
 
 on:
-  pull_request:
+  push:
     branches: [main]
     paths:
       - "app/**"
@@ -19,16 +19,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   actions: read
 
 concurrency:
-  group: healthia-final-live-demo-${{ github.event.pull_request.number || github.ref }}
+  group: healthia-final-live-demo-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   exact-candidate-live-demo:
     name: Deploy exact candidate and record Wave 4 winner demo
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 40
     env:
@@ -38,6 +39,7 @@ jobs:
       JUDGE_SERVICE_NAME: healthia-one-final-judge-video
       BUCKET_NAME: healthia-6088a-healthia-evidence
       MAPS_SECRET_NAME: healthia-google-maps-api-key
+      EVALUATION_SECRET_NAME: healthia-evaluation-access-key
       BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
       RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
       RELEASE_TAG: healthia-one-autonomous-winner-demo-2026
@@ -47,12 +49,12 @@ jobs:
       - name: Check out exact candidate head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Prove checked-out SHA is the candidate SHA
         shell: bash
         env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
@@ -85,20 +87,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SOURCE_SHA="${{ github.sha }}"
           gcloud run deploy "$SERVICE_NAME" \
             --source . \
             --build-service-account "$BUILD_SA" \
             --project "$PROJECT_ID" \
             --region "$REGION" \
             --service-account "$RUNTIME_SA" \
-            --min 0 \
-            --max 1 \
+            --min-instances 0 \
+            --max-instances 1 \
             --concurrency 20 \
             --cpu 1 \
             --memory 512Mi \
             --timeout 600 \
-            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=20,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_GCS_BUCKET=${BUCKET_NAME},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
-            --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest,GOOGLE_MAPS_API_KEY=${MAPS_SECRET_NAME}:latest" \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=20,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1400,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_EVALUATION_ENABLED=true,HEALTHIA_EVALUATION_SESSION_MINUTES=30,HEALTHIA_EVALUATION_MAX_SESSIONS=2,HEALTHIA_EVALUATION_MAX_RUNS=2,HEALTHIA_RELEASE_SHA=${SOURCE_SHA},HEALTHIA_GCS_BUCKET=${BUCKET_NAME},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
+            --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest,HEALTHIA_EVALUATION_ACCESS_KEY=${EVALUATION_SECRET_NAME}:latest,GOOGLE_MAPS_API_KEY=${MAPS_SECRET_NAME}:latest" \
             --no-allow-unauthenticated \
             --quiet
 
@@ -110,20 +113,22 @@ jobs:
           url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
           revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
           image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
-          token="$(gcloud auth print-identity-token --audiences="$url")"
-          test -n "$url" && test -n "$revision" && test -n "$image" && test -n "$token"
-          echo "::add-mask::$token"
+          token_file="$RUNNER_TEMP/healthia-cloud-identity-token"
+          umask 077
+          echo "HEALTHIA_CLOUD_ID_TOKEN_FILE=$token_file" >> "$GITHUB_ENV"
+          gcloud auth print-identity-token --audiences="$url" > "$token_file"
+          chmod 600 "$token_file"
+          test -n "$url" && test -n "$revision" && test -n "$image" && test -s "$token_file"
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
           echo "HEALTHIA_EXACT_REVISION_BOUND $revision"
 
       - name: Deploy exact-head private read-only Judge Mode
         id: judge
         shell: bash
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           gcloud run deploy "$JUDGE_SERVICE_NAME" \
@@ -133,23 +138,50 @@ jobs:
             --command uvicorn \
             --args "healthia_one.judge_mode:app,--host,0.0.0.0,--port,8080" \
             --set-env-vars "HEALTHIA_JUDGE_SOURCE_SHA=${SOURCE_SHA},HEALTHIA_JUDGE_LIVE_PROOF_RUN=31972928348" \
-            --min 0 --max 1 --memory 256Mi --cpu 1 \
+            --min-instances 0 --max-instances 1 --memory 256Mi --cpu 1 \
             --ingress all --no-allow-unauthenticated --quiet
           url="$(gcloud run services describe "$JUDGE_SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-          token="$(gcloud auth print-identity-token --audiences="$url")"
-          test -n "$url" && test -n "$token"
-          echo "::add-mask::$token"
-          curl --fail --silent --show-error -H "Authorization: Bearer ${token}" "$url/judge-health" > /tmp/judge-health.json
+          token_file="$RUNNER_TEMP/healthia-judge-identity-token"
+          curl_config="$RUNNER_TEMP/healthia-judge-health.curlrc"
+          cleanup_judge_files() {
+            shred -u "$curl_config" 2>/dev/null || true
+          }
+          trap cleanup_judge_files EXIT
+          umask 077
+          echo "HEALTHIA_JUDGE_ID_TOKEN_FILE=$token_file" >> "$GITHUB_ENV"
+          gcloud auth print-identity-token --audiences="$url" > "$token_file"
+          chmod 600 "$token_file"
+          test -n "$url" && test -s "$token_file"
+          {
+            printf 'url = "%s/judge-health"\n' "$url"
+            printf 'header = "Authorization: Bearer %s"\n' "$(<"$token_file")"
+            printf 'fail\nsilent\nshow-error\n'
+          } > "$curl_config"
+          chmod 600 "$curl_config"
+          curl --config "$curl_config" > /tmp/judge-health.json
           test "$(jq -r '.source_sha' /tmp/judge-health.json)" = "$SOURCE_SHA"
           test "$(jq -r '.mode' /tmp/judge-health.json)" = "judge_read_only_synthetic"
           test "$(jq -r '.mutations' /tmp/judge-health.json)" = "false"
           echo "url=$url" >> "$GITHUB_OUTPUT"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
           echo "HEALTHIA_EXACT_HEAD_PRIVATE_JUDGE_MODE_PASS $url"
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Materialize evaluator capability in a protected temporary file
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_file="$RUNNER_TEMP/healthia-evaluation-access-key"
+          umask 077
+          echo "HEALTHIA_EVALUATION_KEY_FILE=$key_file" >> "$GITHUB_ENV"
+          gcloud secrets versions access latest \
+            --secret "$EVALUATION_SECRET_NAME" \
+            --project "$PROJECT_ID" > "$key_file"
+          test -s "$key_file"
+          chmod 600 "$key_file"
+          echo "HEALTHIA_EVALUATION_KEY_FILE_READY"
 
       - name: Install recorder and media tools
         shell: bash
@@ -165,14 +197,15 @@ jobs:
       - name: Record continuous Wave 4 live application demo
         env:
           HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
-          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+          HEALTHIA_CLOUD_ID_TOKEN_FILE: ${{ runner.temp }}/healthia-cloud-identity-token
           HEALTHIA_CLOUD_REVISION: ${{ steps.cloud.outputs.revision }}
           HEALTHIA_CLOUD_IMAGE: ${{ steps.cloud.outputs.image }}
           HEALTHIA_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
           HEALTHIA_CLOUD_REGION: ${{ env.REGION }}
-          HEALTHIA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEALTHIA_CANDIDATE_SHA: ${{ github.sha }}
           HEALTHIA_JUDGE_URL: ${{ steps.judge.outputs.url }}
-          HEALTHIA_JUDGE_ID_TOKEN: ${{ steps.judge.outputs.token }}
+          HEALTHIA_JUDGE_ID_TOKEN_FILE: ${{ runner.temp }}/healthia-judge-identity-token
+          HEALTHIA_EVALUATION_ACCESS_KEY_FILE: ${{ runner.temp }}/healthia-evaluation-access-key
         run: python scripts/record_final_wave4_winner_demo.py
 
       - name: Build new narrated winner master
@@ -189,12 +222,25 @@ jobs:
           enabled="$(gcloud services list --project "$PROJECT_ID" --enabled --format='value(config.name)')"
           grep -qx 'texttospeech.googleapis.com' <<<"$enabled"
 
-          access_token="$(gcloud auth print-access-token)"
+          access_token_file="$RUNNER_TEMP/healthia-tts-access-token"
+          voices_config="$RUNNER_TEMP/healthia-tts-voices.curlrc"
+          request_config="$RUNNER_TEMP/healthia-tts-request.curlrc"
+          cleanup_tts_secrets() {
+            shred -u "$access_token_file" "$voices_config" "$request_config" 2>/dev/null || true
+          }
+          trap cleanup_tts_secrets EXIT
+          umask 077
+          gcloud auth print-access-token > "$access_token_file"
+          chmod 600 "$access_token_file"
           voices="$base/audio/voices.json"
-          curl --fail --silent --show-error \
-            -H "Authorization: Bearer ${access_token}" \
-            "https://texttospeech.googleapis.com/v1/voices?languageCode=en-US" \
-            -o "$voices"
+          {
+            printf 'url = "https://texttospeech.googleapis.com/v1/voices?languageCode=en-US"\n'
+            printf 'header = "Authorization: Bearer %s"\n' "$(<"$access_token_file")"
+            printf 'output = "%s"\n' "$voices"
+            printf 'fail\nsilent\nshow-error\n'
+          } > "$voices_config"
+          chmod 600 "$voices_config"
+          curl --config "$voices_config"
           jq -e --arg voice "$voice_name" '.voices[] | select(.name == $voice and .ssmlGender == "MALE")' "$voices" >/dev/null
 
           request="$base/audio/tts-request.json"
@@ -209,11 +255,18 @@ jobs:
           }
           pathlib.Path(sys.argv[1]).write_text(json.dumps(payload), encoding='utf-8')
           PY
-          status="$(curl -sS -o "$response" -w '%{http_code}' \
-            -X POST 'https://texttospeech.googleapis.com/v1/text:synthesize' \
-            -H "Authorization: Bearer ${access_token}" \
-            -H 'Content-Type: application/json' \
-            --data-binary "@$request")"
+          {
+            printf 'url = "https://texttospeech.googleapis.com/v1/text:synthesize"\n'
+            printf 'request = "POST"\n'
+            printf 'header = "Authorization: Bearer %s"\n' "$(<"$access_token_file")"
+            printf 'header = "Content-Type: application/json"\n'
+            printf 'data-binary = "@%s"\n' "$request"
+            printf 'output = "%s"\n' "$response"
+            printf 'write-out = "%%{http_code}"\n'
+            printf 'silent\nshow-error\n'
+          } > "$request_config"
+          chmod 600 "$request_config"
+          status="$(curl --config "$request_config")"
           if [[ "$status" != "200" ]] || [[ -z "$(jq -r '.audioContent // empty' "$response")" ]]; then
             jq -c '{error: (.error.message // "missing audioContent")}' "$response" >&2 || true
             echo "Named male Google Cloud voice synthesis failed closed: $voice_name HTTP $status" >&2
@@ -320,11 +373,27 @@ jobs:
               raise SystemExit(f"recorder report is not PASS: {report}")
           if report.get('live_app_only') is not True or report.get('static_screenshots_used') is not False:
               raise SystemExit('demo is not certified as live-app-only')
+          living=report.get('living_system') or {}
+          if living.get('waiting_event_count') != 10 or living.get('waiting_status') != 'waiting_human':
+              raise SystemExit(f'Living System did not prove the 10/14 human boundary: {living}')
+          if living.get('completed_event_count') != 14 or living.get('completed_twin_version') != 3 or living.get('model_calls') != 0:
+              raise SystemExit(f'Living System did not prove 14/14 Twin v3 with zero model calls: {living}')
+          if living.get('release_sha') != report.get('candidate_sha'):
+              raise SystemExit('Living System report is not bound to the exact candidate SHA')
           if int(report.get('candidate_count') or 0) < 2:
               raise SystemExit('winner demo did not prove at least two real resource candidates')
           if int(report.get('google_maps_uri_count') or 0) < 2:
               raise SystemExit('winner demo did not prove visible Google Maps-backed candidates')
           required={
+              'living_system_locked_without_capability',
+              'living_system_capability_not_persisted_in_browser',
+              'living_system_arm_run_waiting_human',
+              'living_system_waiting_boundary_visible_10_of_14',
+              'living_system_human_receipt_reaches_14_of_14',
+              'living_system_twin_v3_visible',
+              'living_system_zero_model_calls',
+              'living_system_exact_sha_binding',
+              'living_system_durable_replay_visible',
               'exact_candidate_live_google_runtime',
               'zero_places_before_mission_scoped_consent',
               'same_durable_mission_resumed_after_consent',
@@ -345,60 +414,6 @@ jobs:
           PY
           sha256sum "$final" | tee dist/final-live-english-demo/final-video.sha256
 
-      - name: Publish winner video as stable GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          base=dist/final-live-english-demo
-          final="$base/$RELEASE_ASSET"
-          expected="$(awk '{print $1}' "$base/final-video.sha256")"
-          notes="Continuous exact-head Living System judge demo with Google Cloud male voice en-US-Chirp3-HD-Charon. Exact source SHA: ${SOURCE_SHA}. GitHub Actions run: ${GITHUB_RUN_ID}. Proven gates: synthetic Health Connect event through the real product; no Google Places candidates before mission-scoped consent; same durable mission resumes after consent; real Google Places candidates with Maps URIs; exact deterministic selection of candidate #2; multimodal original evidence provenance; unified record and timeline after logout/login; exact-head no-prompt autonomy proof; zero browser console/page errors. Video SHA-256: ${expected}. Synthetic patient data only."
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --title 'HealthIA ONE — The Living Health System — Charon' \
-              --notes "$notes" \
-              --latest=false
-          else
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_SHA" \
-              --title 'HealthIA ONE — The Living Health System — Charon' \
-              --notes "$notes" \
-              --latest=false
-          fi
-          gh release upload "$RELEASE_TAG" "$final" --repo "$GITHUB_REPOSITORY" --clobber
-
-      - name: Prove public winner video is anonymous and byte-identical
-        env:
-          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          base=dist/final-live-english-demo
-          public_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${RELEASE_ASSET}"
-          expected="$(awk '{print $1}' "$base/final-video.sha256")"
-          curl --fail --location --silent --show-error "$public_url" -o /tmp/healthia-public-winner.mp4
-          actual="$(sha256sum /tmp/healthia-public-winner.mp4 | awk '{print $1}')"
-          test "$actual" = "$expected"
-          PUBLIC_VIDEO_URL="$public_url" EXPECTED="$expected" ACTUAL="$actual" SOURCE_HEAD_SHA="$SOURCE_HEAD_SHA" python - <<'PY'
-          import json, os, pathlib
-          payload={
-              'status':'PASS',
-              'public_url':os.environ['PUBLIC_VIDEO_URL'],
-              'anonymous_access':True,
-              'byte_identical':os.environ['EXPECTED']==os.environ['ACTUAL'],
-              'video_sha256':os.environ['EXPECTED'],
-              'source_run_id':os.environ.get('GITHUB_RUN_ID',''),
-              'source_sha':os.environ['SOURCE_HEAD_SHA'],
-              'release_tag':os.environ.get('RELEASE_TAG',''),
-          }
-          pathlib.Path('dist/final-live-english-demo/public-video-proof.json').write_text(json.dumps(payload, indent=2), encoding='utf-8')
-          print(json.dumps(payload, indent=2))
-          PY
-          echo "HEALTHIA_PUBLIC_WINNER_VIDEO_PASS $public_url"
-
       - name: Upload exact-candidate Wave 4 winner evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -412,5 +427,83 @@ jobs:
         if: always()
         shell: bash
         run: |
+          if [[ -n "${HEALTHIA_EVALUATION_KEY_FILE:-}" && -f "$HEALTHIA_EVALUATION_KEY_FILE" ]]; then
+            shred -u "$HEALTHIA_EVALUATION_KEY_FILE"
+          fi
+          for secret_file in \
+            "${HEALTHIA_CLOUD_ID_TOKEN_FILE:-}" \
+            "${HEALTHIA_JUDGE_ID_TOKEN_FILE:-}"; do
+            if [[ -n "$secret_file" && -f "$secret_file" ]]; then
+              shred -u "$secret_file"
+            fi
+          done
           gcloud run services delete "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet || true
           gcloud run services delete "$JUDGE_SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet || true
+
+  publish-winner:
+    name: Publish validated winner evidence
+    needs: exact-candidate-live-demo
+    if: needs.exact-candidate-live-demo.result == 'success'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      RELEASE_TAG: healthia-one-autonomous-winner-demo-2026
+      RELEASE_ASSET: HealthIA-ONE-Autonomous-Taskmaster-Charon.mp4
+    steps:
+      - name: Download validated winner artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HealthIA-ONE-autonomous-winner-demo-Charon
+          path: dist/final-live-english-demo
+
+      - name: Publish exact-SHA video and sanitized evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/final-live-english-demo
+          final="$base/$RELEASE_ASSET"
+          test -s "$final" && test -s "$base/report.json" && test -s "$base/final-video.sha256"
+          expected="$(awk '{print $1}' "$base/final-video.sha256")"
+          test "$(sha256sum "$final" | awk '{print $1}')" = "$expected"
+          test "$(jq -r '.candidate_sha' "$base/report.json")" = "$SOURCE_SHA"
+          notes="Continuous exact-head Living System judge demo with Google Cloud male voice en-US-Chirp3-HD-Charon. Exact source SHA: ${SOURCE_SHA}. GitHub Actions run: ${GITHUB_RUN_ID}. Proven gates: capability locked with 403 before unlock; 10/14 WAITING_FOR_HUMAN boundary; persisted synthetic receipt reaches 14/14 Twin v3; zero Living System model calls; exact SHA binding; synthetic Health Connect event through the real product; no Google Places candidates before mission-scoped consent; same durable mission resumes after consent; real Google Places candidates with Maps URIs; exact deterministic selection of candidate #2; multimodal original evidence provenance; unified record and timeline after logout/login; exact-head no-prompt autonomy proof; zero browser console/page errors. Video SHA-256: ${expected}. Synthetic patient data only."
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title 'HealthIA ONE — The Living Health System — Charon' \
+              --notes "$notes" \
+              --latest=false
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title 'HealthIA ONE — The Living Health System — Charon' \
+              --notes "$notes" \
+              --latest=false
+          fi
+          gh release upload "$RELEASE_TAG" "$final" --repo "$GITHUB_REPOSITORY" --clobber
+          public_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${RELEASE_ASSET}"
+          curl --fail --location --silent --show-error "$public_url" -o /tmp/healthia-public-winner.mp4
+          actual="$(sha256sum /tmp/healthia-public-winner.mp4 | awk '{print $1}')"
+          test "$actual" = "$expected"
+          jq -n \
+            --arg url "$public_url" \
+            --arg sha "$SOURCE_SHA" \
+            --arg video_sha "$expected" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg tag "$RELEASE_TAG" \
+            '{status:"PASS",public_url:$url,anonymous_access:true,byte_identical:true,video_sha256:$video_sha,source_run_id:$run_id,source_sha:$sha,release_tag:$tag}' \
+            > "$base/public-video-proof.json"
+          if rg -n 'HEALTHIA_EVALUATION_ACCESS_KEY|GCP_CREDENTIALS|Authorization: Bearer|WinnerDemo!' "$base/report.json" "$base/public-video-proof.json"; then
+            echo 'public evidence contains forbidden secret marker' >&2
+            exit 1
+          fi
+          test "$(jq -r '.source_sha' "$base/public-video-proof.json")" = "$SOURCE_SHA"
+          echo "HEALTHIA_PUBLIC_EVIDENCE_SANITIZED_PASS"
+          gh release upload "$RELEASE_TAG" "$base/report.json" "$base/public-video-proof.json" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "HEALTHIA_PUBLIC_WINNER_VIDEO_PASS $public_url"
