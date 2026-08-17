@@ -267,7 +267,11 @@ def install_patient_auth(
                     "action": ticket.action.value,
                     "status": ticket.status,
                     "outcome_status": ticket.outcome_status,
+                    "trace_id": ticket.trace_id,
+                    "receipt_id": ticket.receipt_id,
                     "receipt_linked": bool(ticket.receipt_id),
+                    "trace_correlated": bool(ticket.trace_id),
+                    "correlation_complete": bool(ticket.trace_id and ticket.receipt_id),
                     "issued_at": ticket.issued_at.isoformat(),
                     "expires_at": ticket.expires_at.isoformat(),
                 }
