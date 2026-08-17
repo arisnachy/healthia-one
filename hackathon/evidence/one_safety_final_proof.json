@@ -1,0 +1,62 @@
+{
+  "schema": "healthia-one-safety-final-proof/v1",
+  "status": "PASS",
+  "synthetic_only": true,
+  "feature_freeze": true,
+  "runtime_candidate_sha": "a851947c9e1476d2fed05f74b2b40383c408387f",
+  "proof_harness_sha": "51c641d89a4c59bd57275ffa6ef98820394f9634",
+  "model_armor": {
+    "workflow": ".github/workflows/one-safety-cloud.yml",
+    "run_id": 32051146784,
+    "status": "SUCCESS",
+    "region": "us-central1",
+    "adversarial_contract": {
+      "invocation_result": "SUCCESS",
+      "filter_match_state": "MATCH_FOUND",
+      "pi_and_jailbreak_match_state": "MATCH_FOUND"
+    },
+    "temporary_template_editor_removed": true
+  },
+  "enhanced_cloud_proof": {
+    "workflow": ".github/workflows/one-safety-enhanced-master.yml",
+    "run_id": 32054818666,
+    "status": "SUCCESS",
+    "real_google_places_candidate_count": 8,
+    "correlation": {
+      "trace_id": "eec691300b7bb1c1c0564e95fb090e4f",
+      "health_action_ticket_id": "hat_021b1b6b1b4542e2",
+      "action": "maps.search_nearby",
+      "receipt_id": "receipt_95ba26286e6f4e15",
+      "outcome_status": "completed",
+      "required_cloud_trace_span": "google.action.guarded_execute"
+    },
+    "cloud_trace_exact_id_readback": true,
+    "temporary_cloudtrace_user_removed": true,
+    "application_adversarial_contract": {
+      "http_status": 400,
+      "security_boundary": "prompt_ingress",
+      "model_called": false,
+      "new_health_action_tickets": 0,
+      "patient_state_mutation": 0
+    }
+  },
+  "video": {
+    "release_tag": "healthia-one-autonomous-winner-demo-2026",
+    "asset": "HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4",
+    "duration_seconds": 235.0,
+    "resolution": "1600x900",
+    "fps": 25,
+    "base_master_sha256": "809d35ff7b2a3242eb61f52443c64f48a0ca45fc2e078ad1165ae76f724b1565",
+    "enhanced_master_sha256": "2c82929888c613960cb44ba7cb0c111b22e8a205cf38643d3199f3a1c5e542cf",
+    "charon_audio_bitstream_sha256": "3a78b5e3b98c441b138b691d803e2f3859e51e2a2795db22314d6ea4b230cc16",
+    "audio_bitstream_preserved": true,
+    "one_safety_overlay_start_seconds": 200.0,
+    "one_safety_overlay_duration_seconds": 11.0
+  },
+  "artifact": {
+    "id": 9296123186,
+    "name": "HealthIA-ONE-ONE-SAFETY-enhanced-judge-master",
+    "zip_sha256": "253a474e7a8bd7fce373f3ff1f5697e0522f27810fe76d33dd4a902366cd9365"
+  },
+  "truth_boundary": "Hackathon software proof only; not clinical efficacy, regulatory approval, autonomous prescribing, or universal security certification."
+}
