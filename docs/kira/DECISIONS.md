@@ -25,3 +25,11 @@ Implementation proceeds in `healthia-one-living-system` on `codex/living-system-
 ## ADR-008 — Extend PatientState instead of creating a second Twin store
 
 Core v0.1 adds backward-compatible canonical fields to `PatientState` and keeps `clinical_twin_summary()` as a derived projection. Old persisted states load through defaults. State-changing Living Twin events use stable IDs, reject unknown public fields and causal claims, enforce patient namespace, and advance the Twin version idempotently.
+
+## ADR-009 — Bounded evaluator capability, separate from Judge Mode
+
+The interactive Living System never mutates the public read-only Judge Mode. It is disabled by default and requires an owner-supplied capability key. Its service methods force the physically separate `patient_eval_living` namespace regardless of browser login, use a persisted expiring lease plus a global per-release session/run budget, declare every fixture synthetic, and permit zero model calls. The browser keeps the key only in page memory; after reload the evaluator re-enters it to reread the durable server replay.
+
+## ADR-010 — Autonomous does not mean clinically unbounded
+
+The demonstrator may ingest, normalize, version, compare, correlate, open an investigation and create an obligation without human intervention. It must stop before clinical interpretation or treatment. Only a plausible human-entered measurement can create the receipt that allows VERIFY to close the mission and advance the Twin again.

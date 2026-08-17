@@ -15,3 +15,5 @@ uploads/*
 *.log
 coverage.xml
 htmlcov/
+.playwright-cli/
+dist/dialogbench/

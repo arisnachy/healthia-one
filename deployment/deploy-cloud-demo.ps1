@@ -10,6 +10,7 @@ param(
     [string]$BuildServiceAccount = "healthia-one-build",
     [string]$DeviceSecretName = "healthia-device-token-secret",
     [string]$SessionSecretName = "healthia-session-secret",
+    [string]$EvaluationSecretName = "healthia-evaluation-access-key",
     [string]$MapsSecretName = "healthia-google-maps-api-key",
     [ValidateRange(8, 40)][int]$RequestLimit = 20,
     [ValidateRange(256, 4096)][int]$MaxOutputTokens = 1400,
@@ -28,6 +29,14 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 }
 if ([string]::IsNullOrWhiteSpace($BucketName)) {
     $BucketName = "$ProjectId-healthia-evidence"
+}
+$releaseSha = (& git rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($releaseSha)) {
+    throw "No se pudo resolver el commit candidato."
+}
+$dirtyWorktree = & git status --porcelain
+if ($LASTEXITCODE -ne 0 -or $dirtyWorktree) {
+    throw "El despliegue exact-SHA exige un worktree limpio y comprometido."
 }
 $RuntimeServiceAccountEmail = "$RuntimeServiceAccount@$ProjectId.iam.gserviceaccount.com"
 $BuildServiceAccountEmail = "$BuildServiceAccount@$ProjectId.iam.gserviceaccount.com"
@@ -124,6 +133,7 @@ foreach ($api in $apis) {
 
 Ensure-Secret $DeviceSecretName "identidad durable de dispositivos"
 Ensure-Secret $SessionSecretName "sesiones firmadas de pacientes"
+Ensure-Secret $EvaluationSecretName "acceso aislado del evaluador Living System"
 
 # Maps is an existing provider credential. Never manufacture or print it here:
 # require an enabled Secret Manager version and mount it directly into Cloud Run.
@@ -187,6 +197,11 @@ $envVars = @(
     "HEALTHIA_COST_CONTROL_UI=false",
     "HEALTHIA_AI_MAX_OUTPUT_TOKENS=$MaxOutputTokens",
     "HEALTHIA_PROACTIVE_ENABLED=false",
+    "HEALTHIA_EVALUATION_ENABLED=true",
+    "HEALTHIA_EVALUATION_SESSION_MINUTES=30",
+    "HEALTHIA_EVALUATION_MAX_SESSIONS=2",
+    "HEALTHIA_EVALUATION_MAX_RUNS=2",
+    "HEALTHIA_RELEASE_SHA=$releaseSha",
     "HEALTHIA_GCS_BUCKET=$BucketName",
     "GOOGLE_GENAI_USE_VERTEXAI=true",
     "GOOGLE_CLOUD_PROJECT=$ProjectId",
@@ -207,7 +222,7 @@ $args = @(
     "--memory", "512Mi",
     "--timeout", "600",
     "--set-env-vars", $envVars,
-    "--set-secrets", "HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest,HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest,GOOGLE_MAPS_API_KEY=${MapsSecretName}:latest",
+    "--set-secrets", "HEALTHIA_DEVICE_TOKEN_SECRET=${DeviceSecretName}:latest,HEALTHIA_SESSION_SECRET=${SessionSecretName}:latest,HEALTHIA_EVALUATION_ACCESS_KEY=${EvaluationSecretName}:latest,GOOGLE_MAPS_API_KEY=${MapsSecretName}:latest",
     "--quiet"
 )
 
@@ -230,6 +245,17 @@ if ([string]::IsNullOrWhiteSpace($url) -or [string]::IsNullOrWhiteSpace($revisio
 Write-Host "Cloud Run listo: $url" -ForegroundColor Green
 Write-Host "Revision: $revision" -ForegroundColor Green
 
+Write-Host "Verificando binding proveedor: HEAD limpio -> source archive -> Cloud Build -> digest -> revision..." -ForegroundColor Cyan
+& python deployment/verify_cloud_provider_binding.py `
+    --project $ProjectId `
+    --region $Region `
+    --service $ServiceName `
+    --expected-sha $releaseSha `
+    --output deployment/cloud-provider-binding-latest.json | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "La revision existe pero no supero el binding exact-SHA independiente del proveedor."
+}
+
 if (-not $SkipStrictProof) {
     $identityToken = ""
     if (-not $PublicDemo) {
@@ -248,10 +274,24 @@ if (-not $SkipStrictProof) {
     if (-not [string]::IsNullOrWhiteSpace($identityToken)) {
         $proofArgs += @("--identity-token", $identityToken)
     }
+    $proofArgs += @("--release-sha", $releaseSha)
+    $evaluationAccessKey = (& gcloud secrets versions access latest `
+        --secret $EvaluationSecretName `
+        --project $ProjectId).Trim()
+    if ([string]::IsNullOrWhiteSpace($evaluationAccessKey)) {
+        throw "No se pudo cargar la capacidad privada del evaluador para la prueba estricta."
+    }
+    $env:HEALTHIA_EVALUATION_ACCESS_KEY = $evaluationAccessKey
     Write-Host "Prueba estricta: Cloud Run + auth A/B + Gemini 3.5/ADK + Firestore + GCS + gemelo..." -ForegroundColor Cyan
-    & python @proofArgs | Tee-Object -FilePath "deployment/cloud-proof-latest.json" | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "El despliegue existe pero NO supero la prueba estricta. No lo declares probado."
+    try {
+        & python @proofArgs | Tee-Object -FilePath "deployment/cloud-proof-latest.json" | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "El despliegue existe pero NO supero la prueba estricta. No lo declares probado."
+        }
+    }
+    finally {
+        Remove-Item Env:HEALTHIA_EVALUATION_ACCESS_KEY -ErrorAction SilentlyContinue
+        $evaluationAccessKey = $null
     }
 }
 

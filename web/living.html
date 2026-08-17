@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="HealthIA ONE Living System — bounded autonomous health continuity demonstration">
+  <title>HealthIA ONE · Living System</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%2319365e'/%3E%3Cpath d='M32 14c1.2 9 8 15.8 17 17-9 1.2-15.8 8-17 17-1.2-9-8-15.8-17-17 9-1.2 15.8-8 17-17Z' fill='none' stroke='%2357e2d2' stroke-width='4'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/assets/living-system.css">
+</head>
+<body>
+  <main class="living-shell">
+    <header class="living-header">
+      <a class="living-brand" href="/" aria-label="HealthIA ONE home">
+        <span class="brand-orb" aria-hidden="true">✦</span>
+        <span><strong>HealthIA ONE</strong><small>LIVING SYSTEM</small></span>
+      </a>
+      <div class="header-signals" aria-label="Runtime guarantees">
+        <span><i class="pulse-dot"></i> Event-driven</span>
+        <span>0 model calls</span>
+        <span>Synthetic patient</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <p class="eyebrow">A HEALTH SYSTEM THAT REMEMBERS, ACTS, WAITS AND VERIFIES</p>
+        <h1>This is not a chatbot.<br><em>It is a living health system.</em></h1>
+        <p class="hero-copy">Watch four authorized signals change the Patient Twin, open a governed mission, stop at the human boundary, and learn only from a persisted receipt.</p>
+      </div>
+      <div class="system-vitals" aria-live="polite">
+        <div><span>System</span><strong id="systemStatus">LOCKED</strong></div>
+        <div><span>Twin version</span><strong id="twinVersion">—</strong></div>
+        <div><span>Events verified</span><strong id="eventCount">0 / 14</strong></div>
+      </div>
+    </section>
+
+    <section id="accessPanel" class="access-panel">
+      <div><span class="step-number">01</span><div><strong>Enter evaluation access code</strong><p>The code unlocks only an isolated synthetic patient. It never grants access to real patient records.</p></div></div>
+      <form id="accessForm">
+        <label for="accessKey">Evaluation access code</label>
+        <input id="accessKey" name="accessKey" type="password" autocomplete="off" required>
+        <button type="submit">Unlock Living System</button>
+      </form>
+    </section>
+
+    <section id="controlPanel" class="control-panel" hidden>
+      <div class="control-copy"><span class="step-number">02</span><div><strong>Start one bounded autonomous cycle</strong><p>Deterministic, idempotent and durable. The browser renders only events returned by the canonical server state.</p></div></div>
+      <div class="control-actions">
+        <button id="activateButton" class="primary-control" type="button">Activate Living System</button>
+        <button id="replayButton" type="button">Reload durable replay</button>
+      </div>
+    </section>
+
+    <div id="errorBanner" class="error-banner" role="alert" hidden></div>
+
+    <section id="runtime" class="runtime-grid" hidden>
+      <article class="twin-panel panel">
+        <header><div><span class="panel-kicker">CANONICAL PATIENT TWIN</span><h2>Memory that changes with evidence</h2></div><span id="twinBadge" class="state-badge">READY</span></header>
+        <div class="version-flow"><div><small>Parent</small><strong id="parentVersion">—</strong></div><span>→</span><div><small>Current</small><strong id="currentVersion">—</strong></div></div>
+        <div id="signalGrid" class="signal-grid"></div>
+        <div class="twin-layers">
+          <section><span>Anatomy</span><strong id="anatomyState">Waiting for evidence</strong></section>
+          <section><span>Medication expectation</span><strong id="medicationState">Waiting for evidence</strong></section>
+          <section><span>Organ systems</span><strong id="organState">Waiting for evidence</strong></section>
+          <section><span>Open obligations</span><strong id="obligationState">0</strong></section>
+        </div>
+      </article>
+
+      <article class="mission-panel panel">
+        <header><div><span class="panel-kicker">AUTONOMOUS MISSION</span><h2 id="missionTitle">No mission opened</h2></div><span id="missionStatus" class="state-badge muted">IDLE</span></header>
+        <p id="missionAction">HealthIA will act only after evidence arrives and policy allows it.</p>
+        <div id="agentPlan" class="agent-plan"></div>
+        <form id="humanForm" class="human-boundary" hidden>
+          <div><span class="boundary-icon">◆</span><div><strong>Human boundary reached</strong><p>The system stopped. Provide a repeat measurement to create the canonical receipt.</p></div></div>
+          <div class="measurement-fields">
+            <label>Systolic<input id="systolic" type="number" min="70" max="250" value="132" required></label>
+            <label>Diastolic<input id="diastolic" type="number" min="40" max="150" value="82" required></label>
+            <label>Pulse<input id="pulse" type="number" min="30" max="220" value="70"></label>
+            <button type="submit">Persist evidence & resume</button>
+          </div>
+        </form>
+      </article>
+
+      <article class="event-panel panel">
+        <header><div><span class="panel-kicker">LIVE AGENT ACTIVITY</span><h2>Event → policy → action → proof</h2></div><span class="live-label"><i class="pulse-dot"></i> DURABLE REPLAY</span></header>
+        <ol id="eventFeed" class="event-feed" aria-live="polite" aria-label="Living Twin event replay"></ol>
+      </article>
+
+      <article class="proof-panel panel">
+        <span class="panel-kicker">TRUTH BOUNDARY</span>
+        <h2>Autonomy with authority limits</h2>
+        <p id="truthBoundary">This demonstration never diagnoses, prescribes or changes medication.</p>
+        <dl>
+          <div><dt>Patient isolation</dt><dd>synthetic namespace only</dd></div>
+          <div><dt>Clinical causality</dt><dd>never claimed</dd></div>
+          <div><dt>Hidden reasoning</dt><dd>never exposed</dd></div>
+          <div><dt>Completion</dt><dd id="receiptState">requires persisted receipt</dd></div>
+        </dl>
+      </article>
+    </section>
+  </main>
+  <script src="/assets/living-system.js" defer></script>
+</body>
+</html>

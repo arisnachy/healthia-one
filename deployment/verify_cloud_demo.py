@@ -26,6 +26,8 @@ class CloudProofConfig:
     project_id: str
     bucket_name: str
     identity_token: str = ""
+    evaluation_access_key: str = ""
+    release_sha: str = ""
     timeout: int = 45
 
 
@@ -40,6 +42,8 @@ def _request(
     headers = {"Accept": "application/json"}
     if config.identity_token:
         headers["Authorization"] = f"Bearer {config.identity_token}"
+    if config.evaluation_access_key:
+        headers["X-HealthIA-Evaluation-Key"] = config.evaluation_access_key
     if content_type:
         headers["Content-Type"] = content_type
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
@@ -209,6 +213,80 @@ def verify_firestore_and_gcs(
     }
 
 
+def verify_living_system_firestore(config: CloudProofConfig, session_id: str) -> dict[str, Any]:
+    try:
+        from google.cloud import firestore
+    except Exception as exc:
+        raise CloudProofError("google-cloud-firestore must be installed") from exc
+
+    snapshot = firestore.Client(project=config.project_id).collection("healthia_one_patients").document("patient_eval_living").get()
+    if not snapshot.exists:
+        raise CloudProofError("Firestore synthetic evaluator document does not exist")
+    state = snapshot.to_dict() or {}
+    session = state.get("evaluation_session") or {}
+    events = state.get("living_twin_events") or []
+    if session.get("id") != session_id or session.get("status") != "completed":
+        raise CloudProofError("Firestore evaluator lease does not match completed Cloud run")
+    if session.get("release_sha") != config.release_sha:
+        raise CloudProofError("Firestore evaluator lease is not bound to the candidate release SHA")
+    if len(events) != 14 or events[-1].get("event_type") != "twin_updated_from_verified_outcome":
+        raise CloudProofError("Firestore does not contain the exact completed 14-event replay")
+    mission_id = session.get("mission_id")
+    mission = next((item for item in state.get("missions", []) if item.get("id") == mission_id), None)
+    if mission is None or mission.get("status") != "completed" or not mission.get("closure_evidence"):
+        raise CloudProofError("Firestore Living System mission lacks persisted closure evidence")
+    return {
+        "firestore_document": snapshot.reference.path,
+        "firestore_update_time": snapshot.update_time.isoformat() if snapshot.update_time else None,
+        "session_id": session_id,
+        "release_sha": session.get("release_sha"),
+        "runtime_revision": session.get("runtime_revision"),
+        "event_count": len(events),
+        "mission_id": mission_id,
+        "closure_evidence": mission.get("closure_evidence"),
+    }
+
+
+def verify_living_system(config: CloudProofConfig) -> dict[str, Any]:
+    if not config.evaluation_access_key:
+        raise CloudProofError("Living System evaluator key was not supplied to the strict proof")
+    living_status, living_html, _ = _request(config, "GET", "/living")
+    if living_status != 200 or b"It is a living health system" not in living_html:
+        raise CloudProofError("Public Living System UI is unavailable")
+
+    state = _post_json(config, "/api/evaluation/arm", {})
+    session = state.get("session") or {}
+    session_id = str(session.get("id") or "")
+    if not session_id:
+        raise CloudProofError("Living System arm did not return a session ID")
+    if session.get("status") in {"armed", "active"}:
+        state = _post_json(config, "/api/evaluation/run", {"session_id": session_id})
+        session = state.get("session") or {}
+    if session.get("status") == "waiting_human":
+        state = _post_json(
+            config,
+            "/api/evaluation/complete",
+            {"session_id": session_id, "systolic": 132, "diastolic": 82, "pulse": 70},
+        )
+        session = state.get("session") or {}
+    expected = state.get("expected_event_sequence") or []
+    if session.get("status") != "completed" or state.get("event_types") != expected or len(expected) != 14:
+        raise CloudProofError("Living System did not complete the exact 14-event sequence")
+    if session.get("release_sha") != config.release_sha or session.get("runtime_revision") in {"", "local", None}:
+        raise CloudProofError("Living System session is not bound to the candidate SHA and Cloud Run revision")
+    if state.get("model_calls") != 0:
+        raise CloudProofError("Deterministic Living System unexpectedly consumed a model call")
+    provider = verify_living_system_firestore(config, session_id)
+    return {
+        "ui_status": living_status,
+        "session_status": session.get("status"),
+        "twin_version": (state.get("twin") or {}).get("version"),
+        "event_count": len(expected),
+        "model_calls": state.get("model_calls"),
+        "provider_reread": provider,
+    }
+
+
 def _verify_clinical_memory_and_resolution(config: CloudProofConfig) -> dict[str, Any]:
     first = _post_json(
         config,
@@ -299,6 +377,12 @@ def run(config: CloudProofConfig) -> dict[str, Any]:
             raise CloudProofError(f"Readiness mismatch {key}: expected {value!r}, found {readiness.get(key)!r}")
     if not readiness.get("adk_ready") or not readiness.get("ai_ready"):
         raise CloudProofError("Cloud runtime does not report real Google AI readiness")
+    if readiness.get("living_evaluation_available") is not True:
+        raise CloudProofError("Cloud runtime does not report the bounded Living System evaluator")
+    if not config.release_sha or readiness.get("release_sha") != config.release_sha:
+        raise CloudProofError("Cloud readiness is not bound to the requested release SHA")
+
+    living_system = verify_living_system(config)
 
     anonymous_status, _, _ = _request(config, "GET", "/api/bootstrap")
     if anonymous_status != 401:
@@ -398,6 +482,7 @@ def run(config: CloudProofConfig) -> dict[str, Any]:
         "download_content_type": headers.get("Content-Type", ""),
         "clinical_twin_linked": True,
         "firestore": persistence,
+        "living_system": living_system,
         "proof": [
             "cloud_run_health",
             "authenticated_patient_runtime",
@@ -416,6 +501,10 @@ def run(config: CloudProofConfig) -> dict[str, Any]:
             "gemini_multimodal_pdf_extraction",
             "clinical_twin_provenance",
             "original_evidence_roundtrip",
+            "living_system_public_ui",
+            "living_system_exact_14_event_replay",
+            "living_system_firestore_provider_reread",
+            "living_system_zero_model_calls",
         ],
     }
 
@@ -426,13 +515,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project", default=os.getenv("GOOGLE_CLOUD_PROJECT", ""))
     parser.add_argument("--bucket", default=os.getenv("HEALTHIA_GCS_BUCKET", ""))
     parser.add_argument("--identity-token", default=os.getenv("HEALTHIA_CLOUD_ID_TOKEN", ""))
+    parser.add_argument("--evaluation-access-key", default=os.getenv("HEALTHIA_EVALUATION_ACCESS_KEY", ""))
+    parser.add_argument("--release-sha", default=os.getenv("HEALTHIA_RELEASE_SHA", ""))
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    missing = [name for name, value in (("url", args.url), ("project", args.project), ("bucket", args.bucket)) if not value]
+    missing = [
+        name
+        for name, value in (
+            ("url", args.url),
+            ("project", args.project),
+            ("bucket", args.bucket),
+            ("release_sha", args.release_sha),
+        )
+        if not value
+    ]
     if missing:
         print(f"HEALTHIA_CLOUD_PROOF_BLOCKED missing={','.join(missing)}", file=sys.stderr)
         return 2
@@ -441,6 +541,8 @@ def main() -> int:
         project_id=args.project,
         bucket_name=args.bucket,
         identity_token=args.identity_token,
+        evaluation_access_key=args.evaluation_access_key,
+        release_sha=args.release_sha,
     )
     try:
         result = run(config)

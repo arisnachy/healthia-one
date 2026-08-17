@@ -50,7 +50,8 @@ def advance_twin_version(
     state.twin_parent_version = previous_version
     state.twin_version = previous_version + 1
     state.twin_source_event_ids.append(event.id)
-    state.living_twin_events.append(event)
+    if not any(item.id == event.id for item in state.living_twin_events):
+        state.living_twin_events.append(event)
     return {
         "advanced": True,
         "previous_version": previous_version,

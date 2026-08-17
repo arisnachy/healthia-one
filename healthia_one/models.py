@@ -635,6 +635,32 @@ class LivingTwinEvent(BaseModel):
     payload_hash: str = Field(default="", max_length=128)
 
 
+class EvaluationSession(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("evaluation"))
+    patient_namespace: str
+    status: Literal["armed", "active", "waiting_human", "completed", "exhausted", "expired", "closed"] = "armed"
+    issued_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    max_runs: int = Field(default=1, ge=1, le=5)
+    runs_used: int = Field(default=0, ge=0)
+    model_call_limit: Literal[0] = 0
+    model_calls_used: Literal[0] = 0
+    mission_id: str | None = None
+    correlation_id: str | None = None
+    release_sha: str = "local"
+    runtime_revision: str = "local"
+    completed_at: datetime | None = None
+
+
+class EvaluationBudget(BaseModel):
+    release_sha: str = "local"
+    sessions_created: int = Field(default=0, ge=0)
+    runs_used: int = Field(default=0, ge=0)
+    max_sessions: int = Field(default=2, ge=1, le=5)
+    max_runs: int = Field(default=2, ge=1, le=5)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: new_id("msg"))
     patient_id: str = "patient_demo"
@@ -678,6 +704,8 @@ class PatientState(BaseModel):
     clinical_event_edges: list[ClinicalEventEdge] = Field(default_factory=list)
     obligations: list[HealthObligation] = Field(default_factory=list)
     living_twin_events: list[LivingTwinEvent] = Field(default_factory=list)
+    evaluation_session: EvaluationSession | None = None
+    evaluation_budget: EvaluationBudget | None = None
     messages: list[ChatMessage] = Field(default_factory=list)
     audit_events: list[AuditEvent] = Field(default_factory=list)
     emitted_rule_keys: list[str] = Field(default_factory=list)
@@ -696,6 +724,16 @@ class DevicePairingClaim(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class EvaluationRunRequest(BaseModel):
+    session_id: str = Field(min_length=3, max_length=160)
+
+
+class EvaluationCompleteRequest(EvaluationRunRequest):
+    systolic: int = Field(ge=70, le=250)
+    diastolic: int = Field(ge=40, le=150)
+    pulse: int | None = Field(default=None, ge=30, le=220)
 
 
 class ChatResponse(BaseModel):

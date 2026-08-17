@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from healthia_one.models import (
     ChatRequest,
     FamilyMember,
     DevicePairingClaim,
+    EvaluationCompleteRequest,
+    EvaluationRunRequest,
     HealthConnectSyncBatch,
     HealthGoal,
     MedicationCheckIn,
@@ -83,9 +86,25 @@ async def index() -> FileResponse:
     return FileResponse(WEB_ROOT / "index.html")
 
 
+@app.get("/living")
+async def living_system() -> FileResponse:
+    if not settings.evaluation_enabled or not settings.evaluation_access_key.strip():
+        raise HTTPException(status_code=404, detail="Evaluation capability is not available")
+    return FileResponse(WEB_ROOT / "living.html")
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
     return {"status": "ok", "service": "healthia-one"}
+
+
+def _require_evaluation_capability(access_key: str | None) -> None:
+    configured = settings.evaluation_access_key.strip()
+    if not settings.evaluation_enabled or not configured:
+        raise HTTPException(status_code=404, detail="Evaluation capability is not available")
+    supplied = (access_key or "").strip()
+    if not supplied or not secrets.compare_digest(supplied, configured):
+        raise HTTPException(status_code=403, detail="Invalid evaluation capability")
 
 
 @app.get("/api/readiness")
@@ -101,6 +120,8 @@ async def readiness() -> dict:
         "evidence_backend": evidence_backend(),
         "agent_execution": "demand_driven",
         "proactive_enabled": False,
+        "living_evaluation_available": bool(settings.evaluation_enabled and settings.evaluation_access_key.strip()),
+        "release_sha": settings.release_sha,
         "auth_required": settings.auth_required,
         "patient_session_persistence": account_manager.credential_persistence,
         "patient_state_scope": "authenticated_patient" if settings.auth_required else "demo_patient",
@@ -141,6 +162,7 @@ async def readiness() -> dict:
             "fcm_private_notifications",
             "device_medication_cross_check",
             "cloud_cost_guard",
+            "bounded_living_system_evaluation",
         ],
         "truth_boundary": (
             "Patient continuity system. It does not confirm diagnoses, prescribe, change medication, "
@@ -189,6 +211,49 @@ async def bootstrap() -> dict:
 @app.get("/api/twin")
 async def twin() -> dict:
     return clinical_twin_summary(await service.snapshot())
+
+
+@app.post("/api/evaluation/arm")
+async def evaluation_arm(x_healthia_evaluation_key: str | None = Header(default=None)) -> dict:
+    _require_evaluation_capability(x_healthia_evaluation_key)
+    return await service.arm_living_evaluation()
+
+
+@app.post("/api/evaluation/run")
+async def evaluation_run(
+    request: EvaluationRunRequest,
+    x_healthia_evaluation_key: str | None = Header(default=None),
+) -> dict:
+    _require_evaluation_capability(x_healthia_evaluation_key)
+    try:
+        return await service.run_living_evaluation(request.session_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/api/evaluation/complete")
+async def evaluation_complete(
+    request: EvaluationCompleteRequest,
+    x_healthia_evaluation_key: str | None = Header(default=None),
+) -> dict:
+    _require_evaluation_capability(x_healthia_evaluation_key)
+    try:
+        return await service.complete_living_evaluation(
+            request.session_id,
+            systolic=request.systolic,
+            diastolic=request.diastolic,
+            pulse=request.pulse,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/evaluation/state")
+async def evaluation_state(x_healthia_evaluation_key: str | None = Header(default=None)) -> dict:
+    _require_evaluation_capability(x_healthia_evaluation_key)
+    return await service.living_evaluation_snapshot()
 
 
 @app.post("/api/ai/test")

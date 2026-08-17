@@ -70,7 +70,15 @@ def install_patient_auth(
             # FCM device routes are session-public only because the Android bridge
             # authenticates with its separately signed pairing bearer. The router
             # itself rejects missing/revoked/mismatched device credentials.
-            public = path.startswith("/assets/") or path.startswith("/api/devices/fcm/") or path in public_exact
+            evaluation_public = settings.evaluation_enabled and (
+                path == "/living" or path.startswith("/api/evaluation/")
+            )
+            public = (
+                path.startswith("/assets/")
+                or path.startswith("/api/devices/fcm/")
+                or path in public_exact
+                or evaluation_public
+            )
             if settings.auth_required and principal is None and not public:
                 if path == "/":
                     return RedirectResponse("/login", status_code=303)
