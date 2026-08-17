@@ -37,6 +37,7 @@
         <button data-open="results"><span class="nav-icon">▤</span><b data-i18n="nav.results">Results</b></button>
         <button data-open="discoveries"><span class="nav-icon">⌘</span><b id="discoveriesNavLabel">Discoveries</b><i id="discoveriesBadge">0</i></button>
         <button data-open="record"><span class="nav-icon">▦</span><b data-i18n="nav.record">My record</b></button>
+        <button id="livingNavButton" data-open="living"><span class="nav-icon">◉</span><b>Living System</b></button>
         <button data-open="missions"><span class="nav-icon">◎</span><b data-i18n="nav.missions">Health missions</b></button>
       </nav>
       <section class="rail-section">
@@ -67,6 +68,11 @@
             <div class="health-orb">✦</div>
             <div class="intro-copy"><span class="eyebrow" data-i18n="chat.eyebrow">HEALTHIA ONE · PERSONAL CONTINUITY</span><h1 data-i18n="chat.hero">Your health never starts over.</h1><p data-i18n="chat.hero.body">Tell me what is happening the way you would tell a person. I use your authorized memory and ask only what is missing.</p></div>
             <div class="continuity-strip" aria-label="Continuity summary"><div><span data-i18n="chat.patient">Patient</span><strong id="heroPatientName">—</strong></div><div><span data-i18n="chat.signals">Authorized signals</span><strong id="signalSummary">—</strong></div><div><span data-i18n="chat.open_missions">Open missions</span><strong id="openMissionSummary">0</strong></div></div>
+            <section id="livingPulse" class="living-pulse" aria-labelledby="livingPulseTitle" hidden>
+              <div class="living-pulse-copy"><span class="living-surface-kicker">CONTINUITY ENGINE</span><h2 id="livingPulseTitle">Your health story is connected</h2><p id="livingPulseCopy">HealthIA is watching only the signals you authorized and keeping every next step traceable.</p></div>
+              <div class="living-pulse-right"><span id="livingPulseStatus" class="living-live-status"><i aria-hidden="true"></i> Synced from your record</span><button id="livingOpenView" class="living-card-link" type="button">Open Living System</button></div>
+              <div class="living-pulse-metrics" aria-label="Continuity pulse"><div><span>Patient Twin</span><strong id="livingPulseTwin">v—</strong></div><div><span>Active missions</span><strong id="livingPulseMissions">0</strong></div><div><span>Human decisions</span><strong id="livingPulseDecisions">0</strong></div></div>
+            </section>
             <div class="suggestion-grid">
               <button data-prompt-en="I want to record my blood pressure" data-prompt-es="Quiero registrar mi presión arterial"><span>⌁</span><div><strong data-i18n="chat.prompt.bp">Record blood pressure</strong><small data-i18n="chat.prompt.bp.sub">With technique and context</small></div></button>
               <button data-prompt-en="Explain my recent results" data-prompt-es="Explícame mis resultados recientes"><span>▤</span><div><strong data-i18n="chat.prompt.results">Explain results</strong><small data-i18n="chat.prompt.results.sub">With the original file</small></div></button>
@@ -87,6 +93,29 @@
       <section id="view-results" class="view"><div class="page-body"><div class="page-kicker" data-i18n="results.kicker">EVIDENCE-BACKED RESULTS</div><h1 data-i18n="results.title">Results</h1><p data-i18n="results.body">Upload a study; HealthIA preserves the original, identifies what it can read, and links it to your clinical memory.</p><label class="drop-card"><input id="resultFilePage" type="file" accept=".json,.csv,.txt,.pdf,.png,.jpg,.jpeg,.webp" hidden><span>⇧</span><strong data-i18n="results.upload">Upload result</strong><small data-i18n="results.formats">JSON, CSV, TXT, PDF or image · max 5 MB</small></label><div id="resultProcessing" class="result-processing" role="status" aria-live="polite" hidden></div><div id="resultList" class="card-grid"></div></div></section>
       <section id="view-discoveries" class="view"><div class="page-body"><div class="page-kicker" id="discoveriesKicker">EVIDENCE · OPPORTUNITIES · RECEIPTS</div><h1 id="discoveriesTitle">Discoveries</h1><p id="discoveriesBody">Relevant science, support programs and action receipts. HealthIA keeps this quiet until something is worth your attention.</p><div id="discoveriesSummary" class="continuity-strip"></div><div id="discoveriesList" class="card-grid"></div><div id="opportunityProgramList" class="card-grid"></div><div id="opportunityReceiptList" class="card-grid"></div></div></section>
       <section id="view-record" class="view"><div class="page-body"><div class="page-kicker" data-i18n="record.kicker">PATIENT RECORD</div><h1 data-i18n="record.title">My health story in one place</h1><p data-i18n="record.body">Confirmed data, registered treatment, allergies, and signals you authorized.</p><div id="recordGrid" class="record-grid"></div></div></section>
+      <section id="view-living" class="view"><div class="page-body living-page-body">
+        <div class="living-surface" aria-labelledby="livingSurfaceTitle">
+          <header class="living-surface-header">
+            <div><span class="living-surface-kicker">CONTINUITY ENGINE</span><h1 id="livingSurfaceTitle">HealthIA is carrying your story forward</h1><p id="livingSurfaceCopy">Your authorized record, active missions and next decisions stay connected here.</p></div>
+            <span id="livingSurfaceStatus" class="living-live-status"><i aria-hidden="true"></i> Syncing authorized data</span>
+          </header>
+          <div class="living-metrics" aria-label="Continuity status">
+            <div class="living-metric"><span>Patient Twin</span><strong id="livingTwinVersion">v—</strong><small id="livingTwinMeta">Canonical record</small></div>
+            <div class="living-metric"><span>Evidence linked</span><strong id="livingEvidenceCount">0</strong><small id="livingEvidenceMeta">Persisted references</small></div>
+            <div class="living-metric"><span>Active missions</span><strong id="livingMissionCount">0</strong><small id="livingMissionMeta">Follow-up threads</small></div>
+            <div class="living-metric"><span>Human decisions</span><strong id="livingDecisionCount">0</strong><small id="livingDecisionMeta">Waiting for review</small></div>
+          </div>
+          <div class="living-surface-grid">
+            <article class="living-card living-twin-card"><header><div><span class="living-card-kicker">PATIENT TWIN</span><h2>Continuity with provenance</h2></div><span id="livingTwinBadge" class="living-card-state">READY</span></header><div id="livingTwinSummary" class="living-twin-summary"></div></article>
+            <article class="living-card living-mission-card"><header><div><span class="living-card-kicker">MISSION ORCHESTRATION</span><h2>Work that stays open</h2></div><button id="livingOpenMissions" class="living-card-link" type="button">View missions</button></header><div id="livingMissionList" class="living-mission-list"></div></article>
+          </div>
+          <div class="living-surface-grid living-surface-grid-bottom">
+            <article class="living-card living-activity-card"><header><div><span class="living-card-kicker">AUTONOMOUS ACTIVITY</span><h2>What HealthIA recorded</h2></div><span id="livingActivityCount" class="living-card-count">0 receipts</span></header><ol id="livingActivityList" class="living-activity-list" aria-live="polite"></ol></article>
+            <article class="living-card living-decision-card"><header><div><span class="living-card-kicker">HUMAN CHECKPOINT</span><h2>Decisions that stay yours</h2></div><span id="livingDecisionBadge" class="living-card-state living-card-state-muted">CLEAR</span></header><div id="livingDecisionQueue" class="living-decision-queue"></div></article>
+          </div>
+          <p class="living-surface-boundary"><span aria-hidden="true">⌁</span> HealthIA organizes authorized evidence and guides follow-up. It does not diagnose, prescribe or silently change treatment.</p>
+        </div>
+      </div></section>
       <section id="view-missions" class="view"><div class="page-body"><div class="page-kicker" data-i18n="missions.kicker">CONTINUITY & FOLLOW-UP</div><h1 data-i18n="missions.title">Health missions</h1><p data-i18n="missions.body">Living tasks that stay open until a verifiable next step or closure exists.</p><div id="missionList" class="card-grid"></div></div></section>
     </main>
 
@@ -107,6 +136,7 @@
   <div id="toast" class="toast" hidden></div>
   <script src="/assets/i18n.js" defer></script>
   <script src="/assets/app.js" defer></script>
+  <script src="/assets/living-surface.js" defer></script>
   <script src="/assets/clinical-council.js" defer></script>
   <script src="/assets/conversational-interview.js" defer></script>
   <script src="/assets/patient-record.js" defer></script>

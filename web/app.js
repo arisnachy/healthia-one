@@ -150,6 +150,7 @@ function renderAll() {
   refs.chatScroll.classList.toggle("conversation-started", firstPatient >= 0);
   renderContext(); renderToday(); renderMeasurements(); renderResults(); renderMissions();
   document.dispatchEvent(new CustomEvent("healthia:ui-updated"));
+  document.dispatchEvent(new CustomEvent("healthia:state-updated", {detail: {data}}));
   refs.chatScroll.scrollTop = firstPatient < 0 ? 0 : refs.chatScroll.scrollHeight;
 }
 
