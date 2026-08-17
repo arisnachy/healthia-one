@@ -7,7 +7,7 @@ This document isolates the optional bonus evidence from the frozen HealthIA ONE 
 | Bonus path | Status | Evidence |
 |---|---|---|
 | Public build content | **PUBLISHED** | Public long-form build article: https://github.com/arisnachy/healthia-one/issues/93 |
-| Social media post | **READY TO PUBLISH** | Exact X/LinkedIn copy below; must be published from an authorized social account before claiming this bonus. |
+| Social media post | **PUBLISHED — X** | Public post URL supplied after publication: https://x.com/i/status/2089481967821545835 |
 | Google AI model integration | **LIVE PROVEN — VEO** | HealthIA Explain / Vertex AI Veo 3.1 Fast implementation and LIVE proof lineage: https://github.com/arisnachy/healthia-one/pull/43 |
 
 ## 1. Public build content
@@ -26,24 +26,21 @@ It contains the required declaration:
 
 Do not mark a private, draft, or unlisted copy as the bonus artifact. Use the public URL above.
 
-## 2. Social media post — exact copy
+## 2. Social media post — published on X
 
-The following copy is prepared for **X or LinkedIn** and includes the required hashtag. Publication is intentionally not claimed until an authorized social account actually publishes it.
+Public X post:
 
-> We built **HealthIA ONE** for the All Things Agentic Hackathon: a patient-owned health continuity agent that carries unfinished health work forward instead of starting over with every chat.  
->  
-> HealthIA combines Gemini + Google ADK, durable Patient Twin missions, Firestore/GCS, consent-aware Google actions, ONE SAFETY execution tickets + receipts, Cloud Trace observability, and a **real Vertex AI Veo 3.1 Fast** patient-education video path.  
->  
-> The core rule: authorization is not execution evidence. HealthIA only claims the outside world changed when a real connector returns durable proof.  
->  
-> Demo: https://youtu.be/dOIhP22SxZ8  
-> Build article: https://github.com/arisnachy/healthia-one/issues/93  
-> Repo: https://github.com/arisnachy/healthia-one  
->  
-> **Your health never starts over.**  
-> #AllThingsAgenticHackathon #GoogleCloud #VertexAI #AgenticAI #HealthAI
+https://x.com/i/status/2089481967821545835
 
-After publishing on X or LinkedIn, add the public post URL to this document and to `hackathon/evidence/bonus_points_2026.json` before claiming the social-media bonus.
+The published copy is the prepared X version and includes the required hashtag:
+
+> HealthIA ONE turns health chat into durable, consent-aware missions: Gemini + ADK, ONE SAFETY, real Google actions/receipts, Cloud Trace, and a live Vertex AI Veo 3.1 Fast education path.
+>
+> Demo: https://youtu.be/dOIhP22SxZ8
+>
+> #AllThingsAgenticHackathon
+
+Publication was confirmed by the project owner with the public status URL on 2026-08-17. X did not expose the status body to this session's independent web fetch/index at the time the evidence file was updated, so the repository records the publication source precisely as **owner-confirmed public URL** rather than claiming an independent third-party content fetch.
 
 ## 3. Google AI bonus — Veo, no Gemma required
 
@@ -111,6 +108,9 @@ Do not describe the Veo branch as the exact final ONE SAFETY runtime. Describe i
 - [x] Public build content exists.
 - [x] Public build content includes the required hackathon-purpose declaration.
 - [x] Public build content links to project/demo evidence.
+- [x] Social post was published on X.
+- [x] Social post uses `#AllThingsAgenticHackathon` in the prepared published copy.
+- [x] Public X status URL is recorded in the evidence manifest.
 - [x] Google AI bonus uses Veo; no unnecessary Gemma integration added.
 - [x] Veo model/version is named precisely.
 - [x] Veo has an implementation path, not a slide-only claim.
@@ -118,13 +118,12 @@ Do not describe the Veo branch as the exact final ONE SAFETY runtime. Describe i
 - [x] Veo proof is synthetic-only and sends no patient data.
 - [x] Veo output is validated and hashable.
 - [x] Final ONE SAFETY runtime is not rewritten to obtain bonus points.
-- [ ] Social post has been published from an authorized X/LinkedIn/Instagram/Facebook account.
-- [ ] Public social-post URL has been added to the evidence manifest.
 
 ## Canonical links
 
 - Final judge entry point: https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md
 - Official YouTube demo: https://youtu.be/dOIhP22SxZ8
 - Public build article: https://github.com/arisnachy/healthia-one/issues/93
+- Public X post: https://x.com/i/status/2089481967821545835
 - Veo implementation / LIVE proof lineage: https://github.com/arisnachy/healthia-one/pull/43
 - Repository: https://github.com/arisnachy/healthia-one
