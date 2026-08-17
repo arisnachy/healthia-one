@@ -26,16 +26,21 @@ class Settings(BaseSettings):
     cost_control_ui: bool = True
     ai_max_output_tokens: int = 1400
 
-    # Enterprise AI ingress defense. The local deterministic injection filter is
-    # always available; Google Model Armor is opt-in and fails closed once
-    # enabled unless the deployment explicitly chooses otherwise.
+    # ONE SAFETY is deliberately off for local/test runs but automatically
+    # becomes fail-closed in HEALTHIA_ENV=cloud. Set
+    # HEALTHIA_ONE_SAFETY_AUTO_ENABLE_CLOUD=false only for an explicitly
+    # controlled recovery deployment.
+    one_safety_auto_enable_cloud: bool = True
+
+    # Enterprise AI ingress defense. The deterministic local injection filter
+    # is always available. Cloud mode additionally enables Google Model Armor.
     model_armor_enabled: bool = False
     model_armor_fail_closed: bool = True
     model_armor_location: str = "us-central1"
-    model_armor_template_id: str = ""
+    model_armor_template_id: str = "healthia-one-safety"
 
-    # OpenTelemetry is opt-in locally. Cloud deployments can export the same
-    # sanitized spans to Google Cloud Trace without placing PHI in attributes.
+    # OpenTelemetry is off locally. Cloud mode automatically exports the same
+    # sanitized spans to Google Cloud Trace; callers must never attach PHI.
     otel_enabled: bool = False
     cloud_trace_enabled: bool = False
     otel_service_name: str = "healthia-one"
@@ -56,6 +61,18 @@ class Settings(BaseSettings):
     accounts_path: Path = Path(".healthia-one/accounts.json")
     session_cookie_name: str = "healthia_session"
     session_hours: int = 12
+
+    def model_post_init(self, __context) -> None:
+        # Every production Cloud Run deployment already declares
+        # HEALTHIA_ENV=cloud. Binding ONE SAFETY to that deployment contract
+        # prevents Model Armor/Trace from being silently omitted by an older
+        # deploy script or workflow. Local/tests remain network-free by default.
+        if self.env.strip().lower() == "cloud" and self.one_safety_auto_enable_cloud:
+            self.model_armor_enabled = True
+            self.otel_enabled = True
+            self.cloud_trace_enabled = True
+            if not self.model_armor_template_id.strip():
+                self.model_armor_template_id = "healthia-one-safety"
 
     @property
     def vertex_ai_enabled(self) -> bool:
