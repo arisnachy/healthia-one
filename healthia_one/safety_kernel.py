@@ -33,6 +33,7 @@ class HealthActionTicket(BaseModel):
     idempotency_key: str = Field(min_length=64, max_length=64)
     authorization_id: str = ""
     payload_hash: str = Field(min_length=64, max_length=64)
+    trace_id: str = ""
     issued_at: datetime = Field(default_factory=utc_now)
     expires_at: datetime
     consumed_at: datetime | None = None
@@ -171,12 +172,22 @@ class HealthIASafetyKernel:
         payload = json.dumps(request.payload, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def issue(self, request: GoogleActionRequest, *, authorization_id: str, idempotency_key: str) -> HealthActionTicket:
+    def issue(
+        self,
+        request: GoogleActionRequest,
+        *,
+        authorization_id: str,
+        idempotency_key: str,
+        trace_id: str = "",
+    ) -> HealthActionTicket:
         if not request.patient_id.strip() or not request.mission_id.strip():
             raise PermissionError("Safety Kernel requires patient and mission binding")
         policy = ACTION_POLICIES[request.action]
         if policy.explicit_authorization_required and not authorization_id.strip():
             raise PermissionError("Safety Kernel requires explicit action authorization")
+        normalized_trace = trace_id.strip().lower()
+        if normalized_trace and (len(normalized_trace) != 32 or any(ch not in "0123456789abcdef" for ch in normalized_trace)):
+            raise ValueError("Safety Kernel requires a canonical 32-hex trace id")
         now = utc_now()
         ticket = HealthActionTicket(
             patient_id=request.patient_id,
@@ -186,6 +197,7 @@ class HealthIASafetyKernel:
             idempotency_key=idempotency_key,
             authorization_id=authorization_id.strip(),
             payload_hash=self._payload_hash(request),
+            trace_id=normalized_trace,
             issued_at=now,
             expires_at=now + timedelta(seconds=self.ticket_ttl_seconds),
         )

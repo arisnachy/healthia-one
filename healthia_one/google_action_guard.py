@@ -19,6 +19,24 @@ from healthia_one.observability import span
 from healthia_one.safety_kernel import HealthIASafetyKernel, MemoryHealthActionTicketStore
 
 
+def _trace_id_hex(current_span) -> str:
+    try:
+        context = current_span.get_span_context()
+        if not getattr(context, "is_valid", False):
+            return ""
+        return f"{int(context.trace_id):032x}"
+    except Exception:
+        return ""
+
+
+def _set_span_attribute(current_span, key: str, value: object) -> None:
+    try:
+        if current_span is not None and value is not None and isinstance(value, (str, bool, int, float)):
+            current_span.set_attribute(f"healthia.{key}", value)
+    except Exception:
+        pass
+
+
 class GuardedGoogleActionExecutor:
     """Durable authorization + one-time execution boundary around connectors.
 
@@ -71,13 +89,21 @@ class GuardedGoogleActionExecutor:
             action=request.action.value,
             service=request.service.value,
             external_mutation=ACTION_POLICIES[request.action].mutates_external_state,
-        ):
-            return self._execute_guarded(request)
+        ) as current_span:
+            return self._execute_guarded(request, current_span=current_span)
 
-    def _execute_guarded(self, request: GoogleActionRequest) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
+    def _execute_guarded(
+        self,
+        request: GoogleActionRequest,
+        *,
+        current_span=None,
+    ) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
         key = build_idempotency_key(request)
         completed = self.receipt_store.get(request.patient_id, key)
         if completed is not None and completed.status == "completed":
+            _set_span_attribute(current_span, "receipt_id", completed.id)
+            _set_span_attribute(current_span, "outcome_status", completed.status)
+            _set_span_attribute(current_span, "idempotent_replay", True)
             return completed, ConnectorResult(
                 resource_id=completed.resource_id,
                 safe_summary=completed.safe_summary,
@@ -97,14 +123,20 @@ class GuardedGoogleActionExecutor:
                     ),
                 )
                 self.receipt_store.save(receipt)
+                _set_span_attribute(current_span, "receipt_id", receipt.id)
+                _set_span_attribute(current_span, "outcome_status", receipt.status)
                 return receipt, None
 
+        trace_id = _trace_id_hex(current_span)
         try:
             ticket = self.safety_kernel.issue(
                 request,
                 authorization_id=authorization_id,
                 idempotency_key=key,
+                trace_id=trace_id,
             )
+            _set_span_attribute(current_span, "ticket_id", ticket.id)
+            _set_span_attribute(current_span, "trace_correlated", bool(ticket.trace_id))
             self.safety_kernel.consume(ticket, request, idempotency_key=key)
         except (KeyError, PermissionError, ValueError) as exc:
             receipt = build_google_receipt(
@@ -113,11 +145,15 @@ class GuardedGoogleActionExecutor:
                 safe_summary=f"ONE SAFETY blocked connector execution: {exc}",
             )
             self.receipt_store.save(receipt)
+            _set_span_attribute(current_span, "receipt_id", receipt.id)
+            _set_span_attribute(current_span, "outcome_status", receipt.status)
             return receipt, None
 
         grants = self.grant_store.list_for_patient(request.patient_id)
         receipt, outcome = self.executor.execute(request, grants)
         self.safety_kernel.record_outcome(ticket, receipt_id=receipt.id, status=receipt.status)
+        _set_span_attribute(current_span, "receipt_id", receipt.id)
+        _set_span_attribute(current_span, "outcome_status", receipt.status)
 
         if receipt.status == "completed" and authorization_id:
             authorization = self.authorization_store.get(request.patient_id, authorization_id)

@@ -71,15 +71,37 @@ def test_mutating_action_requires_patient_authorization_before_ticket():
         kernel.issue(req, authorization_id="", idempotency_key=build_idempotency_key(req))
 
 
-def test_ticket_links_attempt_to_connector_receipt_without_making_ticket_the_receipt():
+def test_ticket_links_trace_attempt_and_connector_receipt_without_conflating_them():
     store = MemoryHealthActionTicketStore()
     kernel = HealthIASafetyKernel(store)
     req = _request()
     key = build_idempotency_key(req)
-    ticket = kernel.issue(req, authorization_id="auth_a", idempotency_key=key)
+    trace_id = "0123456789abcdef0123456789abcdef"
+    ticket = kernel.issue(
+        req,
+        authorization_id="auth_a",
+        idempotency_key=key,
+        trace_id=trace_id,
+    )
     kernel.consume(ticket, req, idempotency_key=key)
 
     linked = kernel.record_outcome(ticket, receipt_id="receipt_123", status="completed")
+    assert linked.trace_id == trace_id
+    assert linked.id != linked.receipt_id
     assert linked.receipt_id == "receipt_123"
     assert linked.outcome_status == "completed"
     assert linked.status == "consumed"
+
+
+def test_ticket_rejects_noncanonical_trace_id():
+    store = MemoryHealthActionTicketStore()
+    kernel = HealthIASafetyKernel(store)
+    req = _request()
+
+    with pytest.raises(ValueError, match="32-hex trace id"):
+        kernel.issue(
+            req,
+            authorization_id="auth_a",
+            idempotency_key=build_idempotency_key(req),
+            trace_id="not-a-trace",
+        )
