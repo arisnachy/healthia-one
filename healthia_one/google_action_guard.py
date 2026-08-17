@@ -14,6 +14,7 @@ from healthia_one.google_constellation_store import (
     GoogleReceiptStore,
     build_action_intent_key,
 )
+from healthia_one.observability import span
 from healthia_one.safety_kernel import HealthIASafetyKernel, MemoryHealthActionTicketStore
 
 
@@ -63,6 +64,16 @@ class GuardedGoogleActionExecutor:
         return authorization
 
     def execute(self, request: GoogleActionRequest) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
+        # Trace attributes are deliberately limited to non-PHI operational facts.
+        with span(
+            "google.action.guarded_execute",
+            action=request.action.value,
+            service=request.service.value,
+            external_mutation=bool(getattr(request, "action", None)),
+        ):
+            return self._execute_guarded(request)
+
+    def _execute_guarded(self, request: GoogleActionRequest) -> tuple[GoogleActionReceipt, ConnectorResult | None]:
         key = build_idempotency_key(request)
         completed = self.receipt_store.get(request.patient_id, key)
         if completed is not None and completed.status == "completed":
