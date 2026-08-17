@@ -123,6 +123,11 @@ def test_cloud_identity_token_is_not_passed_in_process_arguments() -> None:
     assert '$env:HEALTHIA_CLOUD_ID_TOKEN = $providerIdentityToken' in deploy
     assert '$env:HEALTHIA_CLOUD_ID_TOKEN = $identityToken' in deploy
     assert 'Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN' in deploy
+    assert '$env:HEALTHIA_CLOUD_ACCESS_TOKEN = $cloudAccessToken' in deploy
+    assert 'Remove-Item Env:HEALTHIA_CLOUD_ACCESS_TOKEN' in deploy
     assert '$providerProofArgs += @("--identity-token"' not in deploy
     assert '$proofArgs += @("--identity-token"' not in deploy
     assert 'default=os.getenv("HEALTHIA_CLOUD_ID_TOKEN", "")' in provider
+    verifier = Path("deployment/verify_cloud_demo.py").read_text(encoding="utf-8")
+    assert 'os.getenv("HEALTHIA_CLOUD_ACCESS_TOKEN", "")' in verifier
+    assert "credentials=_cloud_credentials()" in verifier

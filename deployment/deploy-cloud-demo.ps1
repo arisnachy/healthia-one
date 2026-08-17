@@ -299,6 +299,11 @@ if (-not $SkipStrictProof) {
         throw "No se pudo cargar la capacidad privada del evaluador para la prueba estricta."
     }
     $env:HEALTHIA_EVALUATION_ACCESS_KEY = $evaluationAccessKey
+    $cloudAccessToken = (& gcloud auth print-access-token).Trim()
+    if ([string]::IsNullOrWhiteSpace($cloudAccessToken)) {
+        throw "No se pudo obtener access token efimero para releer Firestore/GCS."
+    }
+    $env:HEALTHIA_CLOUD_ACCESS_TOKEN = $cloudAccessToken
     Write-Host "Prueba estricta: Cloud Run + auth A/B + Gemini 3.5/ADK + Firestore + GCS + gemelo..." -ForegroundColor Cyan
     try {
         & python @proofArgs | Tee-Object -FilePath "deployment/cloud-proof-latest.json" | Out-Host
@@ -309,7 +314,9 @@ if (-not $SkipStrictProof) {
     finally {
         Remove-Item Env:HEALTHIA_EVALUATION_ACCESS_KEY -ErrorAction SilentlyContinue
         Remove-Item Env:HEALTHIA_CLOUD_ID_TOKEN -ErrorAction SilentlyContinue
+        Remove-Item Env:HEALTHIA_CLOUD_ACCESS_TOKEN -ErrorAction SilentlyContinue
         $evaluationAccessKey = $null
+        $cloudAccessToken = $null
         $identityToken = $null
         $proofArgs = $null
     }

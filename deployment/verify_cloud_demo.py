@@ -20,6 +20,15 @@ _COOKIE_JAR = http.cookiejar.CookieJar()
 _OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_COOKIE_JAR))
 
 
+def _cloud_credentials():
+    token = os.getenv("HEALTHIA_CLOUD_ACCESS_TOKEN", "").strip()
+    if not token:
+        return None
+    from google.oauth2.credentials import Credentials
+
+    return Credentials(token=token)
+
+
 @dataclass(frozen=True)
 class CloudProofConfig:
     base_url: str
@@ -171,7 +180,8 @@ def verify_firestore_and_gcs(
     except Exception as exc:
         raise CloudProofError("google-cloud-firestore and google-cloud-storage must be installed") from exc
 
-    firestore_client = firestore.Client(project=config.project_id)
+    credentials = _cloud_credentials()
+    firestore_client = firestore.Client(project=config.project_id, credentials=credentials)
     snapshot = firestore_client.collection("healthia_one_patients").document(patient_id).get()
     if not snapshot.exists:
         raise CloudProofError(f"Firestore patient document does not exist: {patient_id}")
@@ -198,7 +208,7 @@ def verify_firestore_and_gcs(
     object_name = storage_path[len(expected_prefix):]
     if not object_name.startswith(f"patients/{patient_id}/"):
         raise CloudProofError(f"GCS object is not patient scoped: {object_name}")
-    blob = storage.Client(project=config.project_id).bucket(config.bucket_name).blob(object_name)
+    blob = storage.Client(project=config.project_id, credentials=credentials).bucket(config.bucket_name).blob(object_name)
     if not blob.exists():
         raise CloudProofError(f"GCS object does not exist: {object_name}")
     blob.reload()
@@ -219,7 +229,7 @@ def verify_living_system_firestore(config: CloudProofConfig, session_id: str) ->
     except Exception as exc:
         raise CloudProofError("google-cloud-firestore must be installed") from exc
 
-    snapshot = firestore.Client(project=config.project_id).collection("healthia_one_patients").document("patient_eval_living").get()
+    snapshot = firestore.Client(project=config.project_id, credentials=_cloud_credentials()).collection("healthia_one_patients").document("patient_eval_living").get()
     if not snapshot.exists:
         raise CloudProofError("Firestore synthetic evaluator document does not exist")
     state = snapshot.to_dict() or {}
