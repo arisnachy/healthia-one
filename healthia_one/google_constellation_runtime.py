@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -57,10 +57,10 @@ class GoogleConstellationRuntime:
     grant_store: object
     receipt_store: object
     authorization_store: object
-    action_ticket_store: object
     oauth_connection_store: object
     raw_executor: GoogleActionExecutor
     guarded_executor: GuardedGoogleActionExecutor
+    action_ticket_store: object = field(default_factory=MemoryHealthActionTicketStore)
 
 
 class GoogleConstellationService:
