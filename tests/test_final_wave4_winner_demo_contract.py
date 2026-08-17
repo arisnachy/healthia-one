@@ -39,6 +39,9 @@ def test_winner_recorder_is_continuous_wave4_taskmaster_story() -> None:
     assert 'api_post_json(page, "/api/demo/device-sync")' in RECORDER
     assert '.main-nav [data-open="devices"]' in RECORDER
     assert '.main-nav [data-open="timeline"]' in RECORDER
+    assert 'page.wait_for_timeout(11_000)' in RECORDER
+    assert 'page.wait_for_timeout(10_000)' in RECORDER
+    assert 'overlay(page, "HealthIA noticed the follow-up was overdue.' not in RECORDER
 
 
 def test_cutlock_requires_real_candidates_and_no_preconsent_execution() -> None:

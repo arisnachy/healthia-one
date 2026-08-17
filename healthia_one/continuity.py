@@ -9,20 +9,34 @@ from healthia_one.models import AgentStep, PatientState, ProactiveFinding, RiskL
 CONDITION_PACKS: dict[str, dict[str, Any]] = {
     "hypertension": {
         "label": "Hipertensión",
+        "label_en": "Hypertension",
         "signals": ["presión arterial", "síntomas de alarma", "adherencia reportada", "actividad", "peso"],
+        "signals_en": ["blood pressure", "warning symptoms", "reported adherence", "activity", "weight"],
         "questions": [
             "¿Las mediciones se tomaron con técnica comparable?",
             "¿Hubo dolor de pecho, falta de aire, debilidad o dificultad para hablar?",
             "¿Se omitió alguna toma del tratamiento registrado?",
         ],
+        "questions_en": [
+            "Were the readings taken with comparable technique?",
+            "Was there chest pain, shortness of breath, weakness, or difficulty speaking?",
+            "Was any recorded treatment dose missed?",
+        ],
     },
     "weight_management": {
         "label": "Seguimiento de peso",
+        "label_en": "Weight follow-up",
         "signals": ["peso", "actividad", "alimentación reportada", "hinchazón", "sueño"],
+        "signals_en": ["weight", "activity", "reported nutrition", "swelling", "sleep"],
         "questions": [
             "¿Se utilizó la misma balanza y horario?",
             "¿Cambió la actividad, alimentación, sueño o medicación?",
             "¿Existe hinchazón, falta de aire u otro síntoma nuevo?",
+        ],
+        "questions_en": [
+            "Was the same scale and time of day used?",
+            "Did activity, nutrition, sleep, or medication change?",
+            "Is there swelling, shortness of breath, or another new symptom?",
         ],
     },
 }
@@ -57,7 +71,17 @@ def medication_summary(state: PatientState) -> dict[str, Any]:
 def build_timeline(state: PatientState) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
 
-    def add(event_id: str, event_type: str, occurred_at: datetime, title: str, detail: str, source: str) -> None:
+    def add(
+        event_id: str,
+        event_type: str,
+        occurred_at: datetime,
+        title: str,
+        detail: str,
+        source: str,
+        *,
+        title_en: str | None = None,
+        detail_en: str | None = None,
+    ) -> None:
         events.append(
             {
                 "id": event_id,
@@ -66,23 +90,25 @@ def build_timeline(state: PatientState) -> list[dict[str, Any]]:
                 "title": title,
                 "detail": detail,
                 "source": source,
+                "title_en": title_en or title,
+                "detail_en": detail_en or detail,
             }
         )
 
     for item in state.vitals:
         bp = f"{item.systolic or '—'}/{item.diastolic or '—'}"
-        add(item.id, "vital", item.measured_at, f"Presión {bp}", f"Pulso {item.pulse or '—'}", item.source.source_type)
+        add(item.id, "vital", item.measured_at, f"Presión {bp}", f"Pulso {item.pulse or '—'}", item.source.source_type, title_en=f"Blood pressure {bp}", detail_en=f"Pulse {item.pulse or '—'}")
     for item in state.weights:
-        add(item.id, "weight", item.measured_at, f"Peso {item.weight_kg:.1f} kg", item.note or "Registro del paciente", item.source.source_type)
+        add(item.id, "weight", item.measured_at, f"Peso {item.weight_kg:.1f} kg", item.note or "Registro del paciente", item.source.source_type, title_en=f"Weight {item.weight_kg:.1f} kg", detail_en=item.note or "Patient record")
     for item in state.activity:
-        add(item.id, "activity", item.measured_at, f"Actividad: {item.steps} pasos", f"{item.active_minutes} minutos activos", "patient_entry")
+        add(item.id, "activity", item.measured_at, f"Actividad: {item.steps} pasos", f"{item.active_minutes} minutos activos", "patient_entry", title_en=f"Activity: {item.steps} steps", detail_en=f"{item.active_minutes} active minutes")
     for item in state.results:
         add(item.id, "result", item.uploaded_at, item.panel, f"{item.filename} · {item.status}", item.source.source_type)
     for item in state.documents:
-        add(item.id, "document", item.uploaded_at, item.title, f"{item.category} · {item.status}", item.source.source_type)
+        add(item.id, "document", item.uploaded_at, item.title, f"{item.category} · {item.status}", item.source.source_type, title_en=item.title.replace("Evidencia ·", "Evidence ·"))
     for item in state.medication_checkins:
         plan = next((plan for plan in state.medication_plans if plan.id == item.medication_id), None)
-        add(item.id, "medication", item.recorded_at, f"Tratamiento: {plan.name if plan else 'medicamento'}", item.status, item.source.source_type)
+        add(item.id, "medication", item.recorded_at, f"Tratamiento: {plan.name if plan else 'medicamento'}", item.status, item.source.source_type, title_en=f"Treatment: {plan.name if plan else 'medication'}")
     for item in state.appointments:
         add(item.id, "appointment", item.scheduled_at, item.title, f"{item.specialty} · {item.status}", item.source.source_type)
     for item in state.missions:

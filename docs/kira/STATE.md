@@ -7,7 +7,8 @@ Publish a sub-four-minute Living System video that makes HealthIA ONE's breadth 
 - Clean implementation branch starts from merged `main` at `8f4b468336499eb9175ae9be1caaac745f24782e`.
 - The recorder now shows a synthetic Health Connect event entering the real product before chat, Google mission consent and execution, evidence-first multimodal handling, record/timeline continuity after relogin, and exact-head no-prompt autonomy proof.
 - Narration frames the journey as one living system rather than a feature catalog.
-- Focused video/device contracts pass locally; exact-head Cloud generation is pending.
+- First exact-head Living System render passed Cloud CUTLOCK at 3:55; visual QA found Judge Mode overlay occlusion and mixed-language timeline copy.
+- Both polish defects are repaired; 547 local tests pass. The replacement exact-head render is pending.
 
 ## Victory gate
 - Final branch HEAD green in full CI.

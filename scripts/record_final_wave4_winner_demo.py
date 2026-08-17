@@ -421,10 +421,9 @@ def run() -> dict:
         body = page.locator("body").inner_text()
         require("HealthIA noticed the follow-up was overdue. Nobody prompted it." in body, "autonomous judge sentence is not visible")
         require("JUDGE MODE · READ ONLY · SYNTHETIC" in body, "public truth boundary is not visible")
-        overlay(page, "HealthIA noticed the follow-up was overdue. Nobody prompted it.", "One opted-in blood-pressure mission crossed five durable boundaries: Firestore, Eventarc, private Cloud Run, real Gmail with Pub/Sub reply recovery, and a canonical measurement — with zero model calls to detect that follow-up was due.", 11)
-        clear_overlay(page)
+        page.wait_for_timeout(11_000)
         page.locator(".grid").scroll_into_view_if_needed()
-        overlay(page, "One living system — not a medical chatbot", "Signals become evidence. Evidence becomes durable missions. Safe work continues across private workers and real Google connectors. Human authority stays human. Every claimed outcome needs a receipt, and the patient never starts over.", 10)
+        page.wait_for_timeout(10_000)
         report["judge_health"] = judge_health
         report["autonomous_proof"] = {key: autonomous_proof.get(key) for key in ("boundary_count", "model_calls_for_trigger", "source_sha", "live_proof_run", "judge_mode")}
         report["checks"].append("exact_head_autonomous_continuity_judge_mode")
