@@ -104,7 +104,7 @@ def record_living_system(page: Page, report: dict, access_key: str) -> None:
 
     page.locator("#activateButton").click()
     page.wait_for_function("document.querySelector('#eventCount')?.textContent === '10 / 14'", timeout=30_000)
-    page.wait_for_function("document.querySelector('#missionStatus')?.textContent === 'WAITING HUMAN'", timeout=10_000)
+    page.wait_for_function("document.querySelector('#systemStatus')?.textContent === 'WAITING FOR HUMAN'", timeout=10_000)
     waiting = evaluation_json(page, "/api/evaluation/state", access_key)
     waiting_session = waiting.get("session") or {}
     waiting_twin = waiting.get("twin") or {}

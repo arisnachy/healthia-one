@@ -100,6 +100,8 @@ def test_recorder_proves_real_living_system_boundary_and_receipt() -> None:
         'X-HealthIA-Evaluation-Key',
         "patient_eval_living",
         "10 / 14",
+        "#systemStatus",
+        "WAITING FOR HUMAN",
         "waiting_human",
         "14 / 14",
         'completed_twin.get("version") == 3',
