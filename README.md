@@ -145,23 +145,75 @@ Cloud execution uses service identity / ADC rather than embedding Gemini credent
 | HealthActionTicket | `hat_021b1b6b1b4542e2` |
 | Receipt | `receipt_95ba26286e6f4e15` |
 
-## Reproduce locally with zero Google AI spend
+## Reproduce from scratch — zero Google AI spend
+
+These steps are intentionally written for a judge or reviewer starting from a clean machine.
+
+### Prerequisites
+
+- Git
+- Python **3.12 or newer**
+
+No Google Cloud credentials, Gemini key, patient data, or paid API access are required for the local deterministic path below.
+
+### 1. Clone the repository
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[test]"
-HEALTHIA_LLM_BACKEND=mock HEALTHIA_COST_MODE=local HEALTHIA_AI_REQUEST_LIMIT=0 uvicorn app.main:app --port 8000
+git clone https://github.com/arisnachy/healthia-one.git
+cd healthia-one
 ```
 
-Windows helper:
+### 2. Create and activate a virtual environment
+
+macOS / Linux:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+```
+
+Windows PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+### 3. Install the application and test dependencies
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e ".[test]"
+```
+
+### 4. Start HealthIA in deterministic local mode
+
+macOS / Linux:
+
+```bash
+HEALTHIA_LLM_BACKEND=mock HEALTHIA_COST_MODE=local HEALTHIA_AI_REQUEST_LIMIT=0 uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Windows PowerShell:
+
+```powershell
+$env:HEALTHIA_LLM_BACKEND="mock"
+$env:HEALTHIA_COST_MODE="local"
+$env:HEALTHIA_AI_REQUEST_LIMIT="0"
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000` in a browser.
+
+Windows users may alternatively use the repository helper:
 
 ```powershell
 .\deployment\run-local-secure.ps1
 ```
 
-Verification:
+### 5. Verify the build
+
+From a second terminal with the virtual environment activated:
 
 ```bash
 pytest
@@ -171,7 +223,7 @@ python scripts/judge_omega.py
 python scripts/smoke_test.py
 ```
 
-Controlled live/Cloud proofs are separate, explicit and request-capped.
+Expected result: the deterministic local path runs without Google AI spend. Controlled live/Cloud proofs are intentionally separate, explicit and request-capped; their exact passing evidence is linked above rather than requiring a judge to provision our Cloud environment.
 
 ## Bonus evidence
 
