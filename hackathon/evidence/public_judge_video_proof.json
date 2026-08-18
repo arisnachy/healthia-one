@@ -1,33 +1,47 @@
 {
-  "schema_version": 1,
-  "captured_at": "2026-08-08",
-  "status": "PASS",
+  "schema_version": 2,
+  "updated_at": "2026-08-18",
+  "status": "CANONICAL_CURRENT_SUBMISSION",
   "synthetic_only": true,
-  "public_url": "https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm",
-  "release_page": "https://github.com/arisnachy/healthia-one/releases/tag/healthia-one-hackathon-judge-demo-2026",
-  "release_tag": "healthia-one-hackathon-judge-demo-2026",
-  "source_recording_run_id": 31265639488,
-  "source_recording_artifact_id": 9024139098,
-  "source_candidate_sha": "3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e",
-  "video_sha256": "cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19",
-  "release_publication_proof": {
-    "workflow_run_id": 31267268584,
-    "workflow_head_sha": "c58a1ad8230a0bc5c58aa3436420ab4ff55c2efa",
-    "artifact_id": 9024528554,
-    "artifact_name": "HealthIA-ONE-GitHub-release-video-proof",
-    "artifact_digest": "sha256:281703f31d7a5a42bd28fdce18f455cfe46b91263304e1e9b8c2fbfbf62cb7d5",
-    "source_sha_verified": true,
-    "anonymous_download_verified": true,
-    "anonymous_download_sha256_match": true
+  "canonical_submission": {
+    "youtube_url": "https://youtu.be/v7SJUkzzRxw",
+    "duration_seconds": 235.0,
+    "release_tag": "healthia-one-autonomous-winner-demo-2026",
+    "release_asset": "HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4",
+    "release_url": "https://github.com/arisnachy/healthia-one/releases/download/healthia-one-autonomous-winner-demo-2026/HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4",
+    "resolution": "1600x900",
+    "fps": 25,
+    "enhanced_master_sha256": "2c82929888c613960cb44ba7cb0c111b22e8a205cf38643d3199f3a1c5e542cf",
+    "charon_audio_bitstream_sha256": "3a78b5e3b98c441b138b691d803e2f3859e51e2a2795db22314d6ea4b230cc16",
+    "audio_bitstream_preserved": true,
+    "final_proof_file": "hackathon/evidence/one_safety_final_proof.json",
+    "enhanced_cloud_proof_run_id": 32054818666,
+    "enhanced_artifact_id": 9296123186,
+    "enhanced_artifact_zip_sha256": "253a474e7a8bd7fce373f3ff1f5697e0522f27810fe76d33dd4a902366cd9365"
   },
-  "independent_public_probe": {
-    "workflow_run_id": 31267268597,
-    "workflow_head_sha": "c58a1ad8230a0bc5c58aa3436420ab4ff55c2efa",
-    "artifact_id": 9024526089,
-    "artifact_name": "HealthIA-ONE-public-video-probe",
-    "artifact_digest": "sha256:ff151da75a8809b4ac493b909f526dd484ef7c6e9248e4c7b11bb0e0569d06d7",
-    "authentication_required": false,
-    "full_video_sha256_match": true
+  "machine_verified_current_master": {
+    "artifact_downloaded_from_github_actions": true,
+    "duration_matches_final_proof": true,
+    "video_stream_present": true,
+    "audio_stream_present": true,
+    "continuous_real_application_master": true,
+    "one_safety_overlay_present": true
   },
-  "truth_boundary": "This proof establishes stable anonymous access to the exact synthetic WebM previously captured and validated. It does not change or expose the private clinical-evidence bucket."
+  "external_host_visibility": {
+    "youtube_public_privacy_state": "NOT_ASSERTED_BY_THIS_MACHINE_PROOF",
+    "note": "The canonical YouTube URL is recorded here, but YouTube privacy state must be confirmed from YouTube/anonymous browser access; this evidence file does not fabricate that assertion."
+  },
+  "historical_public_video": {
+    "archived": true,
+    "not_for_submission": true,
+    "captured_at": "2026-08-08",
+    "public_url": "https://github.com/arisnachy/healthia-one/releases/download/healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm",
+    "release_tag": "healthia-one-hackathon-judge-demo-2026",
+    "source_recording_run_id": 31265639488,
+    "source_candidate_sha": "3f99e511f6518e8dc9b45ebfd0cbdc37aaa9768e",
+    "video_sha256": "cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19",
+    "duration_seconds": 290.16,
+    "historical_anonymous_download_verified": true
+  },
+  "truth_boundary": "Current canonical judging video is the 3:55 ONE SAFETY master. The archived 290.16-second WebM is provenance only and must not be presented as the final submission. This proof establishes software/artifact facts and does not claim clinical efficacy, regulatory approval, autonomous prescribing, universal security certification, or a YouTube privacy state it cannot independently observe."
 }
