@@ -1,14 +1,14 @@
 # All Things Agentic Hackathon — Bonus Points Evidence
 
-This document isolates the optional bonus evidence from the frozen HealthIA ONE judging runtime. It does not change the final ONE SAFETY candidate or its claims.
+This document isolates optional bonus evidence from the frozen HealthIA ONE judging runtime. It does not change the final ONE SAFETY candidate or its claims.
 
 ## Bonus status
 
 | Bonus path | Status | Evidence |
 |---|---|---|
 | Public build content | **PUBLISHED** | Public long-form build article: https://github.com/arisnachy/healthia-one/issues/93 |
-| Social media post | **PUBLISHED — X** | Public post URL supplied after publication: https://x.com/i/status/2089481967821545835 |
-| Google AI model integration | **LIVE PROVEN — VEO** | HealthIA Explain / Vertex AI Veo 3.1 Fast implementation and LIVE proof lineage: https://github.com/arisnachy/healthia-one/pull/43 |
+| Social media post | **PUBLISHED — X** | https://x.com/i/status/2089481967821545835 |
+| Google AI model integration | **LIVE PROVEN — VEO** | HealthIA Explain / Vertex AI Veo 3.1 Fast lineage: https://github.com/arisnachy/healthia-one/pull/43 |
 
 ## 1. Public build content
 
@@ -18,13 +18,11 @@ Public article:
 
 https://github.com/arisnachy/healthia-one/issues/93
 
-The article is public because `arisnachy/healthia-one` is a public repository and the issue is publicly accessible. It covers the project architecture, durable missions, evidence-first design, human authority boundaries, ONE SAFETY, real Google connectors, observability, and HealthIA Explain with Veo.
-
-It contains the required declaration:
+The article is public and contains the required declaration:
 
 > **This piece of content was created for the purposes of entering the All Things Agentic Hackathon 2026.**
 
-Do not mark a private, draft, or unlisted copy as the bonus artifact. Use the public URL above.
+It covers HealthIA ONE architecture, durable missions, evidence-first design, human authority boundaries, ONE SAFETY, real Google connectors, Cloud observability and the HealthIA Explain Veo integration.
 
 ## 2. Social media post — published on X
 
@@ -32,19 +30,17 @@ Public X post:
 
 https://x.com/i/status/2089481967821545835
 
-The published copy is the prepared X version and includes the required hashtag:
+The prepared/published copy includes the required hashtag `#AllThingsAgenticHackathon` and points to the HealthIA ONE judging package.
 
-> HealthIA ONE turns health chat into durable, consent-aware missions: Gemini + ADK, ONE SAFETY, real Google actions/receipts, Cloud Trace, and a live Vertex AI Veo 3.1 Fast education path.
->
-> Demo: https://youtu.be/dOIhP22SxZ8
->
-> #AllThingsAgenticHackathon
+Canonical final demo URL:
 
-Publication was confirmed by the project owner with the public status URL on 2026-08-17. X did not expose the status body to this session's independent web fetch/index at the time the evidence file was updated, so the repository records the publication source precisely as **owner-confirmed public URL** rather than claiming an independent third-party content fetch.
+https://youtu.be/v7SJUkzzRxw
 
-## 3. Google AI bonus — Veo, no Gemma required
+Publication was confirmed by the project owner with the public status URL on 2026-08-17. The repository records this precisely as owner-confirmed publication rather than claiming an independent third-party content fetch of the X body.
 
-HealthIA already has a successfully exercised Google AI video path. There is no need to add Gemma solely for bonus eligibility.
+## 3. Google AI bonus — Veo
+
+HealthIA has an implemented and successfully exercised Google AI video path. There is no need to add Gemma solely for bonus eligibility.
 
 ### Implemented model
 
@@ -59,22 +55,20 @@ HealthIA already has a successfully exercised Google AI video path. There is no 
 
 ### Implementation evidence
 
-PR #43 contains the isolated HealthIA Explain implementation and proof harness:
+PR #43 preserves the isolated HealthIA Explain implementation and proof harness:
 
 https://github.com/arisnachy/healthia-one/pull/43
 
-Relevant source/proof paths in that lineage include:
+Relevant source/proof paths include:
 
 - `healthia_one/education_video_google.py`
 - `.github/workflows/healthia-explain-live-veo-sample.yml`
 - `.github/healthia-explain-live-veo-trigger.txt`
 - `.github/workflows/final-devpost-comprehensive-demo.yml`
 
-The integration uses a mission-scoped Google grant, a one-time explicit authorization for the Veo action, `predictLongRunning`, `fetchPredictOperation`, private GCS output, MP4 validation, and a proof manifest.
+The integration uses a mission-scoped Google grant, one-time explicit authorization for the Veo action, `predictLongRunning`, `fetchPredictOperation`, private GCS output, MP4 validation and a proof manifest.
 
 ### LIVE proof contract
-
-The controlled LIVE workflow records a manifest with:
 
 ```json
 {
@@ -90,18 +84,18 @@ The controlled LIVE workflow records a manifest with:
 }
 ```
 
-The workflow also validates that the downloaded output is a real-looking MP4 and records SHA-256 hashes for both the generated video and the generic prompt.
+The workflow validates the generated MP4 and records SHA-256 hashes for the output and the generic prompt.
 
-## 4. Why Veo is isolated from the frozen final runtime
+## 4. Why Veo remains isolated from the frozen final runtime
 
-The current ONE SAFETY judging build is feature-frozen. The Veo integration was already implemented and LIVE-tested in the HealthIA Explain lineage, but it is intentionally preserved separately rather than rebasing a large experimental feature branch over the final ONE SAFETY candidate.
+The current ONE SAFETY judging build is feature-frozen. The Veo integration was implemented and LIVE-tested in its HealthIA Explain lineage, but it remains separate rather than being rebased over the final ONE SAFETY candidate.
 
-This protects both truths:
+This preserves two truths:
 
-1. the final judging runtime remains reproducible and unchanged; and
+1. the final judging runtime stays reproducible and unchanged; and
 2. the Google AI bonus has concrete implementation plus LIVE Vertex AI evidence.
 
-Do not describe the Veo branch as the exact final ONE SAFETY runtime. Describe it as an **implemented and LIVE-proven HealthIA ONE bonus integration preserved in its own evidence lineage**.
+Describe Veo as an **implemented and LIVE-proven HealthIA ONE bonus integration preserved in its own evidence lineage**, not as the exact frozen ONE SAFETY runtime.
 
 ## 5. Judge-facing bonus checklist
 
@@ -109,7 +103,7 @@ Do not describe the Veo branch as the exact final ONE SAFETY runtime. Describe i
 - [x] Public build content includes the required hackathon-purpose declaration.
 - [x] Public build content links to project/demo evidence.
 - [x] Social post was published on X.
-- [x] Social post uses `#AllThingsAgenticHackathon` in the prepared published copy.
+- [x] Social post uses `#AllThingsAgenticHackathon` in the prepared/published copy.
 - [x] Public X status URL is recorded in the evidence manifest.
 - [x] Google AI bonus uses Veo; no unnecessary Gemma integration added.
 - [x] Veo model/version is named precisely.
@@ -122,7 +116,7 @@ Do not describe the Veo branch as the exact final ONE SAFETY runtime. Describe i
 ## Canonical links
 
 - Final judge entry point: https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md
-- Official YouTube demo: https://youtu.be/dOIhP22SxZ8
+- Official YouTube demo: https://youtu.be/v7SJUkzzRxw
 - Public build article: https://github.com/arisnachy/healthia-one/issues/93
 - Public X post: https://x.com/i/status/2089481967821545835
 - Veo implementation / LIVE proof lineage: https://github.com/arisnachy/healthia-one/pull/43
