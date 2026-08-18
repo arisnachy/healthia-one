@@ -1,7 +1,7 @@
 {
   "hackathon": "All Things Agentic Hackathon 2026",
   "project": "HealthIA ONE",
-  "generated_at": "2026-08-17",
+  "generated_at": "2026-08-18",
   "feature_freeze_respected": true,
   "public_build_content": {
     "status": "PUBLISHED",
@@ -17,7 +17,7 @@
     "required_hashtag": "#AllThingsAgenticHackathon",
     "required_hashtag_present_in_prepared_published_copy": true,
     "claim_bonus_now": true,
-    "verification_note": "Publication and public status URL were confirmed by the project owner. X did not expose the status body to this session's independent web fetch/index when this manifest was updated; no independent content-fetch claim is made."
+    "verification_note": "Publication and public status URL were confirmed by the project owner. X did not expose the status body to the independent fetch session when this manifest was updated; no independent content-fetch claim is made."
   },
   "google_ai_bonus": {
     "status": "LIVE_PROVEN",
@@ -43,7 +43,7 @@
   },
   "canonical_links": {
     "judges": "https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md",
-    "youtube_demo": "https://youtu.be/dOIhP22SxZ8",
+    "youtube_demo": "https://youtu.be/v7SJUkzzRxw",
     "public_build_article": "https://github.com/arisnachy/healthia-one/issues/93",
     "x_post": "https://x.com/i/status/2089481967821545835",
     "repository": "https://github.com/arisnachy/healthia-one"
