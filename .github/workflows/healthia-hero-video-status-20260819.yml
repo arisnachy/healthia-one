@@ -1,4 +1,4 @@
-# observer generation 2
+# observer generation 3 — bound to the second-take hero workflow commit
 name: HealthIA hero video status bridge 2026-08-19
 
 on:
@@ -17,6 +17,8 @@ jobs:
   publish-status:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    env:
+      EXPECTED_HERO_SHA: 6f4af2d6fc6937aa774951c66e61162fe83eea3c
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,20 +39,21 @@ jobs:
           branch="kira/hero-video-20260819"
           url="$API/repos/$REPO/actions/runs?branch=$(encode "$branch")&event=push&per_page=50"
           run_id=''
-          for _ in $(seq 1 60); do
+          for _ in $(seq 1 90); do
             curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$url" > /tmp/runs.json
-            run_id="$(jq -r --arg n "$TARGET_NAME" '[.workflow_runs[] | select(.name==$n)][0].id // empty' /tmp/runs.json)"
+            run_id="$(jq -r --arg n "$TARGET_NAME" --arg sha "$EXPECTED_HERO_SHA" '[.workflow_runs[] | select(.name==$n and .head_sha==$sha)][0].id // empty' /tmp/runs.json)"
             [[ -n "$run_id" ]] && break
             sleep 5
           done
           test -n "$run_id"
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "HEALTHIA_HERO_RUN_FOUND $run_id"
+          echo "HEALTHIA_HERO_EXACT_RUN_FOUND $run_id $EXPECTED_HERO_SHA"
 
           conclusion=''
           status=''
           for _ in $(seq 1 240); do
             curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$API/repos/$REPO/actions/runs/$run_id" > /tmp/run.json
+            test "$(jq -r '.head_sha' /tmp/run.json)" = "$EXPECTED_HERO_SHA"
             status="$(jq -r '.status' /tmp/run.json)"
             conclusion="$(jq -r '.conclusion // empty' /tmp/run.json)"
             [[ "$status" == "completed" ]] && break
@@ -83,6 +86,7 @@ jobs:
           payload={
             'schema':'healthia-hero-video-status/v1',
             'workflow':'HealthIA ONE brand-new hero video 2026-08-19',
+            'head_sha':os.environ['EXPECTED_HERO_SHA'],
             'run_id':int(os.environ['RUN_ID']),
             'conclusion':conclusion,
             'status':'PASS' if conclusion=='success' else 'FAIL',
@@ -97,5 +101,5 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add hackathon/hero_video_20260819_status.json
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m '[skip ci] video: publish hero film run status'
+          git commit -m '[skip ci] video: publish exact second-take film status'
           git push origin HEAD:kira/hero-video-20260819
