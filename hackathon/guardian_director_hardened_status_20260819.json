@@ -1,0 +1,10 @@
+{
+  "schema": "healthia-guardian-director-hardened-status/v1",
+  "run_id": 32315222378,
+  "source_sha": "01a324c67818cd72c658f0912ebf30e1a14357f7",
+  "conclusion": "failure",
+  "status": "FAIL",
+  "artifact_name": "HealthIA-ONE-GUARDIAN-DIRECTOR-CUT-20260819",
+  "artifact_id": 0,
+  "artifact_size_bytes": 0
+}
