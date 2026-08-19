@@ -5,6 +5,7 @@ on:
     branches: [kira/guardian-director-cut-20260819]
     paths:
       - "healthia_one/guardian_director_demo.py"
+      - "healthia_one/guardian_director_demo_fixed.py"
       - "scripts/guardian_director_scenes_20260819.json"
       - "scripts/build_guardian_director_audio_20260819.py"
       - "scripts/record_guardian_director_cut_20260819.py"
@@ -57,6 +58,13 @@ jobs:
             tests/test_result_guardian_resolution_loop.py \
             tests/test_appointment_guardian_resolution_loop.py \
             tests/test_postvisit_guardian_resolution_loop.py
+          python - <<'PY'
+          from healthia_one.guardian_director_demo_fixed import app, demo
+          assert app.title == 'HealthIA ONE Guardian Director Demo'
+          assert demo.STATE.profile.display_name.startswith('Ana')
+          assert demo.STATE.updated_at == demo.DEMO_NOW
+          print('GUARDIAN_DIRECTOR_SURFACE_IMPORT_PASS')
+          PY
           echo "GUARDIAN_DIRECTOR_CONTRACTS_PASS"
 
       - name: Authenticate to Google Cloud
@@ -98,7 +106,7 @@ jobs:
           gcloud run deploy "$GUARDIAN_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" --image "${{ steps.product.outputs.image }}" \
             --service-account "$RUNTIME_SA" --command uvicorn \
-            --args "healthia_one.guardian_director_demo:app,--host,0.0.0.0,--port,8080" \
+            --args "healthia_one.guardian_director_demo_fixed:app,--host,0.0.0.0,--port,8080" \
             --min-instances 0 --max-instances 1 --cpu 1 --memory 256Mi --no-allow-unauthenticated --quiet
           url="$(gcloud run services describe "$GUARDIAN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
           test -n "$url"
