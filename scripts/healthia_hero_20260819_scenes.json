@@ -1,0 +1,47 @@
+[
+  {
+    "id": "hero",
+    "title": "Nobody prompted it.",
+    "text": "Most health AI waits for a question. HealthIA ONE can notice unfinished health work without a new prompt. In its promoted blood-pressure continuity mission, an opted-in patient becomes overdue for a measurement. A deterministic check creates durable work, Eventarc wakes a private worker, a real Gmail follow-up is sent, the reply returns through Gmail watch and authenticated Pub/Sub, a canonical VitalRecord is stored, and the same mission closes. The trigger uses zero model calls."
+  },
+  {
+    "id": "cloud",
+    "title": "This is the running system.",
+    "text": "Now we enter the exact HealthIA application on Google Cloud. Gemini 3.5 Flash and Google ADK are used when reasoning adds value. Firestore holds patient-scoped canonical state. Private Cloud Storage preserves original clinical evidence. Chat is only an interface; it is not the source of truth."
+  },
+  {
+    "id": "signal",
+    "title": "The patient story changes before chat.",
+    "text": "A synthetic Health Connect event arrives before the patient asks anything. Authorized steps, heart rate, and weight are accepted with provenance and time. The longitudinal record changes because the patient's data changed, not because somebody opened a conversation."
+  },
+  {
+    "id": "evidence",
+    "title": "Evidence becomes durable work.",
+    "text": "Next, a synthetic clinical document enters HealthIA. The original bytes are preserved first. Gemini performs bounded multimodal extraction. Firestore stores the structured result and keeps provenance back to the source. HealthIA also creates a result-explanation mission and closes it only after the evidence is durable. The Patient Twin and timeline now have something new to remember."
+  },
+  {
+    "id": "reason",
+    "title": "AI asks only what is still missing.",
+    "text": "When the patient describes a new symptom, HealthIA does not run a fixed questionnaire. Gemini and Google ADK generate a bounded five-question clinical block from the current complaint, prior answers, and authorized longitudinal context. A deterministic gate rejects unsafe or repetitive plans. The goal is safer orientation and the right human next step, not autonomous diagnosis."
+  },
+  {
+    "id": "human",
+    "title": "Autonomy stops where authority changes.",
+    "text": "The Living System now advances a synthetic mission to ten of fourteen events and stops at WAITING FOR HUMAN. HealthIA does not guess the missing measurement. A human-entered synthetic receipt resumes the very same mission, reaches fourteen of fourteen, advances the Twin to version three, and verifies with zero model calls in this deterministic safety circuit."
+  },
+  {
+    "id": "continuity",
+    "title": "The session can end. The patient story does not.",
+    "text": "We sign out and return. The device signal, clinical evidence, result mission, timeline, and Patient Twin are still there. HealthIA reconstructs the patient from durable state instead of pretending that a long chat transcript is memory."
+  },
+  {
+    "id": "safety",
+    "title": "The model cannot declare success.",
+    "text": "This is ONE SAFETY. A real-world action must pass deterministic authorization, receive a one-use HealthActionTicket, cross the actual connector, produce a durable receipt, and correlate to Google Cloud Trace before completion can be projected. The final cloud proof ties one exact Trace ID to one action ticket, one connector action, one receipt, and a completed outcome. A controlled prompt-injection probe is blocked before model execution, with zero new action tickets and zero patient-state mutation."
+  },
+  {
+    "id": "close",
+    "title": "HealthIA ONE",
+    "text": "HealthIA is not a medical chatbot with more memory. It is a patient-owned continuity agent: signals and evidence become durable missions; AI reasons only where useful; deterministic policy handles exact boundaries; humans retain authority; and external actions require proof. It carries unfinished health work forward, does every safe step it can prove, and stops exactly where the human must decide. Your health never starts over. Neither should your health agent."
+  }
+]
