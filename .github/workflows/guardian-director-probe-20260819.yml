@@ -1,0 +1,43 @@
+name: Guardian director hardened-run probe 2026-08-19
+
+on:
+  push:
+    branches: [kira/guardian-director-cut-20260819]
+    paths: [".github/workflows/guardian-director-probe-20260819.yml"]
+permissions:
+  actions: read
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    env:
+      EXPECTED_SHA: 01a324c67818cd72c658f0912ebf30e1a14357f7
+      TARGET_NAME: HealthIA ONE Guardian director cut 2026-08-19
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/guardian-director-cut-20260819
+          fetch-depth: 0
+      - name: Snapshot exact run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="${{ github.api_url }}/repos/${{ github.repository }}"
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs?branch=kira%2Fguardian-director-cut-20260819&event=push&per_page=100" >/tmp/runs.json
+          jq -e --arg sha "$EXPECTED_SHA" --arg n "$TARGET_NAME" '[.workflow_runs[]|select(.head_sha==$sha and .name==$n)][0]' /tmp/runs.json >/tmp/target.json
+          run_id="$(jq -r '.id' /tmp/target.json)"
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs/$run_id/jobs?per_page=100" >/tmp/jobs.json
+          mkdir -p hackathon
+          RUN_ID="$run_id" python - <<'PY'
+          import json,os,pathlib
+          run=json.load(open('/tmp/target.json')); jobs=json.load(open('/tmp/jobs.json')).get('jobs',[])
+          payload={'schema':'healthia-guardian-director-probe/v1','source_sha':os.environ['EXPECTED_SHA'],'run_id':int(os.environ['RUN_ID']),'status':run.get('status'),'conclusion':run.get('conclusion'),'jobs':[{'id':j.get('id'),'name':j.get('name'),'status':j.get('status'),'conclusion':j.get('conclusion'),'steps':[{'name':s.get('name'),'status':s.get('status'),'conclusion':s.get('conclusion')} for s in j.get('steps',[])]} for j in jobs]}
+          pathlib.Path('hackathon/guardian_director_probe_20260819.json').write_text(json.dumps(payload,indent=2),encoding='utf-8'); print(json.dumps(payload))
+          PY
+          git config user.name 'HealthIA Video Probe'; git config user.email 'actions@users.noreply.github.com'
+          git add hackathon/guardian_director_probe_20260819.json
+          git commit -m '[skip ci] video: snapshot hardened Guardian run' || exit 0
+          git pull --rebase origin kira/guardian-director-cut-20260819
+          git push origin HEAD:kira/guardian-director-cut-20260819
