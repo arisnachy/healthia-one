@@ -1,0 +1,115 @@
+name: HealthIA hero video status bridge 2026-08-19
+
+on:
+  push:
+    branches:
+      - kira/hero-video-20260819
+    paths:
+      - ".github/workflows/healthia-hero-video-status-20260819.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish-status:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/hero-video-20260819
+          fetch-depth: 0
+
+      - name: Locate and follow exact hero-film run
+        id: watch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          API: ${{ github.api_url }}
+          TARGET_NAME: HealthIA ONE brand-new hero video 2026-08-19
+        shell: bash
+        run: |
+          set -euo pipefail
+          encode() { python -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+          branch="kira/hero-video-20260819"
+          url="$API/repos/$REPO/actions/runs?branch=$(encode "$branch")&event=push&per_page=50"
+          run_id=''
+          for _ in $(seq 1 60); do
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$url" > /tmp/runs.json
+            run_id="$(jq -r --arg n "$TARGET_NAME" '[.workflow_runs[] | select(.name==$n)][0].id // empty' /tmp/runs.json)"
+            [[ -n "$run_id" ]] && break
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_HERO_RUN_FOUND $run_id"
+
+          conclusion=''
+          status=''
+          for _ in $(seq 1 240); do
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$API/repos/$REPO/actions/runs/$run_id" > /tmp/run.json
+            status="$(jq -r '.status' /tmp/run.json)"
+            conclusion="$(jq -r '.conclusion // empty' /tmp/run.json)"
+            if [[ "$status" == "completed" ]]; then
+              break
+            fi
+            sleep 10
+          done
+          test "$status" = "completed"
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          echo "HEALTHIA_HERO_RUN_COMPLETED $run_id $conclusion"
+
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$API/repos/$REPO/actions/runs/$run_id/artifacts?per_page=100" > /tmp/artifacts.json
+          artifact_id="$(jq -r '[.artifacts[] | select(.name=="HealthIA-ONE-HERO-CUT-20260819")][0].id // empty' /tmp/artifacts.json)"
+          artifact_size="$(jq -r '[.artifacts[] | select(.name=="HealthIA-ONE-HERO-CUT-20260819")][0].size_in_bytes // 0' /tmp/artifacts.json)"
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_size=$artifact_size" >> "$GITHUB_OUTPUT"
+
+      - name: Publish machine-readable branch status
+        if: always() && steps.watch.outputs.run_id != ''
+        env:
+          RUN_ID: ${{ steps.watch.outputs.run_id }}
+          CONCLUSION: ${{ steps.watch.outputs.conclusion }}
+          ARTIFACT_ID: ${{ steps.watch.outputs.artifact_id }}
+          ARTIFACT_SIZE: ${{ steps.watch.outputs.artifact_size }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p hackathon
+          python - <<'PY'
+          import json, os, pathlib
+          conclusion=os.environ.get('CONCLUSION','')
+          payload={
+            'schema':'healthia-hero-video-status/v1',
+            'workflow':'HealthIA ONE brand-new hero video 2026-08-19',
+            'run_id':int(os.environ['RUN_ID']),
+            'conclusion':conclusion,
+            'status':'PASS' if conclusion=='success' else 'FAIL',
+            'artifact_name':'HealthIA-ONE-HERO-CUT-20260819',
+            'artifact_id':int(os.environ.get('ARTIFACT_ID') or 0),
+            'artifact_size_bytes':int(os.environ.get('ARTIFACT_SIZE') or 0),
+          }
+          pathlib.Path('hackathon/hero_video_20260819_status.json').write_text(
+            json.dumps(payload, indent=2), encoding='utf-8'
+          )
+          print(json.dumps(payload))
+          PY
+          git config user.name 'HealthIA Video Gate'
+          git config user.email 'actions@users.noreply.github.com'
+          git add hackathon/hero_video_20260819_status.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m '[skip ci] video: publish hero film run status'
+          git push origin HEAD:kira/hero-video-20260819
