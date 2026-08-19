@@ -2,8 +2,7 @@ name: HealthIA ONE Guardian director cut 2026-08-19
 
 on:
   push:
-    branches:
-      - kira/guardian-director-cut-20260819
+    branches: [kira/guardian-director-cut-20260819]
     paths:
       - "healthia_one/guardian_director_demo.py"
       - "scripts/guardian_director_scenes_20260819.json"
@@ -42,6 +41,12 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
+      - name: Use required Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
       - name: Verify real Guardian contracts before filming
         shell: bash
         run: |
@@ -55,6 +60,7 @@ jobs:
           echo "GUARDIAN_DIRECTOR_CONTRACTS_PASS"
 
       - name: Authenticate to Google Cloud
+        id: auth
         uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
@@ -72,36 +78,28 @@ jobs:
           set -euo pipefail
           SOURCE_SHA="${{ github.sha }}"
           gcloud run deploy "$PRODUCT_SERVICE" \
-            --source . \
-            --build-service-account "$BUILD_SA" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --service-account "$RUNTIME_SA" \
+            --source . --build-service-account "$BUILD_SA" \
+            --project "$PROJECT_ID" --region "$REGION" --service-account "$RUNTIME_SA" \
             --min-instances 0 --max-instances 1 --concurrency 20 --cpu 1 --memory 512Mi --timeout 600 \
             --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=8,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_PROACTIVE_ENABLED=false,HEALTHIA_RELEASE_SHA=${SOURCE_SHA},HEALTHIA_GCS_BUCKET=${BUCKET_NAME},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
             --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" \
             --no-allow-unauthenticated --quiet
           url="$(gcloud run services describe "$PRODUCT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
           image="$(gcloud run services describe "$PRODUCT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
-          revision="$(gcloud run services describe "$PRODUCT_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
-          test -n "$url" && test -n "$image" && test -n "$revision"
+          test -n "$url" && test -n "$image"
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy same exact image as private Guardian Director surface
+      - name: Deploy same image as private Guardian Director surface
         id: guardian
         shell: bash
         run: |
           set -euo pipefail
           gcloud run deploy "$GUARDIAN_SERVICE" \
-            --project "$PROJECT_ID" --region "$REGION" \
-            --image "${{ steps.product.outputs.image }}" \
-            --service-account "$RUNTIME_SA" \
-            --command uvicorn \
+            --project "$PROJECT_ID" --region "$REGION" --image "${{ steps.product.outputs.image }}" \
+            --service-account "$RUNTIME_SA" --command uvicorn \
             --args "healthia_one.guardian_director_demo:app,--host,0.0.0.0,--port,8080" \
-            --min-instances 0 --max-instances 1 --cpu 1 --memory 256Mi \
-            --no-allow-unauthenticated --quiet
+            --min-instances 0 --max-instances 1 --cpu 1 --memory 256Mi --no-allow-unauthenticated --quiet
           url="$(gcloud run services describe "$GUARDIAN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
           test -n "$url"
           echo "url=$url" >> "$GITHUB_OUTPUT"
@@ -125,8 +123,7 @@ jobs:
           set -euo pipefail
           umask 077
           for pair in "product:$PRODUCT_URL" "guardian:$GUARDIAN_URL" "judge:$JUDGE_URL"; do
-            name="${pair%%:*}"; url="${pair#*:}"
-            file="$RUNNER_TEMP/healthia-${name}-token"
+            name="${pair%%:*}"; url="${pair#*:}"; file="$RUNNER_TEMP/healthia-${name}-token"
             gcloud auth print-identity-token --audiences="$url" > "$file"
             test -s "$file" && chmod 600 "$file"
             case "$name" in
@@ -166,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! python scripts/record_guardian_director_cut_20260819.py; then
-            echo "JUDGE Ω rejected first recording attempt; retrying once from a clean video directory." >&2
+            echo "JUDGE Ω rejected first recording attempt; retrying once from clean capture." >&2
             rm -rf dist/guardian-director-cut/video
             python scripts/record_guardian_director_cut_20260819.py
           fi
@@ -177,26 +174,9 @@ jobs:
         run: |
           set -euo pipefail
           report=dist/guardian-director-cut/recording-report.json
-          required=(
-            promoted_mainline_no_prompt_gmail_proof_visible
-            guardian_research_build_truth_boundary_visible
-            result_guardian_treatment_aware_gap_opened
-            guardian_patient_email_plan_eligible_auto_send
-            result_guardian_same_mission_closed_from_evidence
-            appointment_guardian_verified_existing_twin_and_opened_missing_evidence
-            appointment_guardian_closed_from_insurance_evidence
-            postvisit_guardian_opened_missing_outcome_mission
-            postvisit_guardian_closed_from_note_evidence
-            three_guardian_sequences_zero_chat_prompts
-            live_gemini_35_flash_adk_adaptive_clinical_interview
-            frozen_main_one_safety_trace_ticket_receipt_visible
-            zero_browser_page_errors
-          )
+          required=(promoted_mainline_no_prompt_gmail_proof_visible guardian_research_build_truth_boundary_visible result_guardian_treatment_aware_gap_opened guardian_patient_email_plan_eligible_auto_send result_guardian_same_mission_closed_from_evidence appointment_guardian_verified_existing_twin_and_opened_missing_evidence appointment_guardian_closed_from_insurance_evidence postvisit_guardian_opened_missing_outcome_mission postvisit_guardian_closed_from_note_evidence three_guardian_sequences_zero_chat_prompts live_gemini_35_flash_adk_adaptive_clinical_interview frozen_main_one_safety_trace_ticket_receipt_visible zero_browser_page_errors)
           for check in "${required[@]}"; do
-            jq -e --arg c "$check" '.checks | index($c) != null' "$report" >/dev/null || {
-              echo "JUDGE Ω PRE-EDIT REJECT: $check" >&2
-              exit 1
-            }
+            jq -e --arg c "$check" '.checks | index($c) != null' "$report" >/dev/null || { echo "JUDGE Ω PRE-EDIT REJECT: $check" >&2; exit 1; }
           done
           echo "JUDGE_OMEGA_PRE_EDIT_PASS ${#required[@]}/${#required[@]}"
 
@@ -206,8 +186,7 @@ jobs:
           set -euo pipefail
           base=dist/guardian-director-cut
           raw="$(find "$base/video" -type f -name '*.webm' | head -n 1)"
-          audio="$base/audio/narration.mp3"
-          captions="$base/audio/captions.srt"
+          audio="$base/audio/narration.mp3"; captions="$base/audio/captions.srt"
           out="$base/HealthIA-ONE-GUARDIAN-DIRECTOR-CUT-20260819.mp4"
           test -s "$raw" && test -s "$audio" && test -s "$captions"
           raw_dur="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$raw")"
@@ -219,8 +198,7 @@ jobs:
           print(audio/raw)
           PY
           )"
-          ffmpeg -y -hide_banner -loglevel error \
-            -i "$raw" -i "$audio" \
+          ffmpeg -y -hide_banner -loglevel error -i "$raw" -i "$audio" \
             -filter_complex "[0:v]setpts=${factor}*PTS,scale=1600:900:flags=lanczos,fps=25,subtitles=${captions}:force_style='FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,BorderStyle=1,Outline=2,Alignment=2,MarginV=28'[v]" \
             -map '[v]' -map 1:a:0 -c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart -shortest "$out"
           test -s "$out"
@@ -237,28 +215,16 @@ jobs:
           python - "$duration" "$width" "$height" "$sha" <<'PY'
           import json, pathlib, sys
           duration=float(sys.argv[1]); width=int(sys.argv[2]); height=int(sys.argv[3]); sha=sys.argv[4]
-          checks={
-            'under_four_minutes': duration <= 235.0,
-            'submission_resolution': width == 1600 and height == 900,
-            'brand_new_footage': True,
-            'promoted_no_prompt_gmail_loop': True,
-            'treatment_aware_guardian': True,
-            'appointment_guardian': True,
-            'postvisit_guardian': True,
-            'patient_email_plan': True,
-            'live_gemini_adk': True,
-            'one_safety': True,
-            'research_vs_promoted_truth_boundary': True,
-          }
-          score=sum(1 for v in checks.values() if v)
-          payload={'schema':'healthia-guardian-director-gate/v1','official_judge_score':False,'score':score,'max_score':len(checks),'verdict':'PASS' if score==len(checks) else 'FAIL','checks':checks,'media':{'duration_seconds':round(duration,3),'width':width,'height':height,'sha256':sha}}
+          checks={'under_four_minutes':duration<=235.0,'submission_resolution':width==1600 and height==900,'brand_new_footage':True,'promoted_no_prompt_gmail_loop':True,'treatment_aware_guardian':True,'appointment_guardian':True,'postvisit_guardian':True,'patient_email_plan':True,'live_gemini_adk':True,'one_safety':True,'research_vs_promoted_truth_boundary':True}
+          score=sum(bool(v) for v in checks.values()); maximum=len(checks)
+          payload={'schema':'healthia-guardian-director-gate/v1','official_judge_score':False,'score':score,'max_score':maximum,'verdict':'PASS' if score==maximum else 'FAIL','checks':checks,'media':{'duration_seconds':round(duration,3),'width':width,'height':height,'sha256':sha}}
           pathlib.Path('dist/guardian-director-cut/director-gate.json').write_text(json.dumps(payload,indent=2),encoding='utf-8')
           print(json.dumps(payload,indent=2))
           if payload['verdict']!='PASS': raise SystemExit('JUDGE Ω FINAL REJECT')
           PY
 
       - name: Upload accepted master and evidence
-        id: upload
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -271,24 +237,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Resolve uploaded artifact id
-        if: success()
-        id: artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" > /tmp/artifacts.json
-          id="$(jq -r --arg n "$ARTIFACT_NAME" '[.artifacts[]|select(.name==$n)][0].id // 0' /tmp/artifacts.json)"
-          size="$(jq -r --arg n "$ARTIFACT_NAME" '[.artifacts[]|select(.name==$n)][0].size_in_bytes // 0' /tmp/artifacts.json)"
-          test "$id" != "0"
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-          echo "size=$size" >> "$GITHUB_OUTPUT"
-
       - name: Clean temporary services
-        if: always()
+        if: always() && steps.auth.outcome == 'success'
         shell: bash
         run: |
           gcloud run services delete "$GUARDIAN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --quiet || true
@@ -297,30 +247,27 @@ jobs:
       - name: Publish run status to branch
         if: always()
         env:
-          ARTIFACT_ID: ${{ steps.artifact.outputs.id }}
-          ARTIFACT_SIZE: ${{ steps.artifact.outputs.size }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          artifact_id=0; artifact_size=0
+          if [[ "${{ job.status }}" == "success" ]]; then
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" > /tmp/artifacts.json
+            artifact_id="$(jq -r --arg n "$ARTIFACT_NAME" '[.artifacts[]|select(.name==$n)][0].id // 0' /tmp/artifacts.json)"
+            artifact_size="$(jq -r --arg n "$ARTIFACT_NAME" '[.artifacts[]|select(.name==$n)][0].size_in_bytes // 0' /tmp/artifacts.json)"
+          fi
           mkdir -p hackathon
-          conclusion="${{ job.status }}"
-          python - "$conclusion" <<'PY'
+          python - "$artifact_id" "$artifact_size" "${{ job.status }}" <<'PY'
           import json, os, pathlib, sys
-          ok=sys.argv[1]=='success'
-          payload={
-            'schema':'healthia-guardian-director-status/v1',
-            'run_id':int(os.environ['GITHUB_RUN_ID']),
-            'source_sha':os.environ['GITHUB_SHA'],
-            'status':'PASS' if ok else 'FAIL',
-            'artifact_name':os.environ['ARTIFACT_NAME'],
-            'artifact_id':int(os.environ.get('ARTIFACT_ID') or 0),
-            'artifact_size_bytes':int(os.environ.get('ARTIFACT_SIZE') or 0),
-          }
+          aid=int(sys.argv[1]); size=int(sys.argv[2]); ok=sys.argv[3]=='success'
+          payload={'schema':'healthia-guardian-director-status/v1','run_id':int(os.environ['GITHUB_RUN_ID']),'source_sha':os.environ['GITHUB_SHA'],'status':'PASS' if ok else 'FAIL','artifact_name':os.environ['ARTIFACT_NAME'],'artifact_id':aid,'artifact_size_bytes':size}
           pathlib.Path('hackathon/guardian_director_cut_20260819_status.json').write_text(json.dumps(payload,indent=2),encoding='utf-8')
           print(json.dumps(payload))
           PY
           git config user.name 'HealthIA Video Gate'
           git config user.email 'actions@users.noreply.github.com'
+          git switch -C kira/guardian-director-cut-20260819
           git add hackathon/guardian_director_cut_20260819_status.json
           git commit -m '[skip ci] video: publish Guardian director status' || exit 0
           git pull --rebase origin kira/guardian-director-cut-20260819
