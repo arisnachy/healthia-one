@@ -46,8 +46,8 @@ jobs:
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
           test "$actual" = "${{ github.sha }}"
-          test "$(git branch --show-current)" = "kira/hero-video-20260819"
-          echo "HEALTHIA_HERO_EXACT_SOURCE_PASS $actual"
+          test "$GITHUB_REF" = "refs/heads/kira/hero-video-20260819"
+          echo "HEALTHIA_HERO_EXACT_SOURCE_PASS $actual $GITHUB_REF"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
