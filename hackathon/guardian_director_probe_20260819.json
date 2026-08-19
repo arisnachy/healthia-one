@@ -1,0 +1,127 @@
+{
+  "schema": "healthia-guardian-director-probe/v1",
+  "source_sha": "01a324c67818cd72c658f0912ebf30e1a14357f7",
+  "run_id": 32315222378,
+  "status": "in_progress",
+  "conclusion": null,
+  "jobs": [
+    {
+      "id": 96265950225,
+      "name": "make-film",
+      "status": "in_progress",
+      "conclusion": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout exact Guardian research source",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Use required Python 3.12",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify real Guardian contracts before filming",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Authenticate to Google Cloud",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set up gcloud",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Deploy exact Guardian build as private HealthIA product",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Deploy same image as private Guardian Director surface",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bind promoted mainline Judge Mode",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Materialize private Cloud Run identity tokens",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install browser and media tools",
+          "status": "in_progress",
+          "conclusion": null
+        },
+        {
+          "name": "Synthesize brand-new English narration",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Record completely new continuous live footage",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "JUDGE \u03a9 pre-edit truth gate",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Build 1600x900 English master with captions",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "JUDGE \u03a9 implacable final film gate",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Upload accepted master and evidence",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Clean temporary services",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Publish run status to branch",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Authenticate to Google Cloud",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Use required Python 3.12",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Checkout exact Guardian research source",
+          "status": "pending",
+          "conclusion": null
+        }
+      ]
+    }
+  ]
+}
