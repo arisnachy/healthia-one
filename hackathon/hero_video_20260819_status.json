@@ -1,10 +1,11 @@
 {
   "schema": "healthia-hero-video-status/v1",
   "workflow": "HealthIA ONE brand-new hero video 2026-08-19",
-  "run_id": 32313531000,
-  "conclusion": "failure",
-  "status": "FAIL",
+  "head_sha": "e6824285b48f9fa73edd7236939e62dd6ec39274",
+  "run_id": 32314007347,
+  "conclusion": "success",
+  "status": "PASS",
   "artifact_name": "HealthIA-ONE-HERO-CUT-20260819",
-  "artifact_id": 0,
-  "artifact_size_bytes": 0
+  "artifact_id": 9387587126,
+  "artifact_size_bytes": 15659229
 }
