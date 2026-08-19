@@ -1,0 +1,61 @@
+name: Guardian director hardened-run observer 2026-08-19
+
+on:
+  push:
+    branches: [kira/guardian-director-cut-20260819]
+    paths: [".github/workflows/guardian-director-observer-v2-20260819.yml"]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    env:
+      EXPECTED_SHA: 01a324c67818cd72c658f0912ebf30e1a14357f7
+      TARGET_WORKFLOW: HealthIA ONE Guardian director cut 2026-08-19
+      ARTIFACT_NAME: HealthIA-ONE-GUARDIAN-DIRECTOR-CUT-20260819
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/guardian-director-cut-20260819
+          fetch-depth: 0
+      - name: Follow exact film run and publish status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="${{ github.api_url }}/repos/${{ github.repository }}"
+          run_id=''
+          for _ in $(seq 1 120); do
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs?branch=kira%2Fguardian-director-cut-20260819&event=push&per_page=100" >/tmp/runs.json
+            run_id="$(jq -r --arg sha "$EXPECTED_SHA" --arg n "$TARGET_WORKFLOW" '[.workflow_runs[]|select(.head_sha==$sha and .name==$n)][0].id // empty' /tmp/runs.json)"
+            [[ -n "$run_id" ]] && break
+            sleep 5
+          done
+          test -n "$run_id"
+          status=''; conclusion=''
+          for _ in $(seq 1 300); do
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs/$run_id" >/tmp/run.json
+            status="$(jq -r '.status' /tmp/run.json)"; conclusion="$(jq -r '.conclusion // empty' /tmp/run.json)"
+            [[ "$status" == completed ]] && break
+            sleep 10
+          done
+          test "$status" = completed
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api/actions/runs/$run_id/artifacts?per_page=100" >/tmp/artifacts.json
+          aid="$(jq -r --arg n "$ARTIFACT_NAME" '[.artifacts[]|select(.name==$n)][0].id // 0' /tmp/artifacts.json)"
+          asize="$(jq -r --arg n "$ARTIFACT_NAME" '[.artifacts[]|select(.name==$n)][0].size_in_bytes // 0' /tmp/artifacts.json)"
+          mkdir -p hackathon
+          RUN_ID="$run_id" CONCLUSION="$conclusion" ARTIFACT_ID="$aid" ARTIFACT_SIZE="$asize" python - <<'PY'
+          import json,os,pathlib
+          c=os.environ['CONCLUSION']; payload={'schema':'healthia-guardian-director-hardened-status/v1','run_id':int(os.environ['RUN_ID']),'source_sha':os.environ['EXPECTED_SHA'],'conclusion':c,'status':'PASS' if c=='success' else 'FAIL','artifact_name':os.environ['ARTIFACT_NAME'],'artifact_id':int(os.environ['ARTIFACT_ID']),'artifact_size_bytes':int(os.environ['ARTIFACT_SIZE'])}
+          pathlib.Path('hackathon/guardian_director_hardened_status_20260819.json').write_text(json.dumps(payload,indent=2),encoding='utf-8'); print(json.dumps(payload))
+          PY
+          git config user.name 'HealthIA Video Observer'; git config user.email 'actions@users.noreply.github.com'
+          git add hackathon/guardian_director_hardened_status_20260819.json
+          git commit -m '[skip ci] video: publish hardened Guardian run' || exit 0
+          git pull --rebase origin kira/guardian-director-cut-20260819
+          git push origin HEAD:kira/guardian-director-cut-20260819
