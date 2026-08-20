@@ -1,0 +1,10 @@
+{
+  "schema": "healthia-guardian-director-concise-status/v1",
+  "run_id": 32315647911,
+  "source_sha": "a2f6b509722e705fe16701970dc7fa909fcee5ba",
+  "conclusion": "success",
+  "status": "PASS",
+  "artifact_name": "HealthIA-ONE-GUARDIAN-DIRECTOR-CUT-20260819",
+  "artifact_id": 9388134488,
+  "artifact_size_bytes": 12454818
+}
