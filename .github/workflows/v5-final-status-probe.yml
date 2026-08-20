@@ -1,0 +1,48 @@
+name: HealthIA V5 final status probe
+
+on:
+  push:
+    branches: [kira/live-product-film-20260819]
+    paths:
+      - ".github/workflows/v5-final-status-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/live-product-film-20260819
+          fetch-depth: 0
+      - name: Read latest V5 run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/live-product-film-v5-20260819.yml/runs?branch=kira/live-product-film-20260819&per_page=3" > /tmp/runs.json
+          python - <<'PY'
+          import json, os, subprocess
+          data=json.load(open('/tmp/runs.json'))
+          runs=data.get('workflow_runs') or []
+          out={'workflow':'live-product-film-v5-20260819.yml','runs':[]}
+          for r in runs[:3]:
+              item={k:r.get(k) for k in ('id','run_number','run_attempt','status','conclusion','head_sha','created_at','updated_at','html_url')}
+              if r.get('id'):
+                  raw=subprocess.check_output(['gh','api',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{r['id']}/jobs?per_page=20"],text=True)
+                  jobs=json.loads(raw).get('jobs') or []
+                  item['jobs']=[{'id':j.get('id'),'name':j.get('name'),'status':j.get('status'),'conclusion':j.get('conclusion'),'steps':[{k:s.get(k) for k in ('name','status','conclusion','number')} for s in (j.get('steps') or [])]} for j in jobs]
+              out['runs'].append(item)
+          os.makedirs('hackathon',exist_ok=True)
+          open('hackathon/v5_final_status.json','w').write(json.dumps(out,indent=2))
+          PY
+          git config user.name "healthia-v5-status-probe"
+          git config user.email "actions@users.noreply.github.com"
+          git add hackathon/v5_final_status.json
+          git commit -m "film: capture V5 final run status" || true
+          git push origin HEAD:kira/live-product-film-20260819 || true
