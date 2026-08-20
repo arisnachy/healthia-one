@@ -23,12 +23,12 @@ jobs:
       - name: Wait for exact V5 run and publish status
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: 22be9cc720c771a3fd59920c02ebdaa0308300c6
+          TARGET_SHA: d67eb6ac9fb2b3d30cdbff8453a6b666a508537b
         shell: bash
         run: |
           set -euo pipefail
           run=''
-          for _ in $(seq 1 90); do
+          for _ in $(seq 1 120); do
             runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow live-product-film-v5-20260819.yml --branch kira/live-product-film-20260819 --limit 20 --json databaseId,headSha,status,conclusion,url,createdAt)"
             run="$(jq -c --arg sha "$TARGET_SHA" '[.[] | select(.headSha==$sha)][0] // empty' <<<"$runs")"
             if [[ -n "$run" ]]; then
