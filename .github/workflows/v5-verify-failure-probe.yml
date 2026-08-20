@@ -16,8 +16,8 @@ jobs:
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
-      JOB_NAME: hfilm-28293833-fc48d9-await-email
-      EXECUTION_NAME: hfilm-28293833-fc48d9-await-email-xl4qj
+      JOB_NAME: hfilm-28293833-fc48d9-verify
+      EXECUTION_NAME: hfilm-28293833-fc48d9-verify-tbc89
     steps:
       - uses: actions/checkout@v4
         with:
