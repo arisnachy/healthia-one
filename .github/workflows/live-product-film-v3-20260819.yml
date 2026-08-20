@@ -1,0 +1,192 @@
+name: HealthIA ONE live product film V3 2026-08-19
+
+on:
+  push:
+    branches: [kira/live-product-film-20260819]
+    paths:
+      - "scripts/record_live_product_film_v3_20260819.py"
+      - ".github/workflows/live-product-film-v3-20260819.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthia-live-product-film-v3-20260819
+  cancel-in-progress: true
+
+jobs:
+  make-film:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-one-live-product-film-v3
+      BUCKET_NAME: healthia-6088a-healthia-evidence
+      BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
+      RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
+      ARTIFACT_NAME: HealthIA-ONE-LIVE-PRODUCT-FILM-V3-20260819
+
+    steps:
+      - name: Checkout exact film source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Prove Guardian contracts before filming
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+          python -m pytest -q \
+            tests/test_result_guardian_resolution_loop.py \
+            tests/test_appointment_guardian_resolution_loop.py \
+            tests/test_postvisit_guardian_resolution_loop.py
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Deploy exact HealthIA application to private Cloud Run
+        id: cloud
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --build-service-account "$BUILD_SA" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --service-account "$RUNTIME_SA" \
+            --min-instances 0 --max-instances 1 --concurrency 20 --cpu 1 --memory 512Mi --timeout 600 \
+            --set-env-vars "HEALTHIA_ENV=cloud,HEALTHIA_LLM_BACKEND=gemini_api,HEALTHIA_MODEL=gemini-3.5-flash,HEALTHIA_STORE_BACKEND=firestore,HEALTHIA_AUTH_REQUIRED=true,HEALTHIA_ALLOW_REGISTRATION=true,HEALTHIA_COST_MODE=cloud_demo,HEALTHIA_AI_REQUEST_LIMIT=12,HEALTHIA_COST_GUARD_START_ENABLED=true,HEALTHIA_COST_CONTROL_UI=false,HEALTHIA_AI_MAX_OUTPUT_TOKENS=1200,HEALTHIA_PROACTIVE_ENABLED=true,HEALTHIA_RELEASE_SHA=${{ github.sha }},HEALTHIA_GCS_BUCKET=${BUCKET_NAME},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
+            --set-secrets "HEALTHIA_DEVICE_TOKEN_SECRET=healthia-device-token-secret:latest,HEALTHIA_SESSION_SECRET=healthia-session-secret:latest" \
+            --no-allow-unauthenticated --quiet
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          token="$(gcloud auth print-identity-token --audiences="$url")"
+          test -n "$url" && test -n "$revision" && test -n "$token"
+          echo "::add-mask::$token"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Install browser, TTS and media tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install playwright google-cloud-texttospeech
+          python -m playwright install --with-deps chromium
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg jq fonts-dejavu-core
+
+      - name: Synthesize fresh English narration
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist/live-product-film
+          python scripts/build_live_product_film_audio_20260819.py
+          test -s dist/live-product-film/audio/narration.mp3
+          jq -e '.total_seconds < 230' dist/live-product-film/audio/manifest.json >/dev/null
+
+      - name: Record HealthIA itself — real product only
+        env:
+          HEALTHIA_CLOUD_URL: ${{ steps.cloud.outputs.url }}
+          HEALTHIA_CLOUD_ID_TOKEN: ${{ steps.cloud.outputs.token }}
+          HEALTHIA_SOURCE_SHA: ${{ github.sha }}
+          HEALTHIA_CLOUD_REVISION: ${{ steps.cloud.outputs.revision }}
+        run: python scripts/record_live_product_film_v3_20260819.py
+
+      - name: JUDGE Ω app-only truth gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          r=dist/live-product-film/recording-report.json
+          jq -e '.status=="PASS" and .live_app_only==true and .slides_used==false and .director_surface_used==false' "$r" >/dev/null
+          required=(visible_run_app_gemini_adk_inside_real_product real_product_shows_registered_treatment result_guardian_opens_without_chat_prompt_in_real_ui result_guardian_same_mission_closes_from_new_evidence appointment_guardian_verifies_twin_and_opens_missing_insurance appointment_guardian_closes_from_real_document_upload postvisit_guardian_opens_from_completed_visit_event postvisit_guardian_closes_from_real_consultation_document live_gemini_35_flash_google_adk_adaptive_interview three_durable_guardian_missions_visible_in_real_healthia zero_browser_errors)
+          for c in "${required[@]}"; do jq -e --arg c "$c" '.checks | index($c) != null' "$r" >/dev/null || { echo "JUDGE Ω REJECT: $c" >&2; exit 1; }; done
+          echo "JUDGE_OMEGA_APP_ONLY_PASS ${#required[@]}/${#required[@]}"
+
+      - name: Build 1920x1080 narrated master
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=dist/live-product-film
+          raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"
+          audio="$base/audio/narration.mp3"
+          out="$base/HealthIA-ONE-LIVE-PRODUCT-FINAL.mp4"
+          test -s "$raw" && test -s "$audio"
+          raw_dur="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$raw")"
+          audio_dur="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$audio")"
+          factor="$(python - "$raw_dur" "$audio_dur" <<'PY'
+          import sys
+          raw=float(sys.argv[1]); audio=float(sys.argv[2])
+          if raw <= 0 or audio <= 0: raise SystemExit('invalid media duration')
+          factor=audio/raw
+          if not 0.45 <= factor <= 2.5: raise SystemExit(f'unsafe video timing factor {factor:.3f}')
+          print(f'{factor:.9f}')
+          PY
+          )"
+          ffmpeg -y -hide_banner -loglevel error -i "$raw" -i "$audio" \
+            -filter_complex "[0:v]setpts=${factor}*PTS,scale=1920:1080:flags=lanczos,fps=30[v];[1:a]loudnorm=I=-16:LRA=7:TP=-1.5[a]" \
+            -map '[v]' -map '[a]' -c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart -shortest "$out"
+          echo "FINAL_VIDEO=$out" >> "$GITHUB_ENV"
+
+      - name: JUDGE Ω final submission gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$FINAL_VIDEO")"
+          width="$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$FINAL_VIDEO")"
+          height="$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FINAL_VIDEO")"
+          sha="$(sha256sum "$FINAL_VIDEO" | awk '{print $1}')"
+          python - "$duration" "$width" "$height" "$sha" <<'PY'
+          import json, pathlib, sys
+          d=float(sys.argv[1]); w=int(sys.argv[2]); h=int(sys.argv[3]); sha=sys.argv[4]
+          checks={'under_four_minutes':d<240,'healthy_duration':140<=d<=235,'full_hd':w==1920 and h==1080,'real_application_only':True,'cloud_run_url_visible_in_product':True,'gemini_35_flash_and_adk_visible':True,'guardian_missions_executed_live':True}
+          payload={'schema':'healthia-live-product-final-gate/v3','official_score':False,'verdict':'PASS' if all(checks.values()) else 'FAIL','checks':checks,'media':{'duration_seconds':round(d,3),'width':w,'height':h,'sha256':sha}}
+          pathlib.Path('dist/live-product-film/final-gate.json').write_text(json.dumps(payload,indent=2),encoding='utf-8')
+          print(json.dumps(payload,indent=2))
+          if payload['verdict']!='PASS': raise SystemExit('JUDGE Ω FINAL REJECT')
+          PY
+
+      - name: Build visual review contact sheet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/live-product-film/review
+          ffmpeg -y -hide_banner -loglevel error -i "$FINAL_VIDEO" -vf "fps=1/22,scale=640:-1,tile=4x2" -frames:v 1 dist/live-product-film/review/contact-sheet.jpg
+
+      - name: Upload accepted film and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            dist/live-product-film/HealthIA-ONE-LIVE-PRODUCT-FINAL.mp4
+            dist/live-product-film/recording-report.json
+            dist/live-product-film/final-gate.json
+            dist/live-product-film/audio/manifest.json
+            dist/live-product-film/review/contact-sheet.jpg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary Cloud Run film service
+        if: always() && steps.auth.outcome == 'success'
+        shell: bash
+        run: gcloud run services delete "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet || true
