@@ -1,11 +1,12 @@
 {
   "target_run": "32367703696",
-  "probe_revision": "10",
+  "probe_revision": "11",
   "jobs": [
     {
       "name": "hfilm-67703696-c50153-await-email",
       "latest_execution": {
-        "completionStatus": "EXECUTION_PENDING",
+        "completionStatus": "EXECUTION_SUCCEEDED",
+        "completionTimestamp": "2026-08-20T12:22:04.282523Z",
         "creationTimestamp": "2026-08-20T12:20:47.433835Z",
         "name": "hfilm-67703696-c50153-await-email-t6qvs"
       },
@@ -18,7 +19,12 @@
     },
     {
       "name": "hfilm-67703696-c50153-reply",
-      "latest_execution": null,
+      "latest_execution": {
+        "completionStatus": "EXECUTION_SUCCEEDED",
+        "completionTimestamp": "2026-08-20T12:24:06.645092Z",
+        "creationTimestamp": "2026-08-20T12:22:13.173935Z",
+        "name": "hfilm-67703696-c50153-reply-78std"
+      },
       "conditions": [
         {
           "type": "Ready",
@@ -28,7 +34,11 @@
     },
     {
       "name": "hfilm-67703696-c50153-restore",
-      "latest_execution": null,
+      "latest_execution": {
+        "completionStatus": "EXECUTION_PENDING",
+        "creationTimestamp": "2026-08-20T12:25:46.680181Z",
+        "name": "hfilm-67703696-c50153-restore-s2mgf"
+      },
       "conditions": [
         {
           "type": "Ready",
@@ -53,7 +63,12 @@
     },
     {
       "name": "hfilm-67703696-c50153-verify",
-      "latest_execution": null,
+      "latest_execution": {
+        "completionStatus": "EXECUTION_SUCCEEDED",
+        "completionTimestamp": "2026-08-20T12:25:26.068935Z",
+        "creationTimestamp": "2026-08-20T12:24:08.797753Z",
+        "name": "hfilm-67703696-c50153-verify-vj6x8"
+      },
       "conditions": [
         {
           "type": "Ready",
@@ -65,11 +80,17 @@
   "proofs": [
     {
       "id": "film_32367703696_c50153",
-      "status": "setup_complete",
-      "trigger_model_calls": 0,
+      "mainline_scope": "explicitly_opted_in_bp_followup_only",
+      "processed_reply_count": 1,
+      "status": "full_loop_live_pass",
       "no_chat_prompt_used": true,
+      "trigger_model_calls": 0,
+      "mission_status": "completed",
+      "outbox_status": "processed",
       "trigger_network_calls": 0,
-      "mainline_scope": "explicitly_opted_in_bp_followup_only"
+      "gmail_pubsub_inbound": true,
+      "eventarc_outbound": true,
+      "vital_source_type": "patient_email_reply"
     }
   ]
 }
