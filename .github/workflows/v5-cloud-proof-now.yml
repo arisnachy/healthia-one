@@ -17,6 +17,7 @@ jobs:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       TARGET_RUN: "32328293833"
+      PROBE_REVISION: "2"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,7 +62,7 @@ jobs:
               if snap.id.startswith(doc_prefix):
                   data=snap.to_dict() or {}
                   proofs.append({'id':snap.id, **{k:data.get(k) for k in allowed if k in data}})
-          open('hackathon/v5_cloud_proof_now.json','w').write(json.dumps({'target_run':target,'jobs':jobs,'proofs':proofs},indent=2,default=str))
+          open('hackathon/v5_cloud_proof_now.json','w').write(json.dumps({'target_run':target,'probe_revision':os.environ['PROBE_REVISION'],'jobs':jobs,'proofs':proofs},indent=2,default=str))
           PY
           git config user.name "healthia-v5-cloud-probe"
           git config user.email "actions@users.noreply.github.com"
