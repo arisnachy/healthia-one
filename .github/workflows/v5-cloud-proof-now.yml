@@ -16,7 +16,7 @@ jobs:
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
-      TARGET_RUN: "32326936389"
+      TARGET_RUN: "32328293833"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +37,6 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -q google-cloud-firestore
-          prefix="hfilm-${TARGET_RUN: -8}-"
           gcloud run jobs list --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/jobs.json
           python - <<'PY'
           import json, os
@@ -53,26 +52,16 @@ jobs:
                   continue
               status=item.get('status') or {}
               conditions=status.get('conditions') or []
-              jobs.append({
-                  'name':name,
-                  'latest_execution':status.get('latestCreatedExecution'),
-                  'conditions':[{k:c.get(k) for k in ('type','status','reason','message') if c.get(k) is not None} for c in conditions],
-              })
+              jobs.append({'name':name,'latest_execution':status.get('latestCreatedExecution'),'conditions':[{k:c.get(k) for k in ('type','status','reason','message') if c.get(k) is not None} for c in conditions]})
           db=firestore.Client(project=os.environ['PROJECT_ID'])
           proofs=[]
           doc_prefix='film_'+target+'_'
-          allowed={
-              'status','mission_status','outbox_status','eventarc_outbound','gmail_pubsub_inbound',
-              'no_chat_prompt_used','trigger_model_calls','trigger_network_calls','vital_source_type',
-              'processed_reply_count','mainline_scope'
-          }
+          allowed={'status','mission_status','outbox_status','eventarc_outbound','gmail_pubsub_inbound','no_chat_prompt_used','trigger_model_calls','trigger_network_calls','vital_source_type','processed_reply_count','mainline_scope'}
           for snap in db.collection('healthia_wave14_stitch_proofs').stream():
-              if not snap.id.startswith(doc_prefix):
-                  continue
-              data=snap.to_dict() or {}
-              proofs.append({'id':snap.id, **{k:data.get(k) for k in allowed if k in data}})
-          out={'target_run':target,'jobs':jobs,'proofs':proofs}
-          open('hackathon/v5_cloud_proof_now.json','w').write(json.dumps(out,indent=2,default=str))
+              if snap.id.startswith(doc_prefix):
+                  data=snap.to_dict() or {}
+                  proofs.append({'id':snap.id, **{k:data.get(k) for k in allowed if k in data}})
+          open('hackathon/v5_cloud_proof_now.json','w').write(json.dumps({'target_run':target,'jobs':jobs,'proofs':proofs},indent=2,default=str))
           PY
           git config user.name "healthia-v5-cloud-probe"
           git config user.email "actions@users.noreply.github.com"
