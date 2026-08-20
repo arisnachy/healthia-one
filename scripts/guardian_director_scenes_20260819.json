@@ -1,46 +1,46 @@
 [
   {
     "id": "mainline",
-    "text": "Most health AI waits for the patient to remember what to ask. HealthIA ONE is built for the opposite. In the promoted Google Cloud runtime, an opted-in blood-pressure follow-up can become durable work without another chat prompt. Firestore commits the mission first, Eventarc wakes a private worker, Gmail reaches the patient, Gmail Pub/Sub brings the reply back, a canonical VitalRecord is written, and the same mission closes. The trigger uses zero model calls."
+    "text": "Most health AI waits for the patient to remember what to ask. HealthIA ONE does the opposite. In the promoted Google Cloud runtime, an opted-in blood-pressure follow-up becomes durable work without another prompt: Firestore commits the mission, Eventarc wakes a private worker, Gmail reaches the patient, Pub/Sub returns the reply, a VitalRecord is written, and the same mission closes. The trigger uses zero model calls."
   },
   {
     "id": "twin",
-    "text": "Now I want to show the deeper Guardian idea using a separate research build, clearly labeled as research and running the real Guardian code. Meet Ana, a synthetic patient. Her Twin already knows that losartan fifty milligrams daily is an active, patient-confirmed treatment. Proactive continuity and patient-email auto-send consent are enabled. Ana has typed nothing."
+    "text": "Now the deeper Guardian idea, on a separate research build running real Guardian code. Ana is synthetic. Her Twin knows Losartan fifty milligrams daily is active and patient-confirmed. Proactive continuity and patient-email auto-send are authorized. Ana typed nothing."
   },
   {
     "id": "result_gap",
-    "text": "A renal-function result arrives. Guardian does not merely store the PDF. Because losartan exists in the treatment context, it asks a different question: does the patient record contain the evidence this follow-up context needs? Creatinine is present. Potassium is not. Without a chat prompt, HealthIA opens a durable treatment-aware evidence mission and prepares a patient-only notification under standing consent. It does not diagnose kidney disease and it does not change the medication."
+    "text": "A renal result arrives. Because Losartan is registered, Guardian checks whether the record contains renal-function and potassium evidence. Creatinine is present; potassium is not. With zero chat prompts, HealthIA opens a durable treatment-aware mission and prepares a patient-only notification. It does not diagnose kidney disease or change medication."
   },
   {
     "id": "result_close",
-    "text": "Later, potassium evidence arrives. Guardian re-evaluates the same open mission, links the new result and original document, writes a resolution receipt, and closes the mission only because the required evidence is now present. No treatment was changed. This is the Twin carrying unfinished clinical context forward instead of hoping the patient remembers it later."
+    "text": "Later potassium arrives. Guardian links it to the open mission, attaches durable evidence and a receipt, and closes only because the missing evidence now exists. Treatment remains unchanged."
   },
   {
     "id": "appointment_gap",
-    "text": "Next, a family-medicine appointment is thirty-six hours away. HealthIA checks what the appointment requires against what the Twin can actually prove. Recent results: verified. Active medication list: verified. Insurance: missing. So Guardian opens a preparation mission for the missing evidence instead of sending a generic reminder that says, remember your appointment."
+    "text": "A family-medicine visit is thirty-six hours away. HealthIA checks requirements against the Twin: recent results verified, medication list verified, insurance missing. Guardian opens a preparation mission for exactly what is missing, not a generic reminder."
   },
   {
     "id": "appointment_close",
-    "text": "The insurance document arrives. HealthIA re-runs the exact preparation checks, attaches the evidence, and closes the same mission with a receipt. It did not book, cancel, or modify the appointment. It simply made sure the patient reaches the visit with the evidence the record says is required."
+    "text": "Insurance arrives. HealthIA rechecks the requirements, attaches the evidence, and closes the same mission. It does not book, cancel, or alter the appointment."
   },
   {
     "id": "postvisit_gap",
-    "text": "Now the visit is marked completed. But HealthIA cannot verify a consultation note or discharge summary. That is another continuity gap. Post-Visit Guardian opens a new mission automatically and explicitly refuses to invent what happened during the encounter. The health story is not allowed to end at the calendar event."
+    "text": "The visit is later marked completed, but no consultation or discharge note exists. Post-Visit Guardian opens a continuity mission and refuses to invent the outcome."
   },
   {
     "id": "postvisit_close",
-    "text": "When the consultation note appears, Guardian links it to the completed visit inside the bounded time window and closes the post-visit mission from durable evidence. Three different missions were created from the patient's longitudinal state, not from three chat prompts."
+    "text": "When the consultation note arrives, Guardian links it to the completed visit and closes from durable evidence. Three missions, all created from longitudinal state, not three chat prompts."
   },
   {
     "id": "clinical_ai",
-    "text": "HealthIA is still available when the patient does want a consultation-style interaction. In the live product, Gemini 3.5 Flash through Google ADK can generate an adaptive clinical interview from the current complaint and authorized longitudinal context. The questions change with the case, while deterministic safety rules prevent the model from turning orientation into an autonomous diagnosis or prescription."
+    "text": "When the patient does want guidance, the live product uses Gemini 3.5 Flash through Google ADK to build an adaptive clinical interview from the current complaint and authorized context. Deterministic safety prevents orientation from becoming autonomous diagnosis or prescribing."
   },
   {
     "id": "safety",
-    "text": "And autonomy cannot grade its own homework. In the frozen main runtime, ONE SAFETY separates model reasoning from real-world truth. A protected action crosses deterministic authorization, a one-use HealthActionTicket, the connector, a durable receipt, and Google Cloud Trace. Authorization is not completion. The outside world must leave evidence."
+    "text": "ONE SAFETY keeps autonomy honest. A protected real-world action crosses deterministic authorization, a one-use HealthActionTicket, the connector, a durable receipt, and Google Cloud Trace. Authorization is not completion. The outside world must leave evidence."
   },
   {
     "id": "close",
-    "text": "This is the point of HealthIA ONE. It is not a search box and it is not an autonomous doctor. It is a patient-owned continuity agent that watches the authorized Twin, notices unfinished health work, gathers and verifies evidence, contacts the patient when allowed, resumes missions across time, and stops where human or clinical authority begins. Your health never starts over. Neither should your health agent."
+    "text": "HealthIA ONE is not a search box or an autonomous doctor. It is a patient-owned continuity agent: watching the authorized Twin, finding unfinished work, verifying evidence, contacting the patient when allowed, and stopping where human authority begins. Your health never starts over. Neither should your health agent."
   }
 ]
