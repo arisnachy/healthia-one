@@ -1,9 +1,9 @@
 {
   "schema": "healthia-guardian-director-status/v1",
-  "run_id": 32315222378,
-  "source_sha": "01a324c67818cd72c658f0912ebf30e1a14357f7",
-  "status": "FAIL",
+  "run_id": 32315647911,
+  "source_sha": "a2f6b509722e705fe16701970dc7fa909fcee5ba",
+  "status": "PASS",
   "artifact_name": "HealthIA-ONE-GUARDIAN-DIRECTOR-CUT-20260819",
-  "artifact_id": 0,
-  "artifact_size_bytes": 0
+  "artifact_id": 9388134488,
+  "artifact_size_bytes": 12454818
 }
