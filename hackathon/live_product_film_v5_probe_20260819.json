@@ -1,0 +1,12 @@
+{
+  "target_sha": "22be9cc720c771a3fd59920c02ebdaa0308300c6",
+  "run": {
+    "conclusion": "failure",
+    "createdAt": "2026-08-20T03:01:11Z",
+    "databaseId": 32326716485,
+    "headSha": "22be9cc720c771a3fd59920c02ebdaa0308300c6",
+    "status": "completed",
+    "url": "https://github.com/arisnachy/healthia-one/actions/runs/32326716485"
+  },
+  "observed_at": "2026-08-20T03:02:37Z"
+}
