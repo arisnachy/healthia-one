@@ -1,14 +1,14 @@
 {
   "target_run": "32328293833",
-  "probe_revision": "5",
+  "probe_revision": "6",
   "jobs": [
     {
-      "name": "hfilm-28293833-fc48d9-await-email",
+      "name": "hfilm-28293833-301c67-await-email",
       "latest_execution": {
         "completionStatus": "EXECUTION_SUCCEEDED",
-        "completionTimestamp": "2026-08-20T03:39:39.911497Z",
-        "creationTimestamp": "2026-08-20T03:36:52.283737Z",
-        "name": "hfilm-28293833-fc48d9-await-email-xl4qj"
+        "completionTimestamp": "2026-08-20T11:45:26.841988Z",
+        "creationTimestamp": "2026-08-20T11:44:28.736922Z",
+        "name": "hfilm-28293833-301c67-await-email-7k5hw"
       },
       "conditions": [
         {
@@ -18,26 +18,11 @@
       ]
     },
     {
-      "name": "hfilm-28293833-fc48d9-reply",
-      "latest_execution": {
-        "completionStatus": "EXECUTION_SUCCEEDED",
-        "completionTimestamp": "2026-08-20T03:40:55.489133Z",
-        "creationTimestamp": "2026-08-20T03:39:47.426340Z",
-        "name": "hfilm-28293833-fc48d9-reply-bqqjd"
-      },
-      "conditions": [
-        {
-          "type": "Ready",
-          "status": "True"
-        }
-      ]
-    },
-    {
-      "name": "hfilm-28293833-fc48d9-restore",
+      "name": "hfilm-28293833-301c67-reply",
       "latest_execution": {
         "completionStatus": "EXECUTION_PENDING",
-        "creationTimestamp": "2026-08-20T03:45:09.832810Z",
-        "name": "hfilm-28293833-fc48d9-restore-tbdv7"
+        "creationTimestamp": "2026-08-20T11:45:36.894164Z",
+        "name": "hfilm-28293833-301c67-reply-drs2h"
       },
       "conditions": [
         {
@@ -47,12 +32,22 @@
       ]
     },
     {
-      "name": "hfilm-28293833-fc48d9-setup",
+      "name": "hfilm-28293833-301c67-restore",
+      "latest_execution": null,
+      "conditions": [
+        {
+          "type": "Ready",
+          "status": "True"
+        }
+      ]
+    },
+    {
+      "name": "hfilm-28293833-301c67-setup",
       "latest_execution": {
         "completionStatus": "EXECUTION_SUCCEEDED",
-        "completionTimestamp": "2026-08-20T03:36:39.558026Z",
-        "creationTimestamp": "2026-08-20T03:34:35.535300Z",
-        "name": "hfilm-28293833-fc48d9-setup-mf94w"
+        "completionTimestamp": "2026-08-20T11:44:15.263528Z",
+        "creationTimestamp": "2026-08-20T11:41:54.627186Z",
+        "name": "hfilm-28293833-301c67-setup-fzbmf"
       },
       "conditions": [
         {
@@ -62,13 +57,8 @@
       ]
     },
     {
-      "name": "hfilm-28293833-fc48d9-verify",
-      "latest_execution": {
-        "completionStatus": "EXECUTION_FAILED",
-        "completionTimestamp": "2026-08-20T03:45:07.760412Z",
-        "creationTimestamp": "2026-08-20T03:40:57.045082Z",
-        "name": "hfilm-28293833-fc48d9-verify-tbc89"
-      },
+      "name": "hfilm-28293833-301c67-verify",
+      "latest_execution": null,
       "conditions": [
         {
           "type": "Ready",
@@ -79,12 +69,21 @@
   ],
   "proofs": [
     {
+      "id": "film_32328293833_301c67",
+      "trigger_model_calls": 0,
+      "trigger_network_calls": 0,
+      "mainline_scope": "explicitly_opted_in_bp_followup_only",
+      "status": "eventarc_email_sent",
+      "outbox_status": "processed",
+      "no_chat_prompt_used": true
+    },
+    {
       "id": "film_32328293833_fc48d9",
+      "trigger_model_calls": 0,
+      "trigger_network_calls": 0,
       "mainline_scope": "explicitly_opted_in_bp_followup_only",
       "status": "reply_sent",
       "outbox_status": "processed",
-      "trigger_network_calls": 0,
-      "trigger_model_calls": 0,
       "no_chat_prompt_used": true
     }
   ]
