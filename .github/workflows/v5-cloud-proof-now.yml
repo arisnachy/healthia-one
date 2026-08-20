@@ -17,7 +17,7 @@ jobs:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       TARGET_RUN: "32367703696"
-      PROBE_REVISION: "10"
+      PROBE_REVISION: "11"
     steps:
       - uses: actions/checkout@v4
         with:
