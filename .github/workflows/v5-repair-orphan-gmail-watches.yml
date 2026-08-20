@@ -1,0 +1,106 @@
+name: HealthIA V5 repair orphaned synthetic Gmail watches
+
+on:
+  push:
+    branches: [kira/live-product-film-20260819]
+    paths:
+      - ".github/workflows/v5-repair-orphan-gmail-watches.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    env:
+      PROJECT_ID: healthia-6088a
+      SOURCE_PATIENT: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/live-product-film-20260819
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - name: Disable only orphaned duplicate watches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q google-cloud-firestore
+          python - <<'PY'
+          import json, os
+          from google.cloud import firestore
+
+          project=os.environ['PROJECT_ID']; source_id=os.environ['SOURCE_PATIENT']
+          db=firestore.Client(project=project)
+          oauth=db.collection('healthia_google_oauth_connections')
+          watches=db.collection('healthia_gmail_watch_state')
+
+          source_conn=oauth.document(source_id).get()
+          if not source_conn.exists:
+              raise SystemExit('canonical proof OAuth connection missing')
+          sc=source_conn.to_dict() or {}
+          mailbox=str(sc.get('google_account') or '').strip().lower()
+          if not sc.get('enabled') or '@' not in mailbox:
+              raise SystemExit('canonical proof OAuth connection invalid')
+
+          source_watch=watches.document(source_id).get()
+          if not source_watch.exists:
+              raise SystemExit('canonical proof Gmail watch missing')
+          sw=source_watch.to_dict() or {}
+          if not sw.get('enabled') or str(sw.get('email_address') or '').strip().lower()!=mailbox:
+              raise SystemExit('canonical proof Gmail watch is not the valid enabled binding')
+
+          enabled=list(watches.where('email_address','==',mailbox).where('enabled','==',True).limit(20).stream())
+          conflicts=[]; orphaned=[]
+          for snap in enabled:
+              pid=str((snap.to_dict() or {}).get('patient_id') or snap.id)
+              if pid==source_id:
+                  continue
+              conn=oauth.document(pid).get()
+              cd=conn.to_dict() or {} if conn.exists else {}
+              valid=bool(conn.exists and cd.get('enabled') and str(cd.get('google_account') or '').strip().lower()==mailbox)
+              if valid:
+                  conflicts.append(pid)
+              else:
+                  orphaned.append(pid)
+
+          # Fail before any mutation if a second legitimate patient is bound to
+          # the mailbox. This repair is allowed to remove only orphaned film/test
+          # routing, never a valid user connection.
+          if conflicts:
+              raise SystemExit('legitimate duplicate watch detected; refusing repair: '+','.join(conflicts))
+
+          batch=db.batch()
+          for pid in orphaned:
+              batch.update(watches.document(pid), {'enabled':False,'updated_at':firestore.SERVER_TIMESTAMP})
+          if orphaned:
+              batch.commit()
+
+          remaining=list(watches.where('email_address','==',mailbox).where('enabled','==',True).limit(20).stream())
+          remaining_ids=[str((s.to_dict() or {}).get('patient_id') or s.id) for s in remaining]
+          if remaining_ids != [source_id]:
+              raise SystemExit('watch uniqueness not restored: '+','.join(remaining_ids))
+
+          report={
+            'status':'PASS',
+            'canonical_source_retained':True,
+            'orphaned_disabled':orphaned,
+            'legitimate_conflicts':conflicts,
+            'enabled_watch_count_after':len(remaining_ids),
+            'mailbox_exposed':False,
+          }
+          open('hackathon/v5_gmail_watch_repair.json','w').write(json.dumps(report,indent=2))
+          print(json.dumps(report,indent=2))
+          PY
+          git config user.name "healthia-v5-watch-repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add hackathon/v5_gmail_watch_repair.json
+          git commit -m "film: record synthetic Gmail watch repair"
+          git push origin HEAD:kira/live-product-film-20260819
