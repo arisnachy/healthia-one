@@ -5,6 +5,7 @@ on:
     branches: [kira/live-product-film-20260819]
     paths:
       - "scripts/record_live_product_film_v5_20260819.py"
+      - "scripts/build_live_product_v5_master_20260820.py"
       - "scripts/live_product_film_narration_20260819.json"
       - ".github/workflows/live-product-film-v5-20260819.yml"
   workflow_dispatch:
@@ -30,7 +31,7 @@ jobs:
       BUILD_SA: projects/healthia-6088a/serviceAccounts/healthia-one-build@healthia-6088a.iam.gserviceaccount.com
       RUNTIME_SA: healthia-one-demo@healthia-6088a.iam.gserviceaccount.com
       BP_PROOF_SOURCE_PATIENT_ID: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
-      ARTIFACT_NAME: HealthIA-ONE-LIVE-PRODUCT-V5-AUTONOMOUS-20260819
+      ARTIFACT_NAME: HealthIA-ONE-LIVE-PRODUCT-V5-AUTONOMOUS-20260820
 
     steps:
       - name: Checkout exact film source
@@ -55,7 +56,7 @@ jobs:
             tests/test_result_guardian_resolution_loop.py \
             tests/test_appointment_guardian_resolution_loop.py \
             tests/test_postvisit_guardian_resolution_loop.py
-          python -m py_compile scripts/record_live_product_film_v5_20260819.py
+          python -m py_compile scripts/record_live_product_film_v5_20260819.py scripts/build_live_product_v5_master_20260820.py
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -167,30 +168,26 @@ jobs:
           jq -e '.autonomous_bp_proof.no_chat_prompt_used==true and .autonomous_bp_proof.real_gmail_sent==true and .autonomous_bp_proof.same_thread_reply==true and .autonomous_bp_proof.gmail_pubsub_inbound==true and .autonomous_bp_proof.vital_record=="128/80" and .autonomous_bp_proof.vital_source_type=="patient_email_reply" and .autonomous_bp_proof.same_mission_completed==true' "$r" >/dev/null
           echo "JUDGE_OMEGA_V5_APP_PLUS_REAL_ACTION_PASS ${#required[@]}/${#required[@]}"
 
-      - name: Build 1920x1080 narrated master
+      - name: Preserve approved raw proof before editing
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-RAW-PASS
+          path: |
+            dist/live-product-film/video/*.webm
+            dist/live-product-film/recording-report.json
+            dist/live-product-film/audio/narration.mp3
+            dist/live-product-film/audio/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build 1920x1080 smart-cut narrated master
         shell: bash
         run: |
           set -euo pipefail
-          base=dist/live-product-film
-          raw="$(find "$base/video" -type f -name '*.webm' -print -quit)"
-          audio="$base/audio/narration.mp3"
-          out="$base/HealthIA-ONE-LIVE-PRODUCT-V5-AUTONOMOUS-FINAL.mp4"
-          test -s "$raw" && test -s "$audio"
-          raw_dur="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$raw")"
-          audio_dur="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$audio")"
-          factor="$(python - "$raw_dur" "$audio_dur" <<'PY'
-          import sys
-          raw=float(sys.argv[1]); audio=float(sys.argv[2])
-          if raw <= 0 or audio <= 0: raise SystemExit('invalid media duration')
-          factor=audio/raw
-          if not 0.30 <= factor <= 2.5: raise SystemExit(f'unsafe video timing factor {factor:.3f}')
-          print(f'{factor:.9f}')
-          PY
-          )"
-          ffmpeg -y -hide_banner -loglevel error -i "$raw" -i "$audio" \
-            -filter_complex "[0:v]setpts=${factor}*PTS,scale=1920:1080:flags=lanczos,fps=30[v];[1:a]loudnorm=I=-16:LRA=7:TP=-1.5[a]" \
-            -map '[v]' -map '[a]' -c:v libx264 -preset medium -crf 19 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart -shortest "$out"
-          echo "FINAL_VIDEO=$out" >> "$GITHUB_ENV"
+          python scripts/build_live_product_v5_master_20260820.py
+          test -s dist/live-product-film/HealthIA-ONE-LIVE-PRODUCT-V5-AUTONOMOUS-FINAL.mp4
+          test -s dist/live-product-film/trim-report-v5.json
+          echo "FINAL_VIDEO=dist/live-product-film/HealthIA-ONE-LIVE-PRODUCT-V5-AUTONOMOUS-FINAL.mp4" >> "$GITHUB_ENV"
 
       - name: JUDGE Ω final submission gate
         shell: bash
@@ -203,10 +200,14 @@ jobs:
           python - "$duration" "$width" "$height" "$sha" <<'PY'
           import json, pathlib, sys
           d=float(sys.argv[1]); w=int(sys.argv[2]); h=int(sys.argv[3]); sha=sys.argv[4]
+          trim=json.loads(pathlib.Path('dist/live-product-film/trim-report-v5.json').read_text())
+          factor=float(trim['final_timing_factor'])
           checks={
             'under_four_minutes':d<240,
             'healthy_duration':155<=d<=235,
             'full_hd':w==1920 and h==1080,
+            'smart_cut_not_global_speedup':0.80<=factor<=1.22,
+            'long_static_waits_only_removed':trim.get('freeze_minimum_seconds')==12.0,
             'real_application_only':True,
             'cloud_run_url_visible_in_product':True,
             'gemini_35_flash_and_adk_visible':True,
@@ -215,7 +216,7 @@ jobs:
             'gmail_reply_became_visible_vital_record':True,
             'same_external_action_mission_completed':True,
           }
-          payload={'schema':'healthia-live-product-final-gate/v5','official_score':False,'verdict':'PASS' if all(checks.values()) else 'FAIL','checks':checks,'media':{'duration_seconds':round(d,3),'width':w,'height':h,'sha256':sha}}
+          payload={'schema':'healthia-live-product-final-gate/v5','official_score':False,'verdict':'PASS' if all(checks.values()) else 'FAIL','checks':checks,'media':{'duration_seconds':round(d,3),'width':w,'height':h,'sha256':sha},'edit':trim}
           pathlib.Path('dist/live-product-film/final-gate-v5.json').write_text(json.dumps(payload,indent=2),encoding='utf-8')
           print(json.dumps(payload,indent=2))
           if payload['verdict']!='PASS': raise SystemExit('JUDGE Ω V5 FINAL REJECT')
@@ -236,6 +237,7 @@ jobs:
             dist/live-product-film/HealthIA-ONE-LIVE-PRODUCT-V5-AUTONOMOUS-FINAL.mp4
             dist/live-product-film/recording-report.json
             dist/live-product-film/final-gate-v5.json
+            dist/live-product-film/trim-report-v5.json
             dist/live-product-film/audio/manifest.json
             dist/live-product-film/review/contact-sheet-v5.jpg
           if-no-files-found: error
