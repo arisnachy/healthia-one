@@ -1,0 +1,969 @@
+{
+  "window": "2026-08-20T03:38:00Z/03:46:30Z",
+  "gmail_push_requests": 75,
+  "status_counts": {
+    "500": 75
+  },
+  "entries": [
+    {
+      "timestamp": "2026-08-20T03:38:01.301676Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.057440309s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:01.359035Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:53932 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:01.361181Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:01.727275Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.034195733s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:01.760021Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:53948 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:01.762433Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:06.800916Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.032180375s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:06.832097Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:53964 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:06.834566Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:09.052744Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.034177648s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:09.085503Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11116 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:09.087853Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:09.594090Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.039310918s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:09.632829Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11126 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:09.634547Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:10.673479Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031946914s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:10.704959Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11134 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:10.706925Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:12.563769Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.033122216s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:12.596377Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11142 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:12.598347Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:17.574944Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031310526s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:17.605887Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:51268 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:17.607661Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:18.123242Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.022694586s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:18.144985Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:51282 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:18.146938Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:21.694597Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.039156373s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:21.732202Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:51294 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:21.735057Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:25.838251Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.023311713s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:25.861113Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:51300 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:25.863119Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:28.068847Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.036873356s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:28.104785Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:25450 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:28.106910Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:34.792657Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.032585423s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:34.824290Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:25456 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:34.826507Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:34.900494Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031870803s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:34.931343Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:25458 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:34.933168Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:40.909797Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.038960195s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:40.947873Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:6450 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:40.950128Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:42.982292Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031381585s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:43.013178Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:6460 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:43.015239Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:43.785348Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.029660495s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:43.814488Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:6468 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:43.816098Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:46.651892Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.029054500s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:46.680574Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:6472 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:46.682489Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:48.591931Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.043510458s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:48.634348Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11880 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:48.636542Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:51.275116Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031864587s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:51.306130Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11882 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:51.308169Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:55.353791Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.121699400s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:55.475017Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11892 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:55.477005Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:56.846052Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.032292629s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:56.878230Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:11896 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:56.880204Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:58.717120Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.034216102s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:58.750534Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:51258 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:38:58.752702Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:00.218973Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.050704582s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:00.268371Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:51264 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:00.270618Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:10.222791Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.048281209s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:10.276294Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:55376 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:10.278430Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:12.899002Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.030444311s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:12.928992Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:55386 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:12.930951Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:20.376549Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.038728137s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:20.420286Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:14784 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:20.422542Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:25.642880Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031159527s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:25.673272Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:14800 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:25.675620Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:26.490286Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.036919445s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:26.526486Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:14810 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:26.530400Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:28.639336Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.033867214s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:28.672953Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49752 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:28.674757Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:29.598812Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.033384425s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:29.630797Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49754 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:29.633149Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.094086Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.061272024s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.154685Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49768 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.156772Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.493766Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.033748218s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.527091Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49770 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.528971Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.596532Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.032023648s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.627720Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49780 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.629736Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.939674Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031115478s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.969821Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49792 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.972176Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:33.782236Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.039583157s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:33.820226Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49794 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:33.822939Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.175616Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.031873298s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.206399Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49810 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.208472Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.291084Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.042096645s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.332098Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49820 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.333985Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.902804Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.027440297s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.928852Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49834 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:34.931178Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:35.242034Z",
+      "severity": "ERROR",
+      "http_status": 500,
+      "method": "POST",
+      "latency": "0.078898500s",
+      "path": "/events/gmail-push"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:35.320266Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "INFO:     169.254.169.126:49850 - \"POST /events/gmail-push HTTP/1.1\" 500 Internal Server Error"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:35.322295Z",
+      "severity": null,
+      "http_status": null,
+      "method": null,
+      "latency": null,
+      "text": "ERROR:    Exception in ASGI application"
+    }
+  ]
+}
