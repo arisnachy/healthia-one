@@ -7,6 +7,7 @@ from app.main import app
 
 def test_profile_and_device_endpoints() -> None:
     with TestClient(app) as client:
+        client.post("/api/demo/reset").raise_for_status()
         profile = client.get("/api/profile")
         assert profile.status_code == 200
         assert "vitals" in profile.json()

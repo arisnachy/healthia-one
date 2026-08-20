@@ -54,19 +54,26 @@ class Settings(BaseSettings):
     evaluation_max_runs: int = 2
     release_sha: str = "local"
 
-    # Patient account boundary. Tests and static demo can leave auth disabled;
-    # the secure local launcher and Cloud deployment enable it explicitly.
-    auth_required: bool = False
+    # Patient identity is secure by default. Tests or an explicitly isolated
+    # static demo must opt out; Cloud mode cannot disable this boundary.
+    auth_required: bool = True
     allow_registration: bool = True
     accounts_path: Path = Path(".healthia-one/accounts.json")
     session_cookie_name: str = "healthia_session"
     session_hours: int = 12
+    login_attempt_limit: int = 5
+    login_ip_attempt_limit: int = 12
+    login_window_seconds: int = 300
+    pairing_attempt_limit: int = 8
+    pairing_window_seconds: int = 300
 
     def model_post_init(self, __context) -> None:
         # Every production Cloud Run deployment already declares
         # HEALTHIA_ENV=cloud. Binding ONE SAFETY to that deployment contract
         # prevents Model Armor/Trace from being silently omitted by an older
         # deploy script or workflow. Local/tests remain network-free by default.
+        if self.env.strip().lower() == "cloud":
+            self.auth_required = True
         if self.env.strip().lower() == "cloud" and self.one_safety_auto_enable_cloud:
             self.model_armor_enabled = True
             self.otel_enabled = True

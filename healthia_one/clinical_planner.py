@@ -5,6 +5,7 @@ import unicodedata
 from typing import Any, Iterable
 
 from healthia_one.clinical_tools import execute_on_demand_clinical_tools
+from healthia_one.clinical_output_guard import contains_forbidden_clinical_directive
 from healthia_one.models import AgentStep, PatientState
 
 
@@ -126,24 +127,7 @@ def _normalize(value: str) -> str:
 
 
 def _contains_forbidden_clinical_directive(value: str) -> bool:
-    """Reject treatment commands without rejecting legitimate history questions."""
-    normalized = _normalize(value)
-    if any(directive in normalized for directive in FORBIDDEN_CLINICAL_DIRECTIVES):
-        return True
-
-    # "¿Toma algún medicamento?" is a legitimate interview question. By
-    # contrast, standalone imperative clauses like "Toma ciprofloxacino" or
-    # "No tome este medicamento" are treatment directives and remain blocked.
-    for fragment in re.split(r"[.!;\n]+", normalized):
-        clause = fragment.strip()
-        if not clause:
-            continue
-        if "?" in clause or clause.startswith("¿"):
-            continue
-        command = clause.lstrip("¡!:- ")
-        if re.match(r"^(?:por favor\s+)?(?:no\s+)?(?:toma|tome)\s+", command):
-            return True
-    return False
+    return contains_forbidden_clinical_directive(value)
 
 
 def _answer_text(previous_answers: Iterable[dict[str, Any]] | None) -> str:

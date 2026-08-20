@@ -54,6 +54,21 @@ def test_gemini_enhances_the_real_patient_chat_boundary_without_provider_storage
     assert "system_instruction" in call
 
 
+def test_gemini_withholds_generated_clinical_directive(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    client = FakeClient(output="Suspenda el medicamento hoy.")
+    responder = GeminiResponder(guarded_settings(), client_factory=lambda: client)
+    state = seed_state()
+    draft = respond(state, "Quiero entender mi presión")
+    deterministic_content = draft.message.content
+
+    result = asyncio.run(responder.enhance(state, "Quiero entender mi presión", draft))
+
+    assert result.message.content == deterministic_content
+    assert result.message.metadata["llm_status"] == "safety_withheld"
+    assert responder.last_status == "safety_withheld"
+
+
 def test_interaction_text_keeps_output_text_compatibility() -> None:
     interaction = SimpleNamespace(output_text="Texto directo", outputs=[])
     assert GeminiResponder._interaction_text(interaction) == "Texto directo"

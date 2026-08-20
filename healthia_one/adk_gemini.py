@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from healthia_one.adk_runtime import AdkClinicalRuntime
 from healthia_one.clinical_planner import judge_dynamic_plan, normalize_dynamic_question_block
+from healthia_one.clinical_output_guard import contains_forbidden_clinical_directive
 from healthia_one.config import Settings
 from healthia_one.control import audit
 from healthia_one.conversation_brain import selective_memory, semantic_packet
@@ -415,6 +416,18 @@ class AdkGeminiResponder(GeminiResponder):
                 interview,
                 status="clinical_ai_resolution_invalid",
                 reason="Gemini chose summarize but returned no patient-facing message.",
+            )
+        patient_visible_fragments = [
+            patient_message,
+            str(resolution.get("clinical_focus") or ""),
+            *(str(item) for item in resolution.get("possible_explanations") or []),
+        ]
+        if any(contains_forbidden_clinical_directive(fragment) for fragment in patient_visible_fragments):
+            return self._mark_ai_resolution_unavailable(
+                draft,
+                interview,
+                status="clinical_ai_output_blocked",
+                reason="ONE SAFETY blocked a diagnosis or treatment directive in generated patient-visible output.",
             )
 
         interview.update(

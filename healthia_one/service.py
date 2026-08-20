@@ -9,7 +9,7 @@ from typing import AsyncIterator, Callable
 from healthia_one.adk_gemini import AdkGeminiResponder
 from healthia_one.auth import PatientPrincipal, current_patient_id, patient_scope, principal_scope
 from healthia_one.config import Settings
-from healthia_one.devices import ingest_health_connect_batch
+from healthia_one.devices import DeviceConsentError, consented_device_metrics, ingest_health_connect_batch
 from healthia_one.living_system import (
     EVALUATION_PATIENT_ID,
     arm_evaluation,
@@ -23,6 +23,7 @@ from healthia_one.models import (
     Appointment,
     ChatMessage,
     ClinicalDocument,
+    DeviceConnection,
     FamilyCondition,
     FamilyMember,
     HealthConnectSyncBatch,
@@ -453,6 +454,9 @@ class HealthIAService:
         async with self._mutation_lock:
             state = await self.store.load()
             profile.id = state.profile.id
+            # Consent is canonical state, never a caller-overwritable profile
+            # field. Preserve the current projection on every profile write.
+            profile.consented_signal_types = list(dict.fromkeys(state.consent.signal_types))
             state.profile = profile
             audit(
                 state,
@@ -473,6 +477,16 @@ class HealthIAService:
     ) -> dict:
         async with self._mutation_lock:
             state = await self.store.load()
+            declared_metrics = set(batch.granted_metrics)
+            record_metrics = {record.metric for record in batch.records}
+            if not record_metrics.issubset(declared_metrics):
+                raise DeviceConsentError("El lote contiene métricas fuera de los permisos declarados.")
+            consented_metrics = consented_device_metrics(state)
+            if not declared_metrics.issubset(consented_metrics):
+                denied = sorted(metric.value for metric in declared_metrics - consented_metrics)
+                raise DeviceConsentError(
+                    "El consentimiento vigente no autoriza estas métricas: " + ", ".join(denied)
+                )
             if authorized_connection_id:
                 connection = next(
                     (item for item in state.device_connections if item.id == authorized_connection_id),
@@ -480,6 +494,13 @@ class HealthIAService:
                 )
                 if connection is not None and connection.status == "disconnected":
                     raise PermissionError("La conexión del dispositivo fue revocada.")
+                if connection is not None:
+                    persisted_permissions = set(connection.permissions)
+                    requested_permissions = {metric.value for metric in declared_metrics}
+                    if not requested_permissions.issubset(persisted_permissions):
+                        raise DeviceConsentError(
+                            "La conexión debe volver a vincularse para ampliar permisos de métricas."
+                        )
             result = ingest_health_connect_batch(state, batch)
             for alert in result.get("safety_alerts", []):
                 state.messages.append(
@@ -515,6 +536,42 @@ class HealthIAService:
             await self.store.save(state)
         await self.broker.publish({"type": "state", "section": "devices"})
         return result
+
+    async def register_paired_device(
+        self,
+        *,
+        connection_id: str,
+        device_id: str,
+        display_name: str,
+    ) -> DeviceConnection:
+        """Persist the revocable device identity at claim time, before first sync."""
+
+        async with self._mutation_lock:
+            state = await self.store.load()
+            existing = next((item for item in state.device_connections if item.id == connection_id), None)
+            if existing is not None:
+                return existing
+            connection = DeviceConnection(
+                id=connection_id,
+                provider="health_connect",
+                device_id=device_id,
+                display_name=display_name,
+                status="connected",
+                permissions=sorted(metric.value for metric in consented_device_metrics(state)),
+                background_read=False,
+            )
+            state.device_connections.append(connection)
+            audit(
+                state,
+                actor="patient",
+                action="pair_device",
+                resource_type="device_connection",
+                resource_id=connection_id,
+                details={"device_id_verified": True},
+            )
+            await self.store.save(state)
+        await self.broker.publish({"type": "state", "section": "devices"})
+        return connection
 
     async def disconnect_device(self, connection_id: str) -> bool:
         async with self._mutation_lock:

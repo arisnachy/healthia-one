@@ -19,6 +19,35 @@ from healthia_one.models import (
 
 HEALTH_CONNECT_METRICS = tuple(item for item in DeviceMetric if item != DeviceMetric.CHOLESTEROL)
 
+DEVICE_METRIC_SIGNAL = {
+    DeviceMetric.STEPS: "activity",
+    DeviceMetric.HEART_RATE: "vitals",
+    DeviceMetric.BLOOD_PRESSURE: "vitals",
+    DeviceMetric.WEIGHT: "weight",
+    DeviceMetric.HEIGHT: "vitals",
+    DeviceMetric.OXYGEN_SATURATION: "vitals",
+    DeviceMetric.RESPIRATORY_RATE: "vitals",
+    DeviceMetric.BODY_TEMPERATURE: "vitals",
+    DeviceMetric.BLOOD_GLUCOSE: "vitals",
+    DeviceMetric.CHOLESTEROL: "vitals",
+    DeviceMetric.MENSTRUATION_PERIOD: "reproductive_health",
+}
+
+
+class DeviceConsentError(PermissionError):
+    pass
+
+
+def consented_device_metrics(state: PatientState) -> set[DeviceMetric]:
+    canonical_signals = set(state.consent.signal_types)
+    if "device_data" not in canonical_signals:
+        return set()
+    return {
+        metric
+        for metric, signal_type in DEVICE_METRIC_SIGNAL.items()
+        if signal_type in canonical_signals
+    }
+
 
 def device_source(record: DeviceObservation) -> SourceRef:
     return SourceRef(

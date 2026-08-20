@@ -1,5 +1,9 @@
 # KIRA Decisions
 
+## ADR-012 — One fail-closed security boundary
+
+Identity, consent, device provenance, untrusted files, generated clinical output and cloud privileges are one enforcement boundary. Cloud startup requires durable signing secrets; patient-visible clinical directions are withheld for qualified human review; device ingestion uses canonical server consent; deployment IAM is resource-scoped. The in-process rate limiter is acceptable for the single-instance hackathon service but must become distributed before horizontal production scaling.
+
 ## ADR-001 — One promoted autonomous clinical-continuity circuit
 Promote only opted-in blood-pressure measurement follow-up. Do not promote appointment, medication, post-visit, geofence or autonomous clinical-decision Guardian behavior.
 

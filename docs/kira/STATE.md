@@ -1,5 +1,13 @@
 # KIRA State
 
+## Security hardening checkpoint — 2026-08-20
+- Isolated worktree `healthia-one-security`, branch `codex/security-winning-hardening`, starts at fetched `origin/main` `81d11fbd7a1404ac2a215ddc9434bcbba8da6793`; the user's original dirty checkout remains untouched.
+- Implemented: secure-by-default authentication, revocable sessions, throttled login/pairing, fail-closed cloud signing secrets, bounded profile inputs, canonical device-consent enforcement, model/multimodal clinical-output guard, and resource-scoped deployment IAM.
+- Tested locally: 601 pytest cases passed; focused security/device/result/Gemini/submission suite 45 passed; smoke PASS; full-system 14/14; DialogBench 144/144; PowerShell parser and `git diff --check` passed.
+- Verified locally: deterministic boundaries and deploy contracts. Not yet verified live: new Cloud Run revision, post-deploy IAM reread, provider receipts, clean external-browser flow, exact-SHA video/submission binding.
+- Completion gate: independent security JUDGE plus canonical Codex Security report; do not update YouTube or Devpost without owner approval.
+- Independent JUDGE rerun: local hardening PASS after closing recursive multimodal/Gemini output bypass and pre-first-sync device revocation. Residual limits are explicit: visual prompt-injection corpus, distributed rate limiting, and exact-SHA LIVE provider verification.
+
 ## Objective
 Build HealthIA ONE Core v0.1 as the first functional vertical slice of the complete Patient Digital Twin OS manifesto, deploy it economically to Google Cloud, and prove the exact candidate through one judge-visible Living System journey.
 

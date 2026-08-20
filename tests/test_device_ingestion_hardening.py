@@ -80,6 +80,36 @@ def test_patient_can_revoke_device_connection_and_block_reuse() -> None:
         assert "revocada" in reused.json()["detail"]
 
 
+def test_patient_can_revoke_claimed_device_before_first_sync() -> None:
+    with TestClient(app) as client:
+        client.post("/api/demo/reset").raise_for_status()
+        pairing = client.post("/api/devices/pairing").json()
+        claim = client.post(
+            "/api/devices/pairing/claim",
+            json={"code": pairing["code"], "device_id": "never-synced-phone", "display_name": "Phone"},
+        ).json()
+        revoked = client.delete(f"/api/devices/{claim['connection_id']}")
+        assert revoked.status_code == 200
+
+        sync = client.post(
+            "/api/devices/health-connect/sync",
+            headers={"Authorization": f"Bearer {claim['access_token']}"},
+            json={
+                "device_id": "never-synced-phone",
+                "granted_metrics": ["heart_rate"],
+                "records": [{
+                    "external_id": "must-stay-revoked",
+                    "metric": "heart_rate",
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "value": 72,
+                    "unit": "bpm",
+                }],
+            },
+        )
+        assert sync.status_code == 401
+        assert "revocada" in sync.json()["detail"]
+
+
 def test_repaired_phone_uses_a_new_connection_after_revocation() -> None:
     with TestClient(app) as client:
         client.post("/api/demo/reset").raise_for_status()
@@ -146,6 +176,51 @@ def test_authenticated_sync_rejects_records_outside_declared_permissions(granted
             },
         )
         assert response.status_code == 422
+
+
+def test_server_side_consent_blocks_device_metric_after_revocation() -> None:
+    with TestClient(app) as client:
+        client.post("/api/demo/reset").raise_for_status()
+        pairing = client.post("/api/devices/pairing").json()
+        claim = client.post(
+            "/api/devices/pairing/claim",
+            json={"code": pairing["code"], "device_id": "consent-phone", "display_name": "Phone"},
+        ).json()
+        consent = client.get("/api/consent").json()
+        consent["signal_types"] = [item for item in consent["signal_types"] if item != "device_data"]
+        client.put("/api/consent", json=consent).raise_for_status()
+
+        response = client.post(
+            "/api/devices/health-connect/sync",
+            headers={"Authorization": f"Bearer {claim['access_token']}"},
+            json={
+                "device_id": "consent-phone",
+                "granted_metrics": ["heart_rate"],
+                "records": [{
+                    "external_id": "revoked-heart-rate",
+                    "metric": "heart_rate",
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "value": 72,
+                    "unit": "bpm",
+                }],
+            },
+        )
+        assert response.status_code == 403
+        assert "consentimiento vigente" in response.json()["detail"]
+
+
+def test_profile_write_cannot_restore_canonical_consent_projection() -> None:
+    with TestClient(app) as client:
+        client.post("/api/demo/reset").raise_for_status()
+        consent = client.get("/api/consent").json()
+        consent["signal_types"] = [item for item in consent["signal_types"] if item != "device_data"]
+        client.put("/api/consent", json=consent).raise_for_status()
+
+        profile = client.get("/api/profile").json()["profile"]
+        profile["consented_signal_types"].append("device_data")
+        updated = client.put("/api/profile", json=profile)
+        assert updated.status_code == 200
+        assert "device_data" not in updated.json()["profile"]["consented_signal_types"]
 
 
 def test_revocation_check_occurs_inside_service_mutation_lock() -> None:

@@ -140,6 +140,8 @@ class AccountManager:
         configured = os.getenv("HEALTHIA_SESSION_SECRET", "").encode("utf-8")
         if len(configured) >= 32:
             return configured, "restart_safe"
+        if self.settings.env == "cloud":
+            raise AuthError("HEALTHIA_SESSION_SECRET must contain at least 32 bytes in cloud mode.")
         if self.settings.env == "local":
             path = Path(".healthia-one/session-secret")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +218,7 @@ class AccountManager:
             "password_hash": _password_hash(password),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "disabled": False,
+            "session_version": 1,
         }
         self._put_account(normalized, record)
         return PatientPrincipal(account_id=account_id, patient_id=patient_id, email=normalized, display_name=clean_name)
@@ -234,15 +237,25 @@ class AccountManager:
 
     def issue_session(self, principal: PatientPrincipal) -> str:
         now = datetime.now(timezone.utc)
+        record = self._get_account(principal.email)
+        if (
+            not record
+            or record.get("disabled")
+            or str(record.get("account_id")) != principal.account_id
+            or str(record.get("patient_id")) != principal.patient_id
+        ):
+            raise AuthError("La cuenta ya no puede iniciar una sesión.")
+        session_version = max(1, int(record.get("session_version", 1)))
         payload = {
-            "v": 1,
+            "v": 2,
             "account_id": principal.account_id,
             "patient_id": principal.patient_id,
             "email": principal.email,
             "display_name": principal.display_name,
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(hours=self.settings.session_hours)).timestamp()),
-            "nonce": secrets.token_hex(12),
+            "jti": secrets.token_hex(16),
+            "session_version": session_version,
         }
         encoded = _b64encode(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
         signature = _b64encode(hmac.new(self._session_secret, encoded.encode("ascii"), hashlib.sha256).digest())
@@ -259,6 +272,8 @@ class AccountManager:
             if not hmac.compare_digest(signature, expected):
                 return None
             payload = json.loads(_b64decode(encoded))
+            if int(payload.get("v", 0)) != 2:
+                return None
             if int(payload.get("exp", 0)) <= int(datetime.now(timezone.utc).timestamp()):
                 return None
             patient_id = str(payload.get("patient_id", ""))
@@ -267,9 +282,33 @@ class AccountManager:
             display_name = str(payload.get("display_name", "Paciente"))[:120]
             if not patient_id.startswith("patient_") or not account_id.startswith("account_"):
                 return None
+            record = self._get_account(email)
+            if (
+                not record
+                or record.get("disabled")
+                or str(record.get("account_id")) != account_id
+                or str(record.get("patient_id")) != patient_id
+                or int(record.get("session_version", 1)) != int(payload.get("session_version", 0))
+            ):
+                return None
             return PatientPrincipal(account_id=account_id, patient_id=patient_id, email=email, display_name=display_name)
         except (ValueError, TypeError, json.JSONDecodeError):
             return None
+
+    def revoke_sessions(self, principal: PatientPrincipal | None) -> bool:
+        if principal is None:
+            return False
+        record = self._get_account(principal.email)
+        if (
+            not record
+            or str(record.get("account_id")) != principal.account_id
+            or str(record.get("patient_id")) != principal.patient_id
+        ):
+            return False
+        record["session_version"] = max(1, int(record.get("session_version", 1))) + 1
+        record["sessions_revoked_at"] = datetime.now(timezone.utc).isoformat()
+        self._put_account(principal.email, record)
+        return True
 
     def public_session(self, principal: PatientPrincipal | None) -> dict:
         return {

@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import os
 from io import BytesIO
+from tempfile import TemporaryDirectory
 
+_SMOKE_TEMP = TemporaryDirectory(prefix="healthia-smoke-")
 os.environ["HEALTHIA_STORE_BACKEND"] = "memory"
 os.environ["HEALTHIA_LLM_BACKEND"] = "mock"
 os.environ["HEALTHIA_PROACTIVE_INTERVAL_SECONDS"] = "3600"
+os.environ["HEALTHIA_AUTH_REQUIRED"] = "true"
+os.environ["HEALTHIA_ACCOUNTS_PATH"] = os.path.join(_SMOKE_TEMP.name, "accounts.json")
 
 from fastapi.testclient import TestClient
 
@@ -34,6 +38,28 @@ def run() -> None:
             "patient_export",
         ):
             require(capability in readiness["capabilities"], f"missing capability: {capability}")
+
+        registration = client.post(
+            "/api/auth/register",
+            json={
+                "email": "synthetic-smoke@example.test",
+                "password": "SyntheticSmokePassword!42",
+                "display_name": "Synthetic Smoke Patient",
+            },
+        )
+        require(registration.status_code == 201, "secure patient registration failed")
+        require(registration.json()["authenticated"] is True, "secure patient session missing")
+        private_bootstrap = client.get("/api/bootstrap")
+        require(private_bootstrap.status_code == 200, "authenticated patient bootstrap failed")
+        require(private_bootstrap.json()["profile"]["display_name"], "authenticated patient profile missing")
+        require(client.post("/api/auth/logout").status_code == 200, "secure logout failed")
+
+        # The remaining checks exercise the deterministic synthetic judge
+        # fixture. Tests set this explicitly; the shipped product stays secure
+        # by default and cloud mode cannot disable authentication.
+        app.state.account_manager.settings.auth_required = False
+        reset = client.post("/api/demo/reset")
+        require(reset.status_code == 200, "synthetic fixture reset failed")
 
         bootstrap = client.get("/api/bootstrap").json()
         require(bootstrap["profile"]["display_name"], "patient profile missing")
@@ -104,4 +130,7 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    finally:
+        _SMOKE_TEMP.cleanup()

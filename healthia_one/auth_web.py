@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from healthia_one.language import bind_requested_locale, current_requested_local
 from healthia_one.model_armor import ModelArmorGate
 from healthia_one.observability import configure_observability, observability_status, span
 from healthia_one.opportunity_api import build_opportunity_router
+from healthia_one.rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
 from healthia_one.service import HealthIAService
 
 
@@ -41,6 +43,23 @@ def _detail(es: str, en: str) -> str:
     return es if current_requested_locale() == "es" else en
 
 
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client and request.client.host else "unknown"
+
+
+def _account_rate_key(email: str) -> str:
+    normalized = str(email or "").strip().lower().encode("utf-8")
+    return hashlib.sha256(normalized).hexdigest()
+
+
+def _rate_limit_response(exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        headers={"Retry-After": str(exc.retry_after)},
+        content={"detail": "Demasiados intentos. Espera antes de volver a intentarlo."},
+    )
+
+
 def install_patient_auth(
     app: FastAPI,
     *,
@@ -49,6 +68,7 @@ def install_patient_auth(
     web_root: Path,
 ) -> AccountManager:
     manager = AccountManager(settings)
+    security_rate_limiter = SlidingWindowRateLimiter()
     prompt_gate = ModelArmorGate(
         enabled=settings.model_armor_enabled,
         project_id=settings.google_cloud_project,
@@ -60,6 +80,7 @@ def install_patient_auth(
     app.state.account_manager = manager
     app.state.healthia_service = service
     app.state.model_armor_gate = prompt_gate
+    app.state.security_rate_limiter = security_rate_limiter
     app.state.last_prompt_security_decision = None
 
     public_exact = {
@@ -162,7 +183,15 @@ def install_patient_auth(
         return manager.public_session(current_principal())
 
     @app.post("/api/auth/register")
-    async def register(payload: RegisterRequest):
+    async def register(payload: RegisterRequest, request: Request):
+        try:
+            security_rate_limiter.check(
+                f"register:ip:{_client_key(request)}",
+                limit=settings.login_attempt_limit,
+                window_seconds=settings.login_window_seconds,
+            )
+        except RateLimitExceeded as exc:
+            return _rate_limit_response(exc)
         try:
             principal = manager.register(payload.email, payload.password, payload.display_name)
             await service.ensure_patient(principal)
@@ -183,7 +212,22 @@ def install_patient_auth(
         return response
 
     @app.post("/api/auth/login")
-    async def login(payload: LoginRequest):
+    async def login(payload: LoginRequest, request: Request):
+        ip_key = f"login:ip:{_client_key(request)}"
+        account_key = f"login:account:{_account_rate_key(payload.email)}"
+        try:
+            security_rate_limiter.check(
+                ip_key,
+                limit=settings.login_ip_attempt_limit,
+                window_seconds=settings.login_window_seconds,
+            )
+            security_rate_limiter.check(
+                account_key,
+                limit=settings.login_attempt_limit,
+                window_seconds=settings.login_window_seconds,
+            )
+        except RateLimitExceeded as exc:
+            return _rate_limit_response(exc)
         try:
             principal = manager.authenticate(payload.email, payload.password)
             await service.ensure_patient(principal)
@@ -191,6 +235,7 @@ def install_patient_auth(
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        security_rate_limiter.clear(account_key)
         response = JSONResponse(manager.public_session(principal))
         response.set_cookie(
             settings.session_cookie_name,
@@ -205,6 +250,7 @@ def install_patient_auth(
 
     @app.post("/api/auth/logout")
     async def logout():
+        manager.revoke_sessions(current_principal())
         response = JSONResponse({"authenticated": False, "logged_out": True})
         response.delete_cookie(settings.session_cookie_name, path="/")
         return response

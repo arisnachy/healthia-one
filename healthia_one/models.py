@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -29,6 +29,8 @@ DEFAULT_SIGNAL_TYPES = [
     "device_data",
     "reproductive_health",
 ]
+
+ProfileItem = Annotated[str, Field(min_length=1, max_length=300)]
 
 
 class RiskLevel(StrEnum):
@@ -66,7 +68,9 @@ class SourceRef(BaseModel):
 
 
 class CarePlan(BaseModel):
-    conditions: list[str] = Field(default_factory=lambda: ["hypertension", "weight_management"])
+    conditions: list[ProfileItem] = Field(
+        default_factory=lambda: ["hypertension", "weight_management"], max_length=32
+    )
     weight_due_days: int = 7
     blood_pressure_due_days: int = 3
     activity_goal_steps: int = 6000
@@ -88,13 +92,13 @@ class LifestyleHistory(BaseModel):
 
 
 class PersonalHistory(BaseModel):
-    chronic_conditions: list[str] = Field(default_factory=list)
-    transfusion_history: list[str] = Field(default_factory=list)
-    traumatic_history: list[str] = Field(default_factory=list)
-    surgical_history: list[str] = Field(default_factory=list)
-    hospitalizations: list[str] = Field(default_factory=list)
-    non_pathological_history: list[str] = Field(default_factory=list)
-    immunizations: list[str] = Field(default_factory=list)
+    chronic_conditions: list[ProfileItem] = Field(default_factory=list, max_length=64)
+    transfusion_history: list[ProfileItem] = Field(default_factory=list, max_length=64)
+    traumatic_history: list[ProfileItem] = Field(default_factory=list, max_length=64)
+    surgical_history: list[ProfileItem] = Field(default_factory=list, max_length=64)
+    hospitalizations: list[ProfileItem] = Field(default_factory=list, max_length=64)
+    non_pathological_history: list[ProfileItem] = Field(default_factory=list, max_length=64)
+    immunizations: list[ProfileItem] = Field(default_factory=list, max_length=64)
 
 
 class ReproductiveHealth(BaseModel):
@@ -123,30 +127,36 @@ class EmergencyContact(BaseModel):
 
 
 class PatientProfile(BaseModel):
-    id: str = "patient_demo"
-    display_name: str = "Ana Martínez"
-    legal_name: str = ""
+    id: str = Field(default="patient_demo", max_length=80)
+    display_name: str = Field(default="Ana Martínez", max_length=160)
+    legal_name: str = Field(default="", max_length=160)
     birth_date: date = date(1982, 2, 20)
     sex_at_birth: Literal["female", "male", "intersex", "unknown"] = "female"
-    gender_identity: str = ""
-    preferred_pronouns: str = ""
-    blood_type: str = ""
+    gender_identity: str = Field(default="", max_length=100)
+    preferred_pronouns: str = Field(default="", max_length=100)
+    blood_type: str = Field(default="", max_length=20)
     height_cm: float | None = Field(default=165.0, ge=50, le=250)
-    email: str = ""
-    phone: str = ""
-    address: str = ""
-    occupation: str = ""
-    locale: str = "es-DO"
-    timezone: str = "America/Santo_Domingo"
-    allergies: list[str] = Field(default_factory=list)
-    medications: list[str] = Field(default_factory=lambda: ["Losartán 50 mg cada 24 horas"])
-    confirmed_conditions: list[str] = Field(default_factory=lambda: ["Hipertensión arterial"])
+    email: str = Field(default="", max_length=254)
+    phone: str = Field(default="", max_length=80)
+    address: str = Field(default="", max_length=500)
+    occupation: str = Field(default="", max_length=160)
+    locale: str = Field(default="es-DO", max_length=40)
+    timezone: str = Field(default="America/Santo_Domingo", max_length=80)
+    allergies: list[ProfileItem] = Field(default_factory=list, max_length=64)
+    medications: list[ProfileItem] = Field(
+        default_factory=lambda: ["Losartán 50 mg cada 24 horas"], max_length=64
+    )
+    confirmed_conditions: list[ProfileItem] = Field(
+        default_factory=lambda: ["Hipertensión arterial"], max_length=64
+    )
     lifestyle: LifestyleHistory = Field(default_factory=LifestyleHistory)
     personal_history: PersonalHistory = Field(default_factory=PersonalHistory)
     reproductive_health: ReproductiveHealth = Field(default_factory=ReproductiveHealth)
     emergency_contact: EmergencyContact = Field(default_factory=EmergencyContact)
     care_plan: CarePlan = Field(default_factory=CarePlan)
-    consented_signal_types: list[str] = Field(default_factory=lambda: list(DEFAULT_SIGNAL_TYPES))
+    consented_signal_types: list[ProfileItem] = Field(
+        default_factory=lambda: list(DEFAULT_SIGNAL_TYPES), max_length=32
+    )
 
 
 class PatientConsent(BaseModel):

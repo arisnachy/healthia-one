@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 
 _LOCAL_INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
@@ -108,15 +109,20 @@ class ModelArmorGate:
             )
 
         try:
-            from google.cloud import modelarmor_v1
+            name = f"projects/{self.project_id}/locations/{self.location}/templates/{self.template_id}"
+            try:
+                from google.cloud import modelarmor_v1
 
-            request = modelarmor_v1.SanitizeUserPromptRequest(
-                name=(
-                    f"projects/{self.project_id}/locations/{self.location}/"
-                    f"templates/{self.template_id}"
-                ),
-                user_prompt_data=modelarmor_v1.DataItem(text=str(text or "")),
-            )
+                request = modelarmor_v1.SanitizeUserPromptRequest(
+                    name=name,
+                    user_prompt_data=modelarmor_v1.DataItem(text=str(text or "")),
+                )
+            except ImportError:
+                if self._client is None:
+                    raise
+                # An explicitly injected client is a test/offline adapter. The
+                # production path still requires the official typed library.
+                request = SimpleNamespace(name=name, user_prompt_data=SimpleNamespace(text=str(text or "")))
             response = self._google_client().sanitize_user_prompt(request=request)
         except Exception as exc:
             if self.fail_closed:

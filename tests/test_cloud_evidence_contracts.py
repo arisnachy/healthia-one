@@ -115,6 +115,14 @@ def test_cloud_deploy_requires_authenticated_durable_evidence_and_strict_proof()
     assert '"gcs_patient_scoped_original_evidence"' in verifier
     assert '"clinical_twin_provenance"' in verifier
     assert '"original_evidence_roundtrip"' in verifier
+    project_role_block = deploy.split("foreach ($role in @(", 1)[1].split(")) {", 1)[0]
+    assert "roles/storage.objectAdmin" not in project_role_block
+    assert "roles/secretmanager.secretAccessor" not in project_role_block
+    assert "gcloud storage buckets add-iam-policy-binding" in deploy
+    assert "gcloud secrets add-iam-policy-binding" in deploy
+    assert "gcloud projects remove-iam-policy-binding" in deploy
+    assert 'Remove-ProjectRole $RuntimeServiceAccountEmail "roles/storage.objectAdmin"' in deploy
+    assert 'Remove-ProjectRole $RuntimeServiceAccountEmail "roles/secretmanager.secretAccessor"' in deploy
 
 
 def test_cloud_identity_token_is_not_passed_in_process_arguments() -> None:

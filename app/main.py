@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import secrets
 from contextlib import asynccontextmanager
@@ -16,7 +17,7 @@ from healthia_one.config import settings
 from healthia_one.continuity import build_timeline, condition_pack_summary, consultation_brief, medication_summary
 from healthia_one.control import export_patient_state
 from healthia_one.cost_guard import CostGuardBlocked
-from healthia_one.devices import device_summary, medication_device_cross_checks
+from healthia_one.devices import DeviceConsentError, device_summary, medication_device_cross_checks
 from healthia_one.documents import build_document, document_index
 from healthia_one.evidence_store import evidence_backend, load_evidence, local_evidence_path, persist_evidence
 from healthia_one.family import family_summary
@@ -47,6 +48,7 @@ from healthia_one.result_ai import analyze_uploaded_result, apply_multimodal_ana
 from healthia_one.result_capabilities import UnsupportedClinicalFormat, capability_manifest, validate_clinical_upload
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.pairing import DevicePairingManager, PairingError
+from healthia_one.rate_limit import RateLimitExceeded
 from healthia_one.service import HealthIAService
 from healthia_one.twin import clinical_twin_summary
 
@@ -338,9 +340,38 @@ async def wait_device_pairing(code: str) -> dict:
 
 
 @app.post("/api/devices/pairing/claim")
-async def claim_device_pairing(claim: DevicePairingClaim) -> dict:
+async def claim_device_pairing(claim: DevicePairingClaim, request: Request) -> dict:
+    client_host = request.client.host if request.client and request.client.host else "unknown"
+    rate_key = f"pairing:claim:ip:{client_host}"
+    device_key = f"pairing:claim:device:{hashlib.sha256(claim.device_id.encode('utf-8')).hexdigest()}"
     try:
-        return pairing_manager.claim(claim.code, claim.device_id, claim.display_name)
+        for key, limit in (
+            (rate_key, settings.pairing_attempt_limit),
+            (device_key, settings.pairing_attempt_limit),
+            ("pairing:claim:global", settings.pairing_attempt_limit * 25),
+        ):
+            app.state.security_rate_limiter.check(
+                key,
+                limit=limit,
+                window_seconds=settings.pairing_window_seconds,
+            )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Demasiados intentos de vinculación. Espera antes de volver a intentarlo.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    try:
+        payload = pairing_manager.claim(claim.code, claim.device_id, claim.display_name)
+        with patient_scope(payload["patient_id"]):
+            await service.register_paired_device(
+                connection_id=payload["connection_id"],
+                device_id=payload["device_id"],
+                display_name=payload["display_name"],
+            )
+        app.state.security_rate_limiter.clear(rate_key)
+        app.state.security_rate_limiter.clear(device_key)
+        return payload
     except PairingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -380,6 +411,8 @@ async def health_connect_sync(
                 batch,
                 authorized_connection_id=principal.connection_id,
             )
+        except DeviceConsentError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
     result["connection_id"] = principal.connection_id

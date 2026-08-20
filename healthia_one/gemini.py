@@ -16,7 +16,9 @@ from healthia_one.clinical_planner import (
 )
 from healthia_one.config import Settings
 from healthia_one.cost_guard import CostGuard, CostGuardBlocked
+from healthia_one.clinical_output_guard import contains_forbidden_clinical_directive
 from healthia_one.google_ai_transport import build_google_ai_client
+from healthia_one.model_armor import ModelArmorGate
 from healthia_one.models import ChatResponse, PatientState, RiskLevel
 
 
@@ -92,6 +94,13 @@ class GeminiResponder:
             request_limit=settings.ai_request_limit,
             start_enabled=settings.cost_guard_start_enabled,
             max_output_tokens=settings.ai_max_output_tokens,
+        )
+        self.model_armor_gate = ModelArmorGate(
+            enabled=settings.model_armor_enabled,
+            project_id=settings.google_cloud_project,
+            location=settings.model_armor_location,
+            template_id=settings.model_armor_template_id,
+            fail_closed=settings.model_armor_fail_closed,
         )
         self.last_status = "not_called"
         self.last_error = ""
@@ -608,6 +617,19 @@ class GeminiResponder:
             )
             return draft
 
+        if contains_forbidden_clinical_directive(text):
+            draft.message.metadata.update(
+                {
+                    "llm_backend": "gemini_api",
+                    "llm_status": "safety_withheld",
+                    "model": self.settings.model,
+                    "request_number": request_number,
+                    "cost_guard": self.cost_guard.snapshot(),
+                }
+            )
+            self.last_status = "safety_withheld"
+            self.last_error = "Generated clinical directive withheld by ONE SAFETY."
+            return draft
         draft.message.content = text
         draft.message.author = "HealthIA"
         draft.message.metadata.update(

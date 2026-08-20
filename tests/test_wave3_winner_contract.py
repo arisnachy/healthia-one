@@ -37,15 +37,15 @@ def test_winning_one_take_locks_wave4_taskmaster_story_and_fallback_rule() -> No
     assert "no gate is lowered" in doc.lower()
 
 
-def test_judges_start_here_separates_current_wave4_from_preserved_live_proof() -> None:
+def test_judges_start_here_separates_current_v5_from_preserved_live_proof() -> None:
     doc = (ROOT / "JUDGES_START_HERE.md").read_text(encoding="utf-8")
-    assert "a48710eeb5a2e8429a91f5004129064e5af37c1a" in doc
-    assert "891745e1ab93dc78b9aa4e54d65b315befa885f2" in doc
-    assert "0 external Places searches before location consent" in doc
+    assert "https://youtu.be/44LfVn9pPdU" in doc
+    assert "V5" in doc
+    assert "Older 3:55 and 2:47 masters are historical proof lineage only" in doc
+    assert "no new chat prompt" in doc
     assert "same mission" in doc
-    assert "Authorization is not execution evidence" in doc
-    assert "ancestor of the Wave 4 candidate" in doc
-    assert "synthetic patient data" in doc
+    assert "authorization is not execution evidence" in doc.lower()
+    assert "All demo patient data is synthetic" in doc
 
 
 def test_submission_delta_freezes_infrastructure_and_does_not_claim_replacement() -> None:

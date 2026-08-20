@@ -51,7 +51,7 @@ class DevicePairingManager:
         ttl_minutes: int = 5,
         *,
         token_secret: str | bytes | None = None,
-        token_ttl_days: int = 30,
+        token_ttl_days: int = 7,
     ) -> None:
         self.ttl_minutes = ttl_minutes
         self.token_ttl_days = max(1, int(token_ttl_days))
@@ -60,6 +60,8 @@ class DevicePairingManager:
             configured_bytes = configured.encode("utf-8")
         else:
             configured_bytes = configured or b""
+        if os.getenv("HEALTHIA_ENV", "local").strip().lower() == "cloud" and len(configured_bytes) < 32:
+            raise PairingError("HEALTHIA_DEVICE_TOKEN_SECRET must contain at least 32 bytes in cloud mode.")
         self._secret_is_persistent = len(configured_bytes) >= 32
         # Multiple verifier components inside one process must be able to validate
         # the same pairing bearer even in local/test mode. The fallback remains

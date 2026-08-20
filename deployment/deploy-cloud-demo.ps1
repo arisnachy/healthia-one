@@ -92,6 +92,40 @@ function Grant-ProjectRole([string]$Email, [string]$Role) {
     if ($LASTEXITCODE -ne 0) { throw "No se pudo asignar $Role a $Email." }
 }
 
+function Grant-SecretRole([string]$Email, [string]$SecretName) {
+    & gcloud secrets add-iam-policy-binding $SecretName `
+        --project $ProjectId `
+        --member "serviceAccount:$Email" `
+        --role "roles/secretmanager.secretAccessor" `
+        --condition=None `
+        --quiet | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo limitar el acceso de $Email al secreto $SecretName." }
+}
+
+function Grant-BucketRole([string]$Email, [string]$Name) {
+    & gcloud storage buckets add-iam-policy-binding "gs://$Name" `
+        --member "serviceAccount:$Email" `
+        --role "roles/storage.objectAdmin" `
+        --condition=None `
+        --quiet | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo limitar el acceso de $Email al bucket $Name." }
+}
+
+function Remove-ProjectRole([string]$Email, [string]$Role) {
+    & gcloud projects remove-iam-policy-binding $ProjectId `
+        --member "serviceAccount:$Email" `
+        --role $Role `
+        --condition=None `
+        --quiet 2>$null | Out-Null
+    $remaining = (& gcloud projects get-iam-policy $ProjectId `
+        --flatten="bindings[].members" `
+        --filter="bindings.role=$Role AND bindings.members=serviceAccount:$Email" `
+        --format="value(bindings.role)" 2>$null).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($remaining)) {
+        throw "El rol amplio $Role sigue asignado a $Email; se cancela el despliegue."
+    }
+}
+
 Write-Host "HEALTHIA ONE - CLOUD / VERTEX HACKATHON PROOF" -ForegroundColor Cyan
 Write-Host "Proyecto: $ProjectId" -ForegroundColor White
 Write-Host "Cloud Run: $ServiceName ($Region)" -ForegroundColor White
@@ -157,11 +191,12 @@ Grant-ProjectRole $BuildServiceAccountEmail "roles/run.builder"
 # project-IAM administration role.
 foreach ($role in @(
     "roles/aiplatform.user",
-    "roles/datastore.user",
-    "roles/storage.objectAdmin",
-    "roles/secretmanager.secretAccessor"
+    "roles/datastore.user"
 )) {
     Grant-ProjectRole $RuntimeServiceAccountEmail $role
+}
+foreach ($secretName in @($DeviceSecretName, $SessionSecretName, $EvaluationSecretName, $MapsSecretName)) {
+    Grant-SecretRole $RuntimeServiceAccountEmail $secretName
 }
 
 & gcloud firestore databases describe --database="(default)" --project $ProjectId --format "value(name)" 2>$null | Out-Null
@@ -170,7 +205,6 @@ if ($LASTEXITCODE -ne 0) {
     & gcloud firestore databases create --database="(default)" --location=$FirestoreLocation --type=firestore-native --project $ProjectId --quiet | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "No se pudo crear Firestore (default)." }
 }
-
 & gcloud storage buckets describe "gs://$BucketName" --project $ProjectId --format "value(name)" 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Creando bucket privado de evidencia..." -ForegroundColor Cyan
@@ -182,6 +216,9 @@ if ($LASTEXITCODE -ne 0) {
         --public-access-prevention | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "No se pudo crear gs://$BucketName." }
 }
+Grant-BucketRole $RuntimeServiceAccountEmail $BucketName
+Remove-ProjectRole $RuntimeServiceAccountEmail "roles/storage.objectAdmin"
+Remove-ProjectRole $RuntimeServiceAccountEmail "roles/secretmanager.secretAccessor"
 
 $envVars = @(
     "HEALTHIA_ENV=cloud",

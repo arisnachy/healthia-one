@@ -58,13 +58,11 @@ def test_documentation_does_not_reference_deleted_version_layers() -> None:
     for version in range(2, 8):
         assert f"ui-v{version}" not in content
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for script in (
-        "app.js",
-        "patient-record.js",
-        "family-documents.js",
-        "continuity.js",
-        "privacy-controls.js",
-        "profile-devices.js",
-        "icons.js",
+    for command in (
+        "pytest",
+        "python scripts/full_system_check.py",
+        "python scripts/dialogbench.py",
+        "python scripts/judge_omega.py",
+        "python scripts/smoke_test.py",
     ):
-        assert f"node --check web/{script}" in readme
+        assert command in readme

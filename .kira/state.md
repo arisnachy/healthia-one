@@ -1,6 +1,13 @@
 CURRENT OBJECTIVE
 Turn the already-proven Google provider constellation into a judge-visible autonomous HealthIA product without modifying the frozen Golden LIVE SHA `891745e1ab93dc78b9aa4e54d65b315befa885f2`, PR #37, or `main`.
 
+SECURITY MISSION OVERRIDE — 2026-08-20
+- Active isolated worktree: `healthia-one-security`; branch: `codex/security-winning-hardening`; baseline: `81d11fbd7a1404ac2a215ddc9434bcbba8da6793`.
+- Implemented the fail-closed identity, session, abuse, consent, device, AI-output and least-privilege IAM boundary.
+- Local evidence: pytest 601/601, focused security/device/result/Gemini/submission 45/45, full-system 14/14, DialogBench 144/144, authenticated smoke PASS, PowerShell parse PASS, diff check PASS.
+- Still required for LIVE classification: exact-SHA Cloud Run deployment, resource-policy reread, external browser and provider receipts. YouTube/Devpost remain unchanged.
+- Independent JUDGE rerun passed the local hardening after recursive model-output filtering and durable pre-first-sync device revocation. This is not a LIVE classification.
+
 BASELINE
 - Golden reference branch: `kira/golden-google-constellation-live-891745e1`.
 - PR #39 is the active Wave 2/Wave 3 product branch and remains Draft until the replacement exact-head one-take + judge package are proven.

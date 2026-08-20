@@ -6,15 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_readme_matches_current_patient_os():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for marker in [
-        "pathological family genogram with provenance",
-        "multimodal result ingestion with original evidence retention",
-        "treatment and medication check-ins without autonomous prescribing",
-        "patient-controlled consent, snooze, audit and JSON export",
+        "durable, consent-aware missions",
+        "Result Guardian",
+        "Appointment Guardian",
+        "Post-Visit Guardian",
+        "Real autonomous external follow-up",
         "scripts/smoke_test.py",
-        "deployment\\run-local-secure.ps1",
-        "zero Google AI calls",
+        "zero Google AI spend",
         "Gemini 3.5 Flash on Vertex AI",
-        "Closed-loop Taskmaster result mission",
+        "HealthIA does **not** autonomously diagnose, prescribe, start/stop/change medication",
     ]:
         assert marker in readme
 
@@ -40,10 +40,10 @@ def test_release_evidence_files_exist():
 def test_demo_script_preserves_truth_boundary():
     script = (ROOT / "docs" / "DEMO_SCRIPT.md").read_text(encoding="utf-8")
     for forbidden_claim in [
-        "Do not claim:",
-        "confirmed diagnosis",
-        "prescription authority",
-        "genetic prediction",
-        "regulatory clearance",
+        "Do **not** claim autonomous diagnosis",
+        "autonomous prescribing",
+        "clinical sensor validation",
+        "regulatory approval",
+        "universal security certification",
     ]:
         assert forbidden_claim in script

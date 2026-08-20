@@ -5,31 +5,27 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VIDEO_SHA = "cfd91b0d08cf6659e1fb924c2e85071cd3b79bd414578b7112908c46f91adb19"
-PUBLIC_VIDEO_URL = (
-    "https://github.com/arisnachy/healthia-one/releases/download/"
-    "healthia-one-hackathon-judge-demo-2026/HealthIA-ONE-final-judge-demo.webm"
-)
+CURRENT_DOCS_VIDEO_URL = "https://youtu.be/44LfVn9pPdU"
+RECORDED_CANONICAL_VIDEO_URL = "https://youtu.be/v7SJUkzzRxw"
 
 
-def test_public_judge_video_proof_is_locked_to_exact_verified_bytes() -> None:
+def test_public_judge_video_proof_preserves_machine_truth_boundary() -> None:
     proof = json.loads(
         (ROOT / "hackathon/evidence/public_judge_video_proof.json").read_text(encoding="utf-8")
     )
-    assert proof["status"] == "PASS"
+    assert proof["status"] == "CANONICAL_CURRENT_SUBMISSION"
     assert proof["synthetic_only"] is True
-    assert proof["public_url"] == PUBLIC_VIDEO_URL
-    assert proof["video_sha256"] == EXPECTED_VIDEO_SHA
-    assert proof["release_publication_proof"]["anonymous_download_verified"] is True
-    assert proof["release_publication_proof"]["anonymous_download_sha256_match"] is True
-    assert proof["independent_public_probe"]["authentication_required"] is False
-    assert proof["independent_public_probe"]["full_video_sha256_match"] is True
+    assert proof["canonical_submission"]["youtube_url"] == RECORDED_CANONICAL_VIDEO_URL
+    assert proof["machine_verified_current_master"]["continuous_real_application_master"] is True
+    assert proof["external_host_visibility"]["youtube_public_privacy_state"] == "NOT_ASSERTED_BY_THIS_MACHINE_PROOF"
+    assert proof["historical_public_video"]["not_for_submission"] is True
+    assert "does not claim" in proof["truth_boundary"]
 
 
-def test_final_submission_documents_use_the_proven_public_video_url() -> None:
-    for relative in ("README.md", "docs/DEVPOST_SUBMISSION.md", "docs/DEMO_SCRIPT.md", "docs/EVIDENCE.md"):
+def test_current_submission_documents_use_one_recorded_url_without_claiming_machine_proof() -> None:
+    for relative in ("README.md", "JUDGES_START_HERE.md", "docs/DEVPOST_SUBMISSION.md"):
         text = (ROOT / relative).read_text(encoding="utf-8")
-        assert PUBLIC_VIDEO_URL in text, relative
+        assert CURRENT_DOCS_VIDEO_URL in text, relative
         assert "99/100" not in text, relative
 
 
