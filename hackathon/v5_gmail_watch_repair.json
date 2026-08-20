@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "canonical_source_retained": true,
+  "orphaned_disabled": [
+    "patient_ba5b6756fac547d4a380871ab2318373"
+  ],
+  "legitimate_conflicts": [],
+  "enabled_watch_count_after": 1,
+  "mailbox_exposed": false
+}
