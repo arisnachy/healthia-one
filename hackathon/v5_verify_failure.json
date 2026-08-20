@@ -1,45 +1,49 @@
 {
-  "execution": "hfilm-26936389-984e57-verify-nsqfx",
-  "completionTime": "2026-08-20T03:20:19.012186Z",
+  "execution": "hfilm-28293833-fc48d9-await-email-xl4qj",
+  "completionTime": "2026-08-20T03:39:39.911497Z",
   "conditions": [
     {
-      "lastTransitionTime": "2026-08-20T03:20:19.012186Z",
-      "message": "Task hfilm-26936389-984e57-verify-nsqfx-task0 failed with exit code: 1 and message: The container exited with an error.",
-      "reason": "NonZeroExitCode",
-      "status": "False",
+      "lastTransitionTime": "2026-08-20T03:39:39.911497Z",
+      "message": "Execution completed successfully in 2m32.79s.",
+      "status": "True",
       "type": "Completed"
     },
     {
-      "lastTransitionTime": "2026-08-20T03:16:11.230893Z",
+      "lastTransitionTime": "2026-08-20T03:36:53.325401Z",
       "message": "Provisioned imported containers.",
       "status": "True",
       "type": "ResourcesAvailable"
     },
     {
-      "lastTransitionTime": "2026-08-20T03:17:39.328065Z",
-      "message": "Started deployed execution in 1m28.09s.",
+      "lastTransitionTime": "2026-08-20T03:39:27.772605Z",
+      "message": "Started deployed execution in 2m34.44s.",
       "status": "True",
       "type": "Started"
     },
     {
-      "lastTransitionTime": "2026-08-20T03:16:11.069783Z",
+      "lastTransitionTime": "2026-08-20T03:36:53.161547Z",
       "message": "Imported container image.",
       "status": "True",
       "type": "ContainerReady"
     }
   ],
-  "failedCount": 1,
-  "succeededCount": null,
+  "failedCount": null,
+  "succeededCount": 1,
   "logs": [
     {
-      "timestamp": "2026-08-20T03:20:14.778713Z",
-      "severity": "WARNING",
-      "text": "Container called exit(1)."
+      "timestamp": "2026-08-20T03:39:32.589976Z",
+      "severity": "INFO",
+      "text": "Container called exit(0)."
     },
     {
-      "timestamp": "2026-08-20T03:20:14.573701Z",
-      "severity": "ERROR",
-      "text": "Traceback (most recent call last):\n  File \"/app/scripts/mainline_bp_continuity_proof.py\", line 70, in <module>\n    asyncio.run(main())\n  File \"/usr/local/lib/python3.12/asyncio/runners.py\", line 195, in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/runners.py\", line 118, in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/scripts/mainline_bp_continuity_proof.py\", line 66, in main\n    await globals()[sys.argv[1]]()\n  File \"/app/scripts/mainline_bp_continuity_proof.py\", line 55, in verify\n    await proven_verify()\n  File \"/app/scripts/guardian_wave14_stitch_proof.py\", line 307, in verify\n    raise RuntimeError(\"Timed out waiting for Gmail Pub/Sub to close stitched Guardian mission\")\nRuntimeError: Timed out waiting for Gmail Pub/Sub to close stitched Guardian mission"
+      "timestamp": "2026-08-20T03:39:32.278666Z",
+      "severity": null,
+      "text": "  return query.where(field_path, op_string, value)"
+    },
+    {
+      "timestamp": "2026-08-20T03:39:32.278649Z",
+      "severity": null,
+      "text": "/usr/local/lib/python3.12/site-packages/google/cloud/firestore_v1/base_collection.py:317: UserWarning: Detected filter using positional arguments. Prefer using the 'filter' keyword argument instead."
     }
   ]
 }
