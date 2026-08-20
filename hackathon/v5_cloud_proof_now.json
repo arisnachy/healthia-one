@@ -1,6 +1,6 @@
 {
   "target_run": "32328293833",
-  "probe_revision": "7",
+  "probe_revision": "8",
   "jobs": [
     {
       "name": "hfilm-28293833-301c67-await-email",
@@ -34,7 +34,11 @@
     },
     {
       "name": "hfilm-28293833-301c67-restore",
-      "latest_execution": null,
+      "latest_execution": {
+        "completionStatus": "EXECUTION_PENDING",
+        "creationTimestamp": "2026-08-20T11:49:32.946479Z",
+        "name": "hfilm-28293833-301c67-restore-79xpm"
+      },
       "conditions": [
         {
           "type": "Ready",
@@ -60,7 +64,8 @@
     {
       "name": "hfilm-28293833-301c67-verify",
       "latest_execution": {
-        "completionStatus": "EXECUTION_PENDING",
+        "completionStatus": "EXECUTION_SUCCEEDED",
+        "completionTimestamp": "2026-08-20T11:49:16.812126Z",
         "creationTimestamp": "2026-08-20T11:46:46.482531Z",
         "name": "hfilm-28293833-301c67-verify-rxwpk"
       },
@@ -75,21 +80,26 @@
   "proofs": [
     {
       "id": "film_32328293833_301c67",
-      "status": "reply_sent",
-      "trigger_model_calls": 0,
-      "mainline_scope": "explicitly_opted_in_bp_followup_only",
+      "mission_status": "completed",
       "no_chat_prompt_used": true,
+      "processed_reply_count": 1,
+      "status": "full_loop_live_pass",
+      "trigger_model_calls": 0,
+      "gmail_pubsub_inbound": true,
+      "vital_source_type": "patient_email_reply",
       "trigger_network_calls": 0,
-      "outbox_status": "processed"
+      "eventarc_outbound": true,
+      "outbox_status": "processed",
+      "mainline_scope": "explicitly_opted_in_bp_followup_only"
     },
     {
       "id": "film_32328293833_fc48d9",
+      "no_chat_prompt_used": true,
       "status": "reply_sent",
       "trigger_model_calls": 0,
-      "mainline_scope": "explicitly_opted_in_bp_followup_only",
-      "no_chat_prompt_used": true,
       "trigger_network_calls": 0,
-      "outbox_status": "processed"
+      "outbox_status": "processed",
+      "mainline_scope": "explicitly_opted_in_bp_followup_only"
     }
   ]
 }
