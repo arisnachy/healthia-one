@@ -41,3 +41,4 @@ jobs:
           git add hackathon/live_product_film_probe_20260819.json
           git commit -m "film: publish live product run probe" || exit 0
           git push origin HEAD:kira/live-product-film-20260819
+# refresh: appointment-response-gate-v2
