@@ -1,0 +1,45 @@
+{
+  "execution": "hfilm-26936389-984e57-verify-nsqfx",
+  "completionTime": "2026-08-20T03:20:19.012186Z",
+  "conditions": [
+    {
+      "lastTransitionTime": "2026-08-20T03:20:19.012186Z",
+      "message": "Task hfilm-26936389-984e57-verify-nsqfx-task0 failed with exit code: 1 and message: The container exited with an error.",
+      "reason": "NonZeroExitCode",
+      "status": "False",
+      "type": "Completed"
+    },
+    {
+      "lastTransitionTime": "2026-08-20T03:16:11.230893Z",
+      "message": "Provisioned imported containers.",
+      "status": "True",
+      "type": "ResourcesAvailable"
+    },
+    {
+      "lastTransitionTime": "2026-08-20T03:17:39.328065Z",
+      "message": "Started deployed execution in 1m28.09s.",
+      "status": "True",
+      "type": "Started"
+    },
+    {
+      "lastTransitionTime": "2026-08-20T03:16:11.069783Z",
+      "message": "Imported container image.",
+      "status": "True",
+      "type": "ContainerReady"
+    }
+  ],
+  "failedCount": 1,
+  "succeededCount": null,
+  "logs": [
+    {
+      "timestamp": "2026-08-20T03:20:14.778713Z",
+      "severity": "WARNING",
+      "text": "Container called exit(1)."
+    },
+    {
+      "timestamp": "2026-08-20T03:20:14.573701Z",
+      "severity": "ERROR",
+      "text": "Traceback (most recent call last):\n  File \"/app/scripts/mainline_bp_continuity_proof.py\", line 70, in <module>\n    asyncio.run(main())\n  File \"/usr/local/lib/python3.12/asyncio/runners.py\", line 195, in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/runners.py\", line 118, in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/scripts/mainline_bp_continuity_proof.py\", line 66, in main\n    await globals()[sys.argv[1]]()\n  File \"/app/scripts/mainline_bp_continuity_proof.py\", line 55, in verify\n    await proven_verify()\n  File \"/app/scripts/guardian_wave14_stitch_proof.py\", line 307, in verify\n    raise RuntimeError(\"Timed out waiting for Gmail Pub/Sub to close stitched Guardian mission\")\nRuntimeError: Timed out waiting for Gmail Pub/Sub to close stitched Guardian mission"
+    }
+  ]
+}
