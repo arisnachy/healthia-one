@@ -24,11 +24,13 @@ SOURCE_PROOF_PATIENT = os.getenv(
 ).strip()
 GITHUB_RUN_ID = os.getenv("GITHUB_RUN_ID", "local").strip()
 OAUTH_COLLECTION = "healthia_google_oauth_connections"
+WATCH_COLLECTION = "healthia_gmail_watch_state"
 PROOF_COLLECTION = "healthia_wave14_stitch_proofs"
 
 _original_setup_account = base.setup_account
 _original_hold = base.hold
 _original_goto = base.goto
+_original_checkpoint = base.checkpoint
 
 film_patient_id = ""
 proof_run_id = ""
@@ -36,6 +38,9 @@ proof_jobs: dict[str, str] = {}
 autonomy_armed = False
 autonomy_done = False
 setup_executed = False
+source_watch_snapshot: dict | None = None
+watch_transferred = False
+autonomy_report_patch: dict = {}
 
 
 def _run(command: list[str], *, timeout: int = 420, check: bool = True) -> subprocess.CompletedProcess:
@@ -64,6 +69,25 @@ def _proof_doc() -> dict:
     return snap.to_dict() if snap.exists else {}
 
 
+def checkpoint_v5(report: dict) -> None:
+    """Preserve V5 proof evidence across every later base-recorder checkpoint."""
+    merged = dict(report)
+    if autonomy_report_patch:
+        checks = list(
+            dict.fromkeys(
+                [
+                    *list(merged.get("checks") or []),
+                    *list(autonomy_report_patch.get("checks") or []),
+                ]
+            )
+        )
+        for key, value in autonomy_report_patch.items():
+            if key != "checks":
+                merged[key] = value
+        merged["checks"] = checks
+    _original_checkpoint(merged)
+
+
 def _clone_controlled_oauth(target_patient_id: str) -> None:
     db = firestore.Client(project=PROJECT_ID)
     source = db.collection(OAUTH_COLLECTION).document(SOURCE_PROOF_PATIENT).get()
@@ -83,6 +107,71 @@ def _delete_controlled_oauth() -> None:
     try:
         firestore.Client(project=PROJECT_ID).collection(OAUTH_COLLECTION).document(film_patient_id).delete()
     except Exception:
+        pass
+
+
+def _activate_film_watch() -> None:
+    """Atomically route the already-live Gmail watch to the patient on camera.
+
+    Gmail users.watch is mailbox-scoped. The worker resolves each Pub/Sub event
+    through exactly one enabled `healthia_gmail_watch_state` record. We preserve
+    the real provider watch and its history cursor, but temporarily move the
+    local routing identity from the dedicated proof patient to the synthetic
+    film patient. This avoids duplicate enabled watches for the same mailbox.
+    """
+    global source_watch_snapshot, watch_transferred
+    require(bool(film_patient_id), "film patient is unavailable for Gmail watch transfer")
+    db = firestore.Client(project=PROJECT_ID)
+    source_ref = db.collection(WATCH_COLLECTION).document(SOURCE_PROOF_PATIENT)
+    film_ref = db.collection(WATCH_COLLECTION).document(film_patient_id)
+    source = source_ref.get()
+    require(source.exists, "controlled synthetic Gmail watch is unavailable")
+    data = source.to_dict() or {}
+    require(data.get("enabled") is True, "controlled synthetic Gmail watch is not enabled")
+    email_address = str(data.get("email_address") or "").strip().lower()
+    history_id = str(data.get("history_id") or "").strip()
+    require("@" in email_address, "controlled Gmail watch has no usable mailbox")
+    require(history_id.isdigit(), "controlled Gmail watch has no valid history cursor")
+
+    source_watch_snapshot = dict(data)
+    disabled_source = dict(data)
+    disabled_source["enabled"] = False
+    disabled_source["patient_id"] = SOURCE_PROOF_PATIENT
+    film_watch = dict(data)
+    film_watch["patient_id"] = film_patient_id
+    film_watch["enabled"] = True
+
+    batch = db.batch()
+    batch.set(source_ref, disabled_source)
+    batch.set(film_ref, film_watch)
+    batch.commit()
+    watch_transferred = True
+
+    # Fail closed if the atomic transfer did not leave exactly the intended
+    # routing state. Do not expose mailbox identity in the report or logs.
+    source_after = source_ref.get().to_dict() or {}
+    film_after = film_ref.get().to_dict() or {}
+    require(source_after.get("enabled") is False, "source Gmail watch remained enabled during film transfer")
+    require(film_after.get("enabled") is True, "film Gmail watch was not enabled")
+    require(str(film_after.get("history_id") or "") == history_id, "film Gmail watch cursor changed during transfer")
+
+
+def _restore_controlled_watch() -> None:
+    global watch_transferred
+    if not film_patient_id or source_watch_snapshot is None:
+        return
+    try:
+        db = firestore.Client(project=PROJECT_ID)
+        source_ref = db.collection(WATCH_COLLECTION).document(SOURCE_PROOF_PATIENT)
+        film_ref = db.collection(WATCH_COLLECTION).document(film_patient_id)
+        batch = db.batch()
+        batch.delete(film_ref)
+        batch.set(source_ref, source_watch_snapshot)
+        batch.commit()
+        watch_transferred = False
+    except Exception:
+        # Cleanup is best-effort here; the workflow remains failed closed and a
+        # subsequent proof run will refuse duplicate/invalid watch routing.
         pass
 
 
@@ -177,7 +266,7 @@ def hold_v5(page, seconds: float = 2.0) -> None:
 
 
 def _autonomous_external_action_scene(page) -> None:
-    global autonomy_done, setup_executed
+    global autonomy_done, setup_executed, autonomy_report_patch
     require(film_patient_id, "film patient was not prepared for autonomous Gmail proof")
 
     # 1) No prompt: deterministic BP continuity opens durable work.
@@ -186,6 +275,7 @@ def _autonomous_external_action_scene(page) -> None:
     setup = _proof_doc()
     require(setup.get("no_chat_prompt_used") is True, f"setup did not prove zero-prompt origin: {setup}")
     require(int(setup.get("trigger_model_calls", -1)) == 0, f"BP trigger used a model: {setup}")
+    require(int(setup.get("trigger_network_calls", -1)) == 0, f"BP trigger unexpectedly used the network: {setup}")
 
     page.reload(wait_until="networkidle")
     _stamp_runtime(page)
@@ -193,6 +283,10 @@ def _autonomous_external_action_scene(page) -> None:
     _original_goto(page, "missions", 5.0)
     waiting = base.wait_mission(page, "bp_followup_guardian_measurement", "waiting_patient", 30.0)
     require("blood-pressure" in page.locator("#missionList").inner_text().lower(), "BP autonomous mission is not visible in Health Missions")
+
+    # Route the already-live mailbox watch to this exact synthetic patient before
+    # the external action begins. The provider watch stays real and unchanged.
+    _activate_film_watch()
 
     # 2) Eventarc -> private worker -> REAL Gmail. Keep Health Missions on screen
     # while the cloud job waits for the durable Gmail thread/receipt.
@@ -227,26 +321,29 @@ def _autonomous_external_action_scene(page) -> None:
     final_bp = base.wait_mission(page, "bp_followup_guardian_measurement", "completed", 20.0)
     require(final_bp.get("id") == waiting.get("id"), "autonomous BP proof did not close the same mission")
 
-    report = json.loads(base.REPORT.read_text(encoding="utf-8")) if base.REPORT.exists() else {}
-    report["autonomous_bp_mission_id"] = final_bp.get("id")
-    report["autonomous_bp_proof_run"] = proof_run_id
-    report["autonomous_bp_proof"] = {
-        "no_chat_prompt_used": True,
-        "real_gmail_sent": True,
-        "same_thread_reply": True,
-        "gmail_pubsub_inbound": True,
-        "vital_record": "128/80",
-        "vital_source_type": "patient_email_reply",
-        "same_mission_completed": True,
-        "thread_id_sha256_16": hashlib.sha256(str(verified.get("gmail_thread_id", "")).encode()).hexdigest()[:16],
+    autonomy_report_patch = {
+        "autonomous_bp_mission_id": final_bp.get("id"),
+        "autonomous_bp_proof_run": proof_run_id,
+        "autonomous_bp_proof": {
+            "no_chat_prompt_used": True,
+            "real_gmail_sent": True,
+            "same_thread_reply": True,
+            "gmail_pubsub_inbound": True,
+            "vital_record": "128/80",
+            "vital_source_type": "patient_email_reply",
+            "same_mission_completed": True,
+            "thread_id_sha256_16": hashlib.sha256(str(verified.get("gmail_thread_id", "")).encode()).hexdigest()[:16],
+        },
+        "checks": ["real_autonomous_gmail_pubsub_loop_visible_in_healthia"],
     }
-    report.setdefault("checks", []).append("real_autonomous_gmail_pubsub_loop_visible_in_healthia")
-    base.checkpoint(report)
+    current_report = json.loads(base.REPORT.read_text(encoding="utf-8")) if base.REPORT.exists() else {}
+    checkpoint_v5(current_report)
     autonomy_done = True
 
-    # Restore the exact pre-proof synthetic patient state so the original three
-    # Guardian mission assertions remain valid after this insert.
+    # Restore the exact pre-proof patient state and Gmail routing before the base
+    # recorder performs its final summary assertions.
     _gcloud_job("restore")
+    _restore_controlled_watch()
     _delete_controlled_oauth()
     page.reload(wait_until="networkidle")
     _stamp_runtime(page)
@@ -263,6 +360,7 @@ def goto_v5(page, view: str, seconds: float = 2.0) -> None:
 base.setup_account = setup_account_v5
 base.hold = hold_v5
 base.goto = goto_v5
+base.checkpoint = checkpoint_v5
 
 
 if __name__ == "__main__":
@@ -274,5 +372,6 @@ if __name__ == "__main__":
                 _gcloud_job("restore", check=False)
             except Exception:
                 pass
+        _restore_controlled_watch()
         _delete_controlled_oauth()
         _cleanup_jobs()
