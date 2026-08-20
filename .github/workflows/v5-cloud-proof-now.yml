@@ -17,7 +17,7 @@ jobs:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
       TARGET_RUN: "32328293833"
-      PROBE_REVISION: "2"
+      PROBE_REVISION: "3"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,30 +42,21 @@ jobs:
           python - <<'PY'
           import json, os
           from google.cloud import firestore
-          target=os.environ['TARGET_RUN']
-          prefix='hfilm-'+target[-8:]+'-'
-          raw=json.load(open('/tmp/jobs.json'))
-          jobs=[]
+          target=os.environ['TARGET_RUN']; prefix='hfilm-'+target[-8:]+'-'
+          raw=json.load(open('/tmp/jobs.json')); jobs=[]
           for item in raw:
-              meta=item.get('metadata') or {}
-              name=str(meta.get('name') or '')
-              if not name.startswith(prefix):
-                  continue
-              status=item.get('status') or {}
-              conditions=status.get('conditions') or []
+              meta=item.get('metadata') or {}; name=str(meta.get('name') or '')
+              if not name.startswith(prefix): continue
+              status=item.get('status') or {}; conditions=status.get('conditions') or []
               jobs.append({'name':name,'latest_execution':status.get('latestCreatedExecution'),'conditions':[{k:c.get(k) for k in ('type','status','reason','message') if c.get(k) is not None} for c in conditions]})
-          db=firestore.Client(project=os.environ['PROJECT_ID'])
-          proofs=[]
-          doc_prefix='film_'+target+'_'
+          db=firestore.Client(project=os.environ['PROJECT_ID']); proofs=[]; doc_prefix='film_'+target+'_'
           allowed={'status','mission_status','outbox_status','eventarc_outbound','gmail_pubsub_inbound','no_chat_prompt_used','trigger_model_calls','trigger_network_calls','vital_source_type','processed_reply_count','mainline_scope'}
           for snap in db.collection('healthia_wave14_stitch_proofs').stream():
               if snap.id.startswith(doc_prefix):
-                  data=snap.to_dict() or {}
-                  proofs.append({'id':snap.id, **{k:data.get(k) for k in allowed if k in data}})
+                  data=snap.to_dict() or {}; proofs.append({'id':snap.id, **{k:data.get(k) for k in allowed if k in data}})
           open('hackathon/v5_cloud_proof_now.json','w').write(json.dumps({'target_run':target,'probe_revision':os.environ['PROBE_REVISION'],'jobs':jobs,'proofs':proofs},indent=2,default=str))
           PY
-          git config user.name "healthia-v5-cloud-probe"
-          git config user.email "actions@users.noreply.github.com"
+          git config user.name "healthia-v5-cloud-probe"; git config user.email "actions@users.noreply.github.com"
           git add hackathon/v5_cloud_proof_now.json
           git commit -m "film: capture V5 external proof progress"
           git push origin HEAD:kira/live-product-film-20260819
