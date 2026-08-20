@@ -1,16 +1,16 @@
 {
-  "target_sha": "d67eb6ac9fb2b3d30cdbff8453a6b666a508537b",
+  "target_sha": "8e62fc12e0efab41b8735ac7723632a5bfb868cd",
   "run": {
     "conclusion": "",
-    "createdAt": "2026-08-20T03:04:45Z",
-    "databaseId": 32326936389,
-    "headSha": "d67eb6ac9fb2b3d30cdbff8453a6b666a508537b",
+    "createdAt": "2026-08-20T03:27:31Z",
+    "databaseId": 32328293833,
+    "headSha": "8e62fc12e0efab41b8735ac7723632a5bfb868cd",
     "status": "in_progress",
-    "url": "https://github.com/arisnachy/healthia-one/actions/runs/32326936389"
+    "url": "https://github.com/arisnachy/healthia-one/actions/runs/32328293833"
   },
   "jobs": [
     {
-      "id": 96299985792,
+      "id": 96303905504,
       "name": "make-film",
       "status": "in_progress",
       "conclusion": null,
@@ -32,27 +32,27 @@
         },
         {
           "name": "Prove Guardian contracts before filming",
-          "status": "completed",
-          "conclusion": "success"
+          "status": "in_progress",
+          "conclusion": null
         },
         {
           "name": "Authenticate to Google Cloud",
-          "status": "completed",
-          "conclusion": "success"
+          "status": "pending",
+          "conclusion": null
         },
         {
           "name": "Set up gcloud",
-          "status": "completed",
-          "conclusion": "success"
+          "status": "pending",
+          "conclusion": null
         },
         {
           "name": "Build ephemeral autonomy proof overlay from promoted worker",
-          "status": "completed",
-          "conclusion": "success"
+          "status": "pending",
+          "conclusion": null
         },
         {
           "name": "Deploy exact HealthIA application to private Cloud Run",
-          "status": "in_progress",
+          "status": "pending",
           "conclusion": null
         },
         {
@@ -101,11 +101,6 @@
           "conclusion": null
         },
         {
-          "name": "Post Authenticate to Google Cloud",
-          "status": "pending",
-          "conclusion": null
-        },
-        {
           "name": "Post Use Python 3.12",
           "status": "pending",
           "conclusion": null
@@ -118,5 +113,5 @@
       ]
     }
   ],
-  "observed_at": "2026-08-20T03:07:31Z"
+  "observed_at": "2026-08-20T03:28:06Z"
 }
