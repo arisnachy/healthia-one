@@ -276,15 +276,38 @@ def run() -> dict:
         goto(page, "missions", 4.0)
         report["checks"].append("postvisit_guardian_closes_from_real_consultation_document")
 
+        # Prove the current Chat UI is driven by the real Gemini response, not by a stale selector or a scripted panel.
         goto(page, "chat", 1.5)
-        page.locator("#chatInput").fill("Since this morning I have felt dizzy when I stand up. Help me understand what information you need.")
-        page.locator("#sendButton").click()
-        hold(page, 4.0)
-        page.locator("#chatInput").fill("The dizziness lasts about thirty seconds, there is no fainting, and I want to discuss this health problem.")
-        page.locator("#sendButton").click()
-        page.wait_for_selector('.clinical-question-block[data-question-source="gemini_dynamic"]', timeout=70_000)
-        require(page.locator('.clinical-question-block[data-question-source="gemini_dynamic"] .clinical-question:visible').count() == 1, "adaptive interview is not one-question-at-a-time")
-        hold(page, 7.0)
+        complaint = "Desde ayer me arde al orinar y tengo que ir al baño a cada rato. Quiero entender qué información necesitas."
+        page.locator("#chatInput").fill(complaint)
+        with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/api/chat"), timeout=90_000) as pending_chat:
+            page.locator("#sendButton").click()
+        chat_response = pending_chat.value
+        chat_body = chat_response.text()
+        require(chat_response.ok, f"real Chat /api/chat failed HTTP {chat_response.status}: {chat_body[:2000]}")
+        chat_payload = json.loads(chat_body)
+        assistant = chat_payload.get("message") or {}
+        metadata = assistant.get("metadata") or {}
+        interview = metadata.get("clinical_interview") or {}
+        block = interview.get("question_block") or {}
+        questions = block.get("questions") or []
+        require(metadata.get("llm_status") == "dynamic_clinical_questions", f"Gemini did not return dynamic clinical questions: {metadata.get('llm_status')}")
+        require(metadata.get("question_source") == "gemini_dynamic", f"question source was not Gemini: {metadata.get('question_source')}")
+        require(metadata.get("model") == "gemini-3.5-flash", f"wrong model in live Chat response: {metadata.get('model')}")
+        require(len(questions) == 5, f"Gemini live response did not contain exactly five questions: {len(questions)}")
+        assistant_id = assistant.get("id")
+        require(bool(assistant_id), "live Chat response has no assistant message id")
+        selector = f'.message[data-id="{assistant_id}"] .clinical-question-block[data-question-source="gemini_dynamic"]'
+        page.wait_for_selector(selector, timeout=90_000)
+        require(page.locator(f'{selector} .clinical-question').count() == 5, "real Chat UI did not render all five Gemini questions")
+        require(page.locator(f'{selector} .clinical-question:visible').count() == 1, "adaptive interview is not one-question-at-a-time")
+        first_prompt = str(questions[0].get("prompt") or "").strip()
+        require(bool(first_prompt), "Gemini first question has no prompt")
+        require(first_prompt in page.locator(selector).inner_text(), "visible adaptive interview does not match Gemini response")
+        report["gemini_message_id"] = assistant_id
+        report["gemini_question_count"] = len(questions)
+        report["gemini_first_question"] = first_prompt
+        hold(page, 8.0)
         report["checks"].append("live_gemini_35_flash_google_adk_adaptive_interview")
 
         goto(page, "missions", 5.0)
