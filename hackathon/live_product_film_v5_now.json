@@ -1,0 +1,122 @@
+{
+  "target_sha": "d67eb6ac9fb2b3d30cdbff8453a6b666a508537b",
+  "run": {
+    "conclusion": "",
+    "createdAt": "2026-08-20T03:04:45Z",
+    "databaseId": 32326936389,
+    "headSha": "d67eb6ac9fb2b3d30cdbff8453a6b666a508537b",
+    "status": "in_progress",
+    "url": "https://github.com/arisnachy/healthia-one/actions/runs/32326936389"
+  },
+  "jobs": [
+    {
+      "id": 96299985792,
+      "name": "make-film",
+      "status": "in_progress",
+      "conclusion": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Checkout exact film source",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Use Python 3.12",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Prove Guardian contracts before filming",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Authenticate to Google Cloud",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Set up gcloud",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build ephemeral autonomy proof overlay from promoted worker",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Deploy exact HealthIA application to private Cloud Run",
+          "status": "in_progress",
+          "conclusion": null
+        },
+        {
+          "name": "Install browser, TTS and media tools",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Synthesize fresh English narration",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Record HealthIA itself plus REAL autonomous Gmail continuity",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "JUDGE Ω app-only plus external-action truth gate",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Build 1920x1080 narrated master",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "JUDGE Ω final submission gate",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Build visual review contact sheet",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Upload accepted film and evidence",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Remove temporary Cloud Run film service",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Authenticate to Google Cloud",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Use Python 3.12",
+          "status": "pending",
+          "conclusion": null
+        },
+        {
+          "name": "Post Checkout exact film source",
+          "status": "pending",
+          "conclusion": null
+        }
+      ]
+    }
+  ],
+  "observed_at": "2026-08-20T03:07:31Z"
+}
