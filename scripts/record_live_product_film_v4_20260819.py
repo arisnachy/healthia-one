@@ -67,7 +67,7 @@ def upload_document_v4(page, path, *, title: str, category: str) -> dict:
     base.goto(page, "documents", 1.0)
     page.wait_for_function(
         "([docId, docTitle]) => { const root=document.getElementById('documentsRoot'); return !!root && root.textContent.includes(docTitle); }",
-        [document_id, title],
+        arg=[document_id, title],
         timeout=30_000,
     )
     page.wait_for_timeout(1800)
