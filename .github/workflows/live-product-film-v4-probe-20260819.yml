@@ -39,3 +39,4 @@ jobs:
           git add hackathon/live_product_film_v4_probe_20260819.json
           git commit -m "film: publish V4 run probe" || exit 0
           git push origin HEAD:kira/live-product-film-20260819
+# refresh: playwright-arg-fix-013837e
