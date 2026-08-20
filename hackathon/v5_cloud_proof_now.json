@@ -1,6 +1,6 @@
 {
   "target_run": "32328293833",
-  "probe_revision": "2",
+  "probe_revision": "3",
   "jobs": [
     {
       "name": "hfilm-28293833-fc48d9-await-email",
@@ -65,10 +65,10 @@
   "proofs": [
     {
       "id": "film_32328293833_fc48d9",
-      "status": "setup_complete",
-      "trigger_model_calls": 0,
-      "trigger_network_calls": 0,
       "no_chat_prompt_used": true,
+      "trigger_model_calls": 0,
+      "status": "setup_complete",
+      "trigger_network_calls": 0,
       "mainline_scope": "explicitly_opted_in_bp_followup_only"
     }
   ]
