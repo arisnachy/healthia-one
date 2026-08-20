@@ -1,0 +1,105 @@
+name: HealthIA V5 Gmail worker root-cause probe
+
+on:
+  push:
+    branches: [kira/live-product-film-20260819]
+    paths:
+      - ".github/workflows/v5-gmail-worker-rootcause-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SOURCE_PATIENT: patient_8b8c820ea54c4ca98b84ef12d6f4fafa
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/live-product-film-20260819
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Diagnose watch uniqueness and worker exceptions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q google-cloud-firestore
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="healthia-gmail-worker" AND timestamp>="2026-08-20T03:38:00Z" AND timestamp<="2026-08-20T03:46:30Z"' \
+            --project "$PROJECT_ID" --limit=1000 --order=asc --format=json > /tmp/worker.json || echo '[]' > /tmp/worker.json
+          python - <<'PY'
+          import json, os, re
+          from google.cloud import firestore
+
+          db=firestore.Client(project=os.environ['PROJECT_ID'])
+          source=db.collection('healthia_google_oauth_connections').document(os.environ['SOURCE_PATIENT']).get()
+          source_data=source.to_dict() or {}
+          mailbox=str(source_data.get('google_account') or '').strip().lower()
+          matches=[]
+          if mailbox:
+              q=(db.collection('healthia_gmail_watch_state')
+                   .where('email_address','==',mailbox)
+                   .where('enabled','==',True)
+                   .limit(20))
+              for snap in q.stream():
+                  d=snap.to_dict() or {}
+                  matches.append({
+                      'patient_id':str(d.get('patient_id') or snap.id),
+                      'is_source':str(d.get('patient_id') or snap.id)==os.environ['SOURCE_PATIENT'],
+                      'history_id_present':str(d.get('history_id') or '').isdigit(),
+                      'expiration_present':d.get('expiration_ms') is not None,
+                  })
+
+          raw=json.load(open('/tmp/worker.json'))
+          errors=[]
+          for item in raw:
+              http=item.get('httpRequest') or {}
+              text=str(item.get('textPayload') or '')
+              jp=item.get('jsonPayload') or {}
+              if not text:
+                  text=str(jp.get('message') or jp.get('error') or jp.get('exception') or '')
+              if not text:
+                  continue
+              low=text.lower()
+              # Drop ordinary access lines; keep exception frames/reasons only.
+              interesting=(
+                  'traceback' in low or 'exception' in low or 'error' in low or
+                  'runtimeerror' in low or 'permission' in low or 'watch' in low or
+                  'firestore' in low or 'multiple patient' in low or '/app/healthia_one/' in low
+              )
+              if not interesting or 'post /events/gmail-push http/1.1' in low:
+                  continue
+              text=re.sub(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[redacted-email]', text)
+              text=re.sub(r'(?i)(bearer|authorization|refresh_token|access_token|client_secret)\s*[:=]?\s*[^\s,;]+', r'\1=[redacted]', text)
+              errors.append({
+                  'timestamp':item.get('timestamp'),
+                  'severity':item.get('severity'),
+                  'http_status':http.get('status'),
+                  'text':text[:4000],
+                  'json_keys':sorted(jp.keys()) if isinstance(jp,dict) else [],
+              })
+          out={
+              'enabled_watch_count_for_controlled_mailbox':len(matches),
+              'enabled_watch_bindings':matches,
+              'worker_exception_entries':errors[-40:],
+          }
+          open('hackathon/v5_gmail_worker_rootcause.json','w').write(json.dumps(out,indent=2,default=str))
+          PY
+          git config user.name "healthia-v5-rootcause"
+          git config user.email "actions@users.noreply.github.com"
+          git add hackathon/v5_gmail_worker_rootcause.json
+          git commit -m "film: capture Gmail worker root cause"
+          git push origin HEAD:kira/live-product-film-20260819
