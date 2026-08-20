@@ -82,14 +82,23 @@ jobs:
           rm -rf /tmp/healthia-main
           git worktree add --detach /tmp/healthia-main origin/main
           proof_image="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/healthia-film-autonomy-proof:${GITHUB_SHA}"
-          (
+          build_id="$(
             cd /tmp/healthia-main
             gcloud builds submit . --project "$PROJECT_ID" --region "$REGION" \
               --config cloudbuild.autonomy-proof.yaml \
               --substitutions "_BASE_IMAGE=${base_image},_PROOF_IMAGE=${proof_image}" \
-              --quiet
-          )
-          digest="$(gcloud artifacts docker images describe "$proof_image" --project "$PROJECT_ID" --format='value(image_summary.digest)')"
+              --async --format='value(id)' --quiet
+          )"
+          test -n "$build_id"
+          echo "autonomy proof build launched: $build_id"
+          sleep 10
+
+          digest=''
+          for _ in $(seq 1 120); do
+            digest="$(gcloud artifacts docker images describe "$proof_image" --project "$PROJECT_ID" --format='value(image_summary.digest)' 2>/dev/null || true)"
+            [[ -n "$digest" ]] && break
+            sleep 5
+          done
           test -n "$digest"
           echo "proof_image=$proof_image" >> "$GITHUB_OUTPUT"
           echo "proof_digest=$digest" >> "$GITHUB_OUTPUT"
