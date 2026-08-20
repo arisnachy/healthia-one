@@ -87,8 +87,12 @@ def upload_document(page: Page, path: Path, *, title: str, category: str) -> Non
     page.locator('#documentForm input[name="file"]').set_input_files(str(path))
     page.locator('#documentForm input[name="title"]').fill(title)
     page.locator('#documentForm select[name="category"]').select_option(category)
-    page.locator('#documentForm button[type="submit"]').click()
-    page.wait_for_function("!document.getElementById('documentDialog')?.open", timeout=30_000)
+    with page.expect_response(lambda r: r.request.method == "POST" and "/api/documents/upload" in r.url, timeout=70_000) as pending:
+        page.locator('#documentForm button[type="submit"]').click()
+    response = pending.value
+    body = response.text()
+    require(response.ok, f"real Documents upload failed HTTP {response.status}: {body[:1500]}")
+    page.wait_for_function("!document.getElementById('documentDialog')?.open", timeout=60_000)
     hold(page, 2.5)
 
 
@@ -124,6 +128,21 @@ def setup_account(playwright, email: str, password: str, storage_path: Path) -> 
     context.storage_state(path=str(storage_path))
     context.close()
     browser.close()
+
+
+def submit_real_appointment_form(page: Page) -> dict:
+    values = page.locator("#appointmentForm").evaluate("""form => Object.fromEntries(new FormData(form).entries())""")
+    require(bool(values.get("title")), f"appointment title missing before submit: {values}")
+    require(bool(values.get("scheduled_at")), f"appointment date missing before submit: {values}")
+    with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/api/appointments"), timeout=75_000) as pending:
+        page.locator('#appointmentForm button[type="submit"]').click()
+    response = pending.value
+    body = response.text()
+    require(response.ok, f"real appointment UI POST failed HTTP {response.status}: {body[:2000]} | form={values}")
+    page.wait_for_function("!document.getElementById('appointmentDialog')?.open", timeout=60_000)
+    payload = json.loads(body)
+    require(payload.get("title") == values.get("title"), f"appointment response mismatch: {payload}")
+    return payload
 
 
 def run() -> dict:
@@ -217,22 +236,23 @@ def run() -> dict:
         page.locator('#appointmentForm input[name="location"]').fill("HealthIA synthetic clinic")
         page.locator('#appointmentForm input[name="required_documents"]').fill("Recent results, Medication list, Insurance")
         page.locator('#appointmentForm textarea[name="questions"]').fill("What blood pressure target should I discuss?")
-        page.locator('#appointmentForm button[type="submit"]').click()
-        page.wait_for_function("!document.getElementById('appointmentDialog')?.open", timeout=20_000)
-        appt_mission = wait_mission(page, APPOINTMENT_GUARDIAN, "waiting_patient", 35.0)
+        appointment_created = submit_real_appointment_form(page)
+        report["appointment_id"] = appointment_created["id"]
+        hold(page, 2.0)
+        appt_mission = wait_mission(page, APPOINTMENT_GUARDIAN, "waiting_patient", 45.0)
         report["appointment_mission_id"] = appt_mission["id"]
         goto(page, "missions", 4.0)
         report["checks"].append("appointment_guardian_verifies_twin_and_opens_missing_insurance")
 
         upload_document(page, insurance, title="Insurance card", category="insurance")
-        appt_closed = wait_mission(page, APPOINTMENT_GUARDIAN, "completed", 35.0)
+        appt_closed = wait_mission(page, APPOINTMENT_GUARDIAN, "completed", 45.0)
         require(appt_closed["id"] == appt_mission["id"], "Appointment Guardian did not close the same mission")
         goto(page, "missions", 3.5)
         report["checks"].append("appointment_guardian_closes_from_real_document_upload")
 
         goto(page, "appointments", 2.0)
         snap = state(page)
-        appointment = snap["appointments"][-1]
+        appointment = next(item for item in snap["appointments"] if item["id"] == appointment_created["id"])
         completed = dict(appointment)
         completed["status"] = "completed"
         completed["scheduled_at"] = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
@@ -241,7 +261,7 @@ def run() -> dict:
           return {ok:r.ok,status:r.status,text:await r.text()};
         }""", completed)
         require(update["ok"], f"external appointment update failed: {update}")
-        post_mission = wait_mission(page, POSTVISIT_GUARDIAN, "waiting_patient", 35.0)
+        post_mission = wait_mission(page, POSTVISIT_GUARDIAN, "waiting_patient", 45.0)
         report["postvisit_mission_id"] = post_mission["id"]
         page.reload(wait_until="networkidle")
         page.locator("#runtimeLabel").evaluate("""(el, p) => { el.textContent=`Cloud Run · ${location.host} · Gemini ${p.model} · Google ADK`; el.style.fontSize='12px'; el.style.maxWidth='620px'; el.style.whiteSpace='normal'; }""", {"model":readiness.get("model")})
@@ -251,7 +271,7 @@ def run() -> dict:
         report["checks"].append("postvisit_guardian_opens_from_completed_visit_event")
 
         upload_document(page, note, title="Family medicine consultation note", category="consultation")
-        post_closed = wait_mission(page, POSTVISIT_GUARDIAN, "completed", 35.0)
+        post_closed = wait_mission(page, POSTVISIT_GUARDIAN, "completed", 45.0)
         require(post_closed["id"] == post_mission["id"], "Post-Visit Guardian did not close same mission")
         goto(page, "missions", 4.0)
         report["checks"].append("postvisit_guardian_closes_from_real_consultation_document")
@@ -299,8 +319,10 @@ if __name__ == "__main__":
     except Exception as exc:
         failure = {}
         if REPORT.exists():
-            try: failure = json.loads(REPORT.read_text(encoding="utf-8"))
-            except Exception: pass
+            try:
+                failure = json.loads(REPORT.read_text(encoding="utf-8"))
+            except Exception:
+                pass
         failure.update({"status":"FAIL","error_type":type(exc).__name__,"error":str(exc)[:3000]})
         checkpoint(failure)
         print(f"HEALTHIA_LIVE_PRODUCT_FILM_FAIL {type(exc).__name__}: {exc}")
