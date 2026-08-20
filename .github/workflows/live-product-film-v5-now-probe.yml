@@ -1,0 +1,39 @@
+name: HealthIA ONE V5 instant status probe
+
+on:
+  push:
+    branches: [kira/live-product-film-20260819]
+    paths:
+      - ".github/workflows/live-product-film-v5-now-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/live-product-film-20260819
+          fetch-depth: 0
+      - name: Capture current exact V5 status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: d67eb6ac9fb2b3d30cdbff8453a6b666a508537b
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow live-product-film-v5-20260819.yml --branch kira/live-product-film-20260819 --limit 30 --json databaseId,headSha,status,conclusion,url,createdAt)"
+          run="$(jq -c --arg sha "$TARGET_SHA" '[.[] | select(.headSha==$sha)][0] // empty' <<<"$runs")"
+          test -n "$run"
+          run_id="$(jq -r '.databaseId' <<<"$run")"
+          jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=20")"
+          jq -n --arg target "$TARGET_SHA" --argjson run "$run" --argjson jobs "$jobs" '{target_sha:$target,run:$run,jobs:[$jobs.jobs[]|{id,name,status,conclusion,steps:[.steps[]|{name,status,conclusion}]}],observed_at:(now|todate)}' > hackathon/live_product_film_v5_now.json
+          git config user.name "healthia-v5-now"
+          git config user.email "actions@users.noreply.github.com"
+          git add hackathon/live_product_film_v5_now.json
+          git commit -m "film: capture V5 current status"
+          git push origin HEAD:kira/live-product-film-20260819
