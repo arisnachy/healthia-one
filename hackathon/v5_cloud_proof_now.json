@@ -1,30 +1,75 @@
 {
-  "target_run": "32328293833",
-  "probe_revision": "9",
-  "jobs": [],
-  "proofs": [
+  "target_run": "32367703696",
+  "probe_revision": "10",
+  "jobs": [
     {
-      "id": "film_32328293833_301c67",
-      "vital_source_type": "patient_email_reply",
-      "trigger_network_calls": 0,
-      "no_chat_prompt_used": true,
-      "mainline_scope": "explicitly_opted_in_bp_followup_only",
-      "status": "full_loop_live_pass",
-      "outbox_status": "processed",
-      "processed_reply_count": 1,
-      "mission_status": "completed",
-      "trigger_model_calls": 0,
-      "eventarc_outbound": true,
-      "gmail_pubsub_inbound": true
+      "name": "hfilm-67703696-c50153-await-email",
+      "latest_execution": {
+        "completionStatus": "EXECUTION_PENDING",
+        "creationTimestamp": "2026-08-20T12:20:47.433835Z",
+        "name": "hfilm-67703696-c50153-await-email-t6qvs"
+      },
+      "conditions": [
+        {
+          "type": "Ready",
+          "status": "True"
+        }
+      ]
     },
     {
-      "id": "film_32328293833_fc48d9",
-      "trigger_network_calls": 0,
+      "name": "hfilm-67703696-c50153-reply",
+      "latest_execution": null,
+      "conditions": [
+        {
+          "type": "Ready",
+          "status": "True"
+        }
+      ]
+    },
+    {
+      "name": "hfilm-67703696-c50153-restore",
+      "latest_execution": null,
+      "conditions": [
+        {
+          "type": "Ready",
+          "status": "True"
+        }
+      ]
+    },
+    {
+      "name": "hfilm-67703696-c50153-setup",
+      "latest_execution": {
+        "completionStatus": "EXECUTION_SUCCEEDED",
+        "completionTimestamp": "2026-08-20T12:20:33.050981Z",
+        "creationTimestamp": "2026-08-20T12:19:22.088558Z",
+        "name": "hfilm-67703696-c50153-setup-cpd6q"
+      },
+      "conditions": [
+        {
+          "type": "Ready",
+          "status": "True"
+        }
+      ]
+    },
+    {
+      "name": "hfilm-67703696-c50153-verify",
+      "latest_execution": null,
+      "conditions": [
+        {
+          "type": "Ready",
+          "status": "True"
+        }
+      ]
+    }
+  ],
+  "proofs": [
+    {
+      "id": "film_32367703696_c50153",
+      "status": "setup_complete",
+      "trigger_model_calls": 0,
       "no_chat_prompt_used": true,
-      "mainline_scope": "explicitly_opted_in_bp_followup_only",
-      "status": "reply_sent",
-      "outbox_status": "processed",
-      "trigger_model_calls": 0
+      "trigger_network_calls": 0,
+      "mainline_scope": "explicitly_opted_in_bp_followup_only"
     }
   ]
 }
