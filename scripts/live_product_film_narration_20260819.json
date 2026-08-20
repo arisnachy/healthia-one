@@ -32,7 +32,11 @@
     "text": "HealthIA is also available when the patient does want clinical guidance. Here, Gemini 3.5 Flash through Google ADK responds to a real symptom conversation and creates a bounded adaptive interview. The model can reason and ask case-specific questions, while deterministic rules keep diagnosis, prescribing, consent, and real-world authority outside the model's control."
   },
   {
+    "id": "external_autonomy",
+    "text": "Now the key autonomous path. Nobody types a prompt. HealthIA opens an overdue blood-pressure mission. Eventarc wakes a private worker and a real Gmail message leaves the system. A controlled patient reply returns in the same thread through Gmail users dot watch and authenticated Pub Sub. HealthIA writes blood pressure one twenty-eight over eighty as a VitalRecord and closes that same mission from durable evidence, not from a model claim."
+  },
+  {
     "id": "close",
-    "text": "That is HealthIA ONE: a patient-owned continuity agent. It watches authorized longitudinal state, notices unfinished work, updates real records, creates and resolves durable missions from evidence, and knows where autonomy must stop. Your health never starts over. Neither should your health agent."
+    "text": "That is HealthIA ONE: a patient-owned continuity agent. It watches authorized longitudinal state, notices unfinished work, acts when it is allowed, updates real records, creates and resolves durable missions from evidence, and knows where autonomy must stop. Your health never starts over. Neither should your health agent."
   }
 ]
