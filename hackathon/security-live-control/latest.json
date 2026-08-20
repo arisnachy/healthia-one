@@ -1,9 +1,8 @@
 {
-  "schema": "healthia-security-live-control/v2",
+  "schema": "healthia-security-live-control/v4",
   "status": "FAIL",
   "candidate_sha": "f0c2f518a54ba3a8de9750cba2f017a1915f2241",
-  "run_id": "32395082753",
-  "run_attempt": "1",
+  "run_id": "32395513632",
   "evidence": {
     "remote_regression": true,
     "permission_preflight": true,
