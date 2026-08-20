@@ -1,0 +1,38 @@
+[
+  {
+    "id": "open",
+    "text": "Most health AI waits for the patient to ask the right question. HealthIA ONE is built to keep unfinished health work alive. What you are seeing is the real HealthIA application running on Google Cloud Run, using Gemini 3.5 Flash on Vertex AI with Google ADK. No slides. No mock screens."
+  },
+  {
+    "id": "twin",
+    "text": "This synthetic patient's longitudinal record already contains a clinician-confirmed losartan treatment. Now watch what happens when new evidence arrives. The patient does not ask HealthIA to investigate anything."
+  },
+  {
+    "id": "result_gap",
+    "text": "A renal-function result containing creatinine is uploaded through the real Results workspace. HealthIA preserves the evidence, updates the patient record, and the Result Guardian compares the new result with the registered treatment context. Creatinine is present, but potassium evidence is missing. Without a chat prompt, HealthIA opens a durable mission so that gap cannot disappear when the conversation ends. It does not diagnose kidney disease, and it does not change losartan."
+  },
+  {
+    "id": "result_close",
+    "text": "Now potassium evidence arrives through the same product. Guardian re-evaluates the open mission, links the new evidence, and closes the same mission only because the required evidence is actually present. The patient did not have to remember what HealthIA was waiting for. The Twin carried that unfinished work forward."
+  },
+  {
+    "id": "appointment",
+    "text": "Next, the patient adds a family-medicine appointment in HealthIA. The visit requires recent results, an active medication list, and insurance. HealthIA can already verify the first two from the longitudinal record. Insurance is missing, so Appointment Guardian creates a preparation mission automatically instead of sending a generic reminder."
+  },
+  {
+    "id": "insurance",
+    "text": "The patient uploads the insurance document in the real Documents workspace. HealthIA rechecks the exact requirements, attaches the evidence, and closes the preparation mission. No booking, diagnosis, or treatment was changed."
+  },
+  {
+    "id": "postvisit",
+    "text": "Now an external appointment update marks the visit completed. HealthIA sees that the encounter is over but cannot verify a consultation note or discharge summary. Post-Visit Guardian opens another mission and refuses to invent what happened in the visit. When the consultation note arrives, the same mission closes from durable evidence."
+  },
+  {
+    "id": "gemini",
+    "text": "HealthIA is also available when the patient does want clinical guidance. Here, Gemini 3.5 Flash through Google ADK responds to a real symptom conversation and creates a bounded adaptive interview. The model can reason and ask case-specific questions, while deterministic rules keep diagnosis, prescribing, consent, and real-world authority outside the model's control."
+  },
+  {
+    "id": "close",
+    "text": "That is HealthIA ONE: a patient-owned continuity agent. It watches authorized longitudinal state, notices unfinished work, updates real records, creates and resolves durable missions from evidence, and knows where autonomy must stop. Your health never starts over. Neither should your health agent."
+  }
+]
