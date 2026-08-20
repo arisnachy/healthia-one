@@ -76,5 +76,6 @@ def upload_document_v4(page, path, *, title: str, category: str) -> dict:
 
 base.upload_document = upload_document_v4
 
+# V4 take 2: same real-product flow, now using the verified one-message Gemini contract in the base recorder.
 if __name__ == "__main__":
     base.run()
