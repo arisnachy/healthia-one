@@ -1,0 +1,78 @@
+name: HealthIA V5 Gmail worker inbound probe
+
+on:
+  push:
+    branches: [kira/live-product-film-20260819]
+    paths:
+      - ".github/workflows/v5-gmail-worker-log-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    env:
+      PROJECT_ID: healthia-6088a
+      REGION: us-central1
+      SERVICE_NAME: healthia-gmail-worker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: kira/live-product-film-20260819
+          fetch-depth: 0
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      - name: Capture PHI-neutral inbound diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="healthia-gmail-worker" AND timestamp>="2026-08-20T03:38:00Z" AND timestamp<="2026-08-20T03:46:30Z"' \
+            --project "$PROJECT_ID" --limit=300 --order=asc --format=json > /tmp/worker.json || echo '[]' > /tmp/worker.json
+          python - <<'PY'
+          import json,re
+          raw=json.load(open('/tmp/worker.json'))
+          safe=[]
+          for item in raw:
+              http=item.get('httpRequest') or {}
+              text=str(item.get('textPayload') or (item.get('jsonPayload') or {}).get('message') or '')
+              # Aggressive redaction: no mailbox addresses, auth material, query strings, payloads.
+              text=re.sub(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[redacted-email]', text)
+              text=re.sub(r'(?i)(bearer|authorization|refresh_token|access_token|client_secret)[^\s,;]*', r'\1=[redacted]', text)
+              if len(text)>800: text=text[:800]
+              entry={
+                'timestamp':item.get('timestamp'),
+                'severity':item.get('severity'),
+                'http_status':http.get('status'),
+                'method':http.get('requestMethod'),
+                'latency':http.get('latency'),
+              }
+              url=str(http.get('requestUrl') or '')
+              if url:
+                  entry['path']='/events/gmail-push' if '/events/gmail-push' in url else ('/internal/ensure-watch' if '/internal/ensure-watch' in url else '/other')
+              if text and ('@' not in text): entry['text']=text
+              if entry.get('path')=='/events/gmail-push' or entry.get('http_status') or 'gmail' in text.lower() or 'error' in text.lower() or 'exception' in text.lower():
+                  safe.append(entry)
+          summary={
+            'window':'2026-08-20T03:38:00Z/03:46:30Z',
+            'gmail_push_requests':sum(1 for x in safe if x.get('path')=='/events/gmail-push'),
+            'status_counts':{},
+            'entries':safe[:120],
+          }
+          for x in safe:
+              if x.get('path')=='/events/gmail-push':
+                  k=str(x.get('http_status')); summary['status_counts'][k]=summary['status_counts'].get(k,0)+1
+          open('hackathon/v5_gmail_worker_log_probe.json','w').write(json.dumps(summary,indent=2,default=str))
+          PY
+          git config user.name "healthia-v5-gmail-probe"
+          git config user.email "actions@users.noreply.github.com"
+          git add hackathon/v5_gmail_worker_log_probe.json
+          git commit -m "film: capture sanitized Gmail worker inbound diagnostics"
+          git push origin HEAD:kira/live-product-film-20260819
