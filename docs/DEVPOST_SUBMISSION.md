@@ -7,89 +7,109 @@ This document is the canonical text/form package for the **All Things Agentic Ha
 - **Project:** HealthIA ONE
 - **Category:** Taskmaster
 - **Tagline:** Your health never starts over — a patient-owned AI agent that turns evidence into durable, consent-aware missions and real-world action.
-- **Official demo video (3:55):** https://youtu.be/v7SJUkzzRxw
+- **Official live product demo (~3:17):** https://youtu.be/44LfVn9pPdU
 - **Public Judge Mode:** https://healthia-one-judge-1038180719788.us-central1.run.app
 - **Repository:** https://github.com/arisnachy/healthia-one
 - **Judge entry point:** https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md
 - **Architecture:** https://github.com/arisnachy/healthia-one/blob/main/docs/ARCHITECTURE.md
-- **Final proof manifest:** https://github.com/arisnachy/healthia-one/blob/main/hackathon/evidence/one_safety_final_proof.json
+- **ONE SAFETY proof manifest:** https://github.com/arisnachy/healthia-one/blob/main/hackathon/evidence/one_safety_final_proof.json
+
+Older 3:55 and 2:47 masters remain historical proof lineage only. V5 is the current judge-facing demo.
 
 ## Judge pitch
 
-HealthIA ONE is a patient-owned, event-driven health continuity agent. It turns fragmented clinical evidence and unfinished health work into durable missions that survive the chat window. Gemini 3.5 Flash + Google ADK reason when interpretation or planning adds value; deterministic policy protects exact bounded choices; human authority owns consent and clinically sensitive decisions; and ONE SAFETY requires a one-use execution ticket plus a real connector receipt before external work can be represented as complete.
+HealthIA ONE is a patient-owned, event-driven health continuity agent. Most health AI waits for the next prompt. HealthIA carries unfinished health work forward because the patient's authorized longitudinal state changed.
 
-The final proof package demonstrates real Google Cloud execution, Google Model Armor prompt-injection blocking, Firestore continuity, bounded Google Places action, OpenTelemetry/Cloud Trace correlation, and event-driven unattended follow-up behavior using synthetic patient data.
+It combines Gemini 3.5 Flash + Google ADK for reasoning, deterministic policy for exact bounded decisions, durable Firestore state for continuity, and explicit human authority for consent and clinically sensitive boundaries.
 
-## What it does
+The strongest V5 proof is not a chat response. It is a real autonomous external loop:
 
 ```text
-patient need / health signal / clinical evidence
-  → patient identity + patient-scoped durable context
-  → prompt ingress safety: Google Model Armor + local policy
-  → Gemini 3.5 Flash + Google ADK when reasoning is useful
-  → deterministic policy when exactness is safer
-  → human authority when the decision belongs to the patient
-  → durable mission
-  → ONE SAFETY / Safety Kernel
-  → one-use HealthActionTicket
-  → real Google connector
-  → durable receipt
-  → OpenTelemetry / Google Cloud Trace
-  → Patient Twin + longitudinal outcome
+no new chat prompt
+→ overdue blood-pressure mission
+→ Eventarc wakes a private worker
+→ real Gmail message
+→ controlled patient reply in the same thread
+→ Gmail users.watch
+→ authenticated Pub/Sub
+→ VitalRecord 128/80 (source_type=patient_email_reply)
+→ same durable mission COMPLETED
 ```
 
-### Durable continuity
+Completion is derived from durable external evidence, not from a model saying that something happened.
 
-Firestore stores patient-scoped missions, consent, evidence references, connector outcomes, device signals and longitudinal state. The Patient Twin is derived from canonical state rather than prompt history, so the same patient story survives logout/login and process replacement.
+## What the V5 demo proves
 
-### Evidence before interpretation
+### 1. Treatment-aware Result Guardian
 
-For supported synthetic clinical PDFs/images, original bytes are preserved first in private Google Cloud Storage. Gemini then performs bounded multimodal extraction, structured results are persisted, and the Patient Twin preserves provenance. Unreliable extraction fails closed instead of inventing a finding.
+A synthetic patient already has clinician-confirmed losartan treatment in the Patient Twin. A renal-function result containing creatinine arrives through the real Results workspace. Potassium evidence is still missing, so HealthIA opens a durable treatment-aware mission without a new chat prompt.
 
-### Human authority + real Google action
+When potassium evidence arrives later, HealthIA links it to the same mission and closes that mission from durable evidence. HealthIA does not diagnose kidney disease or alter medication.
 
-HealthIA can create a resource-navigation mission before location consent but performs no Places search merely because the mission exists. After mission-scoped consent, the same durable mission resumes and the real Google Places connector may execute.
+### 2. Appointment Guardian
 
-Exact bounded choices such as **“The second one”** are resolved deterministically from the ordered candidate list rather than sent through another probabilistic model call.
+A family-medicine appointment requires recent results, an active medication list and insurance. HealthIA verifies what already exists in longitudinal state, detects that insurance is missing, and creates a preparation mission. Uploading the insurance document causes the same mission to close.
 
-### ONE SAFETY
+### 3. Post-Visit Guardian
 
-A real external action follows:
+When the appointment becomes completed but no attributable consultation/discharge document exists, HealthIA opens a post-visit continuity mission rather than inventing the encounter. When the consultation note arrives, the mission closes from persisted evidence.
+
+### 4. Live Gemini 3.5 Flash + Google ADK adaptive interview
+
+Inside the real HealthIA Chat, Gemini 3.5 Flash generates a bounded adaptive interview. The recording gate requires a live `gemini_dynamic` response with exactly five case-specific questions before the scene is accepted.
+
+### 5. Real autonomous external action
+
+The V5 film then shows the overdue BP continuity path continuing outside chat: Eventarc, a private worker, Gmail, same-thread reply, Gmail users.watch, authenticated Pub/Sub, a 128/80 VitalRecord, and the same mission completing.
+
+## Core HealthIA loop
+
+```text
+Signal / new evidence
+→ Patient Twin
+→ Guardian evaluation
+→ durable mission
+→ safe action or evidence wait
+→ connector result / durable evidence
+→ verified closure
+→ updated Twin
+```
+
+Chat is one interface into the system. It is not the source of truth.
+
+## Durable continuity
+
+Firestore stores patient-scoped missions, treatment context, consent, evidence references, appointments, connector outcomes, device signals and longitudinal state. The Patient Twin is derived from canonical state rather than prompt history, so the health story survives process replacement and the end of a conversation.
+
+## Evidence before interpretation
+
+For supported synthetic clinical PDFs/images, original bytes are preserved first in private Google Cloud Storage. Gemini performs bounded extraction where appropriate, structured results are persisted with provenance, and unreliable extraction fails closed instead of fabricating a finding.
+
+## ONE SAFETY — authorization is not execution evidence
 
 ```text
 Sense / Request
 → Reason
 → Authorize
-→ ONE SAFETY
-→ HealthActionTicket
-→ Connector
-→ Receipt
-→ Cloud Trace
+→ ONE SAFETY / deterministic Safety Kernel
+→ one-use HealthActionTicket
+→ real connector
+→ durable receipt
+→ OpenTelemetry / Google Cloud Trace
+→ mission outcome
 ```
 
-Authorization is not execution evidence. The final proof correlates a real Places execution across:
+A model-generated success message cannot establish that the outside world changed. A connector outcome and durable receipt are required.
 
-- Cloud Trace `eec691300b7bb1c1c0564e95fb090e4f`
-- HealthActionTicket `hat_021b1b6b1b4542e2`
-- action `maps.search_nearby`
-- receipt `receipt_95ba26286e6f4e15`
-- outcome `completed`
+## Prompt-injection boundary
 
-The promotion gate queried Google Cloud Trace using that exact Trace ID and required the guarded execution span `google.action.guarded_execute`.
+HealthIA uses Google Model Armor plus a local fail-closed ingress policy. The adversarial proof requires:
 
-### Prompt-injection boundary
-
-The final adversarial proof requires:
-
-- real Google Model Armor `MATCH_FOUND` for the controlled jailbreak probe;
-- HTTP `400` at HealthIA `prompt_ingress`;
-- `model_called = false`;
+- Google Model Armor detects the controlled jailbreak probe;
+- HTTP 400 at prompt ingress;
+- `model_called == false`;
 - zero new HealthActionTickets;
 - zero patient-state mutation.
-
-### Unattended continuity
-
-For an opted-in synthetic patient, an overdue blood-pressure follow-up can become durable work without a fresh chat prompt. Event-driven Google infrastructure wakes the worker, authorized work proceeds, a real reply can return through authenticated event infrastructure, and HealthIA resumes the same mission.
 
 ## Google technology
 
@@ -99,15 +119,20 @@ For an opted-in synthetic patient, an overdue blood-pressure follow-up can becom
 - Cloud Run
 - Firestore
 - private Google Cloud Storage
+- Eventarc
+- Gmail API + Gmail users.watch
+- Pub/Sub
 - Secret Manager + service identity / ADC
 - Google Model Armor
 - Google Places / Maps Platform
-- Gmail API
-- Pub/Sub
 - Google Calendar
 - Google Tasks
 - OpenTelemetry + Google Cloud Trace
 - Android / Health Connect bridge contracts
+
+## Demo integrity
+
+The V5 judging film is composed from a real continuous product recording. Long infrastructure wait periods caused by Cloud Run/Eventarc/Gmail/Pub/Sub latency were removed to fit the judging window. **No Guardian transition, Gemini answer, Gmail send, patient reply, 128/80 VitalRecord or mission completion was recreated or substituted.** The functional truth gate had to pass before the film could be accepted.
 
 ## Reproducible setup
 
@@ -117,12 +142,6 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[test]"
 HEALTHIA_LLM_BACKEND=mock HEALTHIA_COST_MODE=local HEALTHIA_AI_REQUEST_LIMIT=0 uvicorn app.main:app --port 8000
-```
-
-Windows:
-
-```powershell
-.\deployment\run-local-secure.ps1
 ```
 
 Verification:
@@ -135,25 +154,9 @@ python scripts/judge_omega.py
 python scripts/smoke_test.py
 ```
 
-Local deterministic verification can run with zero Google AI request budget. Controlled Cloud/live proofs are separate, explicit and request-capped.
-
-## Exact final proof package
-
-| Item | Value |
-|---|---|
-| Runtime candidate under Cloud proof | `a851947c9e1476d2fed05f74b2b40383c408387f` |
-| Proof harness | `51c641d89a4c59bd57275ffa6ef98820394f9634` |
-| Model Armor adversarial run | `32051146784` — SUCCESS |
-| Enhanced ONE SAFETY run | `32054818666` — SUCCESS |
-| Enhanced artifact ID | `9296123186` |
-| Enhanced artifact ZIP SHA-256 | `253a474e7a8bd7fce373f3ff1f5697e0522f27810fe76d33dd4a902366cd9365` |
-| Validated base master SHA-256 | `809d35ff7b2a3242eb61f52443c64f48a0ca45fc2e078ad1165ae76f724b1565` |
-| Final 3:55 MP4 SHA-256 | `2c82929888c613960cb44ba7cb0c111b22e8a205cf38643d3199f3a1c5e542cf` |
-| Charon audio SHA-256 | `3a78b5e3b98c441b138b691d803e2f3859e51e2a2795db22314d6ea4b230cc16` |
+Local deterministic verification can run with zero Google AI request budget. Controlled live/Cloud proofs are separate, explicit and request-capped.
 
 ## Devpost form values
-
-These are the canonical values to use when editing/re-submitting the Devpost form.
 
 | Devpost field | Canonical answer |
 |---|---|
@@ -166,58 +169,17 @@ These are the canonical values to use when editing/re-submitting the Devpost for
 | Reproducible Testing instructions in README | **Yes** |
 | Hosted project URL | **https://healthia-one-judge-1038180719788.us-central1.run.app** |
 | Google SDK(s) | **Agent Development Kit (ADK); Google GenAI SDK (google-genai)** |
-| Google Cloud service(s) | **Cloud Run; Firestore; Pub/Sub** |
-| Google AI models | **Gemini 3.5 Flash (required core); Vertex AI Veo 3.1 Fast / `veo-3.1-fast-generate-001` (bonus integration lineage)** |
-| Architecture diagram | **Required Devpost file upload; diagram source is `docs/ARCHITECTURE.md`** |
+| Google Cloud service(s) | **Cloud Run; Firestore; Pub/Sub; Eventarc; Cloud Storage; Secret Manager; Cloud Trace** |
+| Google AI models | **Gemini 3.5 Flash (required core); Vertex AI Veo 3.1 Fast / `veo-3.1-fast-generate-001` (bonus lineage)** |
+| Architecture diagram | **Required Devpost file upload; canonical architecture is `docs/ARCHITECTURE.md`** |
 | Bonus public content | **https://github.com/arisnachy/healthia-one/issues/93** |
 | Bonus social post | **https://x.com/i/status/2089481967821545835** |
 
-### Testing instructions for judges
-
-Public Judge Mode is synthetic, read-only and credential-free. Operational workers remain private. All hackathon patient/device examples use synthetic data. The repository contains zero-spend local setup and deterministic verification commands. Exact Cloud proof identifiers and sanitized evidence are linked from `JUDGES_START_HERE.md` and `hackathon/evidence/one_safety_final_proof.json`.
-
-## Architecture upload guidance
-
-The Devpost architecture attachment should visibly show:
-
-```text
-Patient / Signal / Upload
-→ HealthIA ONE UI
-→ FastAPI on Cloud Run
-→ identity + scoped context
-→ Model Armor + local prompt policy
-→ decision mode
-   ↳ Google ADK + Gemini 3.5 Flash
-   ↳ deterministic policy
-   ↳ human authority
-→ Firestore durable mission / Patient Twin
-→ ONE SAFETY
-→ one-use HealthActionTicket
-→ Google connectors
-→ durable receipt
-→ OpenTelemetry
-→ Google Cloud Trace
-```
-
-The canonical architecture and failure semantics are in `docs/ARCHITECTURE.md`.
-
 ## Bonus points
 
-### Public build content
-
-https://github.com/arisnachy/healthia-one/issues/93
-
-The public article contains the required declaration that it was created for the purpose of entering the All Things Agentic Hackathon 2026.
-
-### Social post
-
-https://x.com/i/status/2089481967821545835
-
-The prepared/published post includes `#AllThingsAgenticHackathon`.
-
-### Additional Google AI model
-
-HealthIA Explain has an implemented and LIVE-proven **Vertex AI Veo 3.1 Fast** path preserved in PR #43. It uses a prevalidated generic educational prompt and the proof records `synthetic_only: true` and `patient_data_sent: false`. This bonus lineage is intentionally separate from the frozen final ONE SAFETY runtime.
+- Public build article: https://github.com/arisnachy/healthia-one/issues/93
+- Social post: https://x.com/i/status/2089481967821545835
+- Vertex AI Veo 3.1 Fast LIVE proof lineage: https://github.com/arisnachy/healthia-one/pull/43
 
 ## Clinical truth boundary
 
