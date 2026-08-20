@@ -1,4 +1,4 @@
-name: HealthIA V5 verify failure probe
+name: HealthIA V5 external execution probe
 
 on:
   push:
@@ -16,8 +16,8 @@ jobs:
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
-      JOB_NAME: hfilm-26936389-984e57-verify
-      EXECUTION_NAME: hfilm-26936389-984e57-verify-nsqfx
+      JOB_NAME: hfilm-28293833-fc48d9-await-email
+      EXECUTION_NAME: hfilm-28293833-fc48d9-await-email-xl4qj
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +30,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.PROJECT_ID }}
-      - name: Capture sanitized verify failure
+      - name: Capture sanitized execution state
         shell: bash
         run: |
           set -euo pipefail
@@ -38,30 +38,19 @@ jobs:
           gcloud logging read "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${JOB_NAME}\"" --project "$PROJECT_ID" --freshness=1h --limit=100 --order=desc --format=json > /tmp/logs.json || echo '[]' > /tmp/logs.json
           python - <<'PY'
           import json
-          exe=json.load(open('/tmp/execution.json')) if open('/tmp/execution.json').read().strip() else {}
-          logs=json.load(open('/tmp/logs.json'))
-          safe=[]
+          text=open('/tmp/execution.json').read().strip(); exe=json.loads(text) if text else {}
+          logs=json.load(open('/tmp/logs.json')); safe=[]
           for item in logs:
-              text=str(item.get('textPayload') or (item.get('jsonPayload') or {}).get('message') or '')
-              if not text:
-                  continue
-              # Keep only diagnostic text; never persist authorization headers/tokens.
-              if any(word in text.lower() for word in ('authorization:', 'bearer ', 'refresh_token', 'client_secret')):
-                  continue
-              safe.append({'timestamp':item.get('timestamp'),'severity':item.get('severity'),'text':text[:1200]})
+              msg=str(item.get('textPayload') or (item.get('jsonPayload') or {}).get('message') or '')
+              if not msg: continue
+              if any(word in msg.lower() for word in ('authorization:', 'bearer ', 'refresh_token', 'client_secret')): continue
+              safe.append({'timestamp':item.get('timestamp'),'severity':item.get('severity'),'text':msg[:1200]})
           status=exe.get('status') or {}
-          out={
-            'execution':exe.get('metadata',{}).get('name'),
-            'completionTime':status.get('completionTime'),
-            'conditions':status.get('conditions'),
-            'failedCount':status.get('failedCount'),
-            'succeededCount':status.get('succeededCount'),
-            'logs':safe[:40],
-          }
+          out={'execution':exe.get('metadata',{}).get('name'),'completionTime':status.get('completionTime'),'conditions':status.get('conditions'),'failedCount':status.get('failedCount'),'succeededCount':status.get('succeededCount'),'logs':safe[:40]}
           open('hackathon/v5_verify_failure.json','w').write(json.dumps(out,indent=2,default=str))
           PY
-          git config user.name "healthia-v5-verify-probe"
+          git config user.name "healthia-v5-exec-probe"
           git config user.email "actions@users.noreply.github.com"
           git add hackathon/v5_verify_failure.json
-          git commit -m "film: capture V5 verify failure diagnostics"
+          git commit -m "film: capture V5 external execution diagnostics"
           git push origin HEAD:kira/live-product-film-20260819
