@@ -16,8 +16,8 @@ jobs:
     env:
       PROJECT_ID: healthia-6088a
       REGION: us-central1
-      TARGET_RUN: "32328293833"
-      PROBE_REVISION: "9"
+      TARGET_RUN: "32367703696"
+      PROBE_REVISION: "10"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,5 +58,5 @@ jobs:
           PY
           git config user.name "healthia-v5-cloud-probe"; git config user.email "actions@users.noreply.github.com"
           git add hackathon/v5_cloud_proof_now.json
-          git commit -m "film: capture V5 external proof progress"
-          git push origin HEAD:kira/live-product-film-20260819
+          git commit -m "film: capture V5 external proof progress" || true
+          git push origin HEAD:kira/live-product-film-20260819 || true
