@@ -1,0 +1,235 @@
+name: Security exact-SHA live proof control v4
+
+on:
+  push:
+    branches: [kira/security-live-proof-control]
+    paths: [.github/workflows/security-live-proof-control-v4.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: healthia-security-live-proof-f0c2f518-v4
+  cancel-in-progress: true
+
+env:
+  CANDIDATE_SHA: f0c2f518a54ba3a8de9750cba2f017a1915f2241
+  PROJECT_ID: healthia-6088a
+  REGION: us-central1
+  VERTEX_LOCATION: global
+  SERVICE_NAME: healthia-one-security-v4
+  RUNTIME_SA: hia-sec-run-v4
+  BUILD_SA: hia-sec-build-v4
+  BUCKET_NAME: healthia-6088a-security-proof-v4
+
+jobs:
+  proof:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 1
+
+      - name: Exact SHA gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+
+      - name: Move credentials outside exact-SHA checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$GOOGLE_GHA_CREDS_PATH" "$RUNNER_TEMP/gcp.json"
+          echo "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=$RUNNER_TEMP/gcp.json" >> "$GITHUB_ENV"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp.json" >> "$GITHUB_ENV"
+          echo "GOOGLE_GHA_CREDS_PATH=$RUNNER_TEMP/gcp.json" >> "$GITHUB_ENV"
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Remote candidate regression
+        env:
+          HEALTHIA_AUTH_REQUIRED: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[test]"
+          python -m pytest -q tests/test_security_hardening.py tests/test_device_ingestion_hardening.py tests/test_gemini.py
+          python scripts/smoke_test.py
+          PYTHONPATH=. python scripts/full_system_check.py
+          PYTHONPATH=. python scripts/dialogbench.py
+          touch "$RUNNER_TEMP/regression.pass"
+
+      - name: GCP permission preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          python deployment/check_cloud_permissions.py --project "$PROJECT_ID" --json-out "$RUNNER_TEMP/preflight.json"
+          touch "$RUNNER_TEMP/preflight.pass"
+
+      - name: Restore pristine candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f gha-creds-*.json || true
+          git reset --hard "$CANDIDATE_SHA"
+          git clean -fdx
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          test -s "$GOOGLE_APPLICATION_CREDENTIALS"
+
+      - name: Deploy exact SHA to isolated Cloud Run and run strict proof
+        shell: pwsh
+        run: |
+          ./deployment/deploy-cloud-demo.ps1 `
+            -ProjectId $env:PROJECT_ID `
+            -Region $env:REGION `
+            -VertexLocation $env:VERTEX_LOCATION `
+            -BucketName $env:BUCKET_NAME `
+            -ServiceName $env:SERVICE_NAME `
+            -RuntimeServiceAccount $env:RUNTIME_SA `
+            -BuildServiceAccount $env:BUILD_SA `
+            -RequestLimit 24 `
+            -MaxOutputTokens 1400 `
+            -Confirmed
+          New-Item -ItemType File -Force -Path $env:RUNNER_TEMP/cloud.pass | Out-Null
+
+      - name: LIVE hardening probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          revision="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
+          image="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
+          idt="$(gcloud auth print-identity-token --audiences="$url")"
+          echo "::add-mask::$idt"
+          export URL="$url" REVISION="$revision" IMAGE="$image" CLOUD_ID_TOKEN="$idt"
+          python - <<'PY'
+          import hashlib,json,os,secrets
+          import requests
+          from google.cloud import firestore
+          base=os.environ['URL'].rstrip('/'); cloud=os.environ['CLOUD_ID_TOKEN']; sha=os.environ['CANDIDATE_SHA']; project=os.environ['PROJECT_ID']
+          ch={'Authorization':'Bearer '+cloud}
+          def must(r,codes,label):
+              if r.status_code not in codes: raise AssertionError(f'{label}: {r.status_code} {r.text[:500]}')
+              return r
+          ready=must(requests.get(base+'/api/readiness',headers=ch,timeout=30),{200},'readiness').json()
+          assert ready.get('release_sha')==sha and ready.get('auth_required') is True
+          assert ready.get('model')=='gemini-3.5-flash' and ready.get('adk_ready') is True
+          assert ready.get('store_backend')=='firestore' and ready.get('evidence_backend')=='gcs'
+          suf=secrets.token_hex(5); pwd='HealthIA-Security-2026!'
+          s=requests.Session(); s.headers.update(ch); email=f'live-{suf}@example.com'
+          must(s.post(base+'/api/auth/register',json={'email':email,'password':pwd,'display_name':'Security Live'},timeout=30),{201},'register')
+          cookie=s.cookies.get('healthia_session'); assert cookie
+          boot=must(s.get(base+'/api/bootstrap',timeout=30),{200},'bootstrap').json(); consent=must(s.get(base+'/api/consent',timeout=30),{200},'consent').json()
+          p=dict(boot['profile']); p['consented_signal_types']=['attacker_override']; must(s.put(base+'/api/profile',json=p,timeout=30),{200},'profile')
+          after=must(s.get(base+'/api/bootstrap',timeout=30),{200},'profile reread').json()['profile']; assert after.get('consented_signal_types')==consent.get('signal_types')
+          huge=dict(after); huge['allergies']=['X'*1000 for _ in range(100)]; must(s.put(base+'/api/profile',json=huge,timeout=30),{422},'oversized')
+          pair=must(s.post(base+'/api/devices/pairing',timeout=30),{200},'pair').json(); dev='sec-'+suf
+          claim=must(requests.post(base+'/api/devices/pairing/claim',headers={'X-Serverless-Authorization':'Bearer '+cloud},json={'code':pair['code'],'device_id':dev,'display_name':'Probe'},timeout=30),{200},'claim').json()
+          must(s.delete(base+'/api/devices/'+claim['connection_id'],timeout=30),{200},'disconnect')
+          must(requests.post(base+'/api/devices/health-connect/sync',headers={'X-Serverless-Authorization':'Bearer '+cloud,'Authorization':'Bearer '+claim['access_token']},json={'device_id':dev,'background_read':False,'granted_metrics':[],'records':[]},timeout=30),{401},'revoked device')
+          must(s.post(base+'/api/auth/logout',timeout=30),{200},'logout'); r=requests.Session(); r.headers.update(ch); r.cookies.set('healthia_session',cookie); must(r.get(base+'/api/bootstrap',timeout=30),{401},'replayed cookie')
+          email2=f'disabled-{suf}@example.com'; s2=requests.Session(); s2.headers.update(ch); must(s2.post(base+'/api/auth/register',json={'email':email2,'password':pwd,'display_name':'Disable Probe'},timeout=30),{201},'register2'); c2=s2.cookies.get('healthia_session'); assert c2
+          firestore.Client(project=project).collection('healthia_one_accounts').document(hashlib.sha256(email2.encode()).hexdigest()).update({'disabled':True}); r2=requests.Session(); r2.headers.update(ch); r2.cookies.set('healthia_session',c2); must(r2.get(base+'/api/bootstrap',timeout=30),{401},'disabled cookie')
+          email3=f'rate-{suf}@example.com'; s3=requests.Session(); s3.headers.update(ch); must(s3.post(base+'/api/auth/register',json={'email':email3,'password':pwd,'display_name':'Rate Probe'},timeout=30),{201},'register3'); statuses=[]
+          for _ in range(8):
+              x=requests.post(base+'/api/auth/login',headers=ch,json={'email':email3,'password':'wrong-password'},timeout=30); statuses.append(x.status_code)
+              if x.status_code==429: break
+          assert 429 in statuses, statuses
+          out={'schema':'healthia-security-live-proof/v4','status':'PASS','candidate_sha':sha,'cloud_revision':os.environ['REVISION'],'cloud_image':os.environ['IMAGE'],'checks':{'exact_release_sha':True,'cloud_auth_forced':True,'gemini_adk_ready':True,'firestore_gcs_ready':True,'canonical_consent':True,'oversized_profile_rejected':True,'device_revocation_before_sync':True,'logout_revocation':True,'disabled_account_revocation':True,'login_rate_limit':True}}
+          open(os.path.join(os.environ['RUNNER_TEMP'],'security-live.json'),'w').write(json.dumps(out,indent=2)); print('SECURITY_LIVE_BOUNDARIES_PASS')
+          PY
+
+      - name: Minimum project IAM gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sa="$RUNTIME_SA@$PROJECT_ID.iam.gserviceaccount.com"
+          roles="$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.members=serviceAccount:$sa" --format='value(bindings.role)' | sort)"
+          echo "$roles" | grep -Fx roles/aiplatform.user
+          echo "$roles" | grep -Fx roles/datastore.user
+          if echo "$roles" | grep -Eq 'roles/(owner|editor|storage.objectAdmin|secretmanager.secretAccessor|run.admin|iam.serviceAccountAdmin)'; then exit 1; fi
+          printf '%s\n' "$roles" > "$RUNNER_TEMP/iam-roles.txt"
+          touch "$RUNNER_TEMP/iam.pass"
+
+      - name: Preserve proof
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/publish"
+          cp "$RUNNER_TEMP/preflight.json" "$RUNNER_TEMP/publish/preflight.json" 2>/dev/null
+          cp "$RUNNER_TEMP/security-live.json" "$RUNNER_TEMP/publish/security-live.json" 2>/dev/null
+          cp "$RUNNER_TEMP/iam-roles.txt" "$RUNNER_TEMP/publish/iam-roles.txt" 2>/dev/null
+          cp deployment/cloud-proof-latest.json "$RUNNER_TEMP/publish/cloud-proof.json" 2>/dev/null
+          cp deployment/cloud-provider-binding-latest.json "$RUNNER_TEMP/publish/provider-binding.json" 2>/dev/null
+          exit 0
+
+      - name: Upload proof artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healthia-security-live-proof-f0c2f518-v4
+          path: ${{ runner.temp }}/publish/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup isolated resources
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          gcloud run services delete "$SERVICE_NAME" --project "$PROJECT_ID" --region "$REGION" --quiet >/dev/null 2>&1
+          gcloud storage rm --recursive "gs://$BUCKET_NAME/**" >/dev/null 2>&1
+          gcloud storage buckets delete "gs://$BUCKET_NAME" --quiet >/dev/null 2>&1
+          gcloud iam service-accounts delete "$RUNTIME_SA@$PROJECT_ID.iam.gserviceaccount.com" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+          gcloud iam service-accounts delete "$BUILD_SA@$PROJECT_ID.iam.gserviceaccount.com" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+          exit 0
+
+      - name: Checkout control branch
+        if: always()
+        uses: actions/checkout@v5
+        with:
+          ref: kira/security-live-proof-control
+          path: control
+
+      - name: Publish verdict
+        if: always()
+        shell: bash
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          regression=false; preflight=false; cloud=false; provider=false; live=false; iam=false
+          test -f "$RUNNER_TEMP/regression.pass" && regression=true
+          test -f "$RUNNER_TEMP/preflight.pass" && preflight=true
+          test -f "$RUNNER_TEMP/publish/cloud-proof.json" && cloud=true
+          test -f "$RUNNER_TEMP/publish/provider-binding.json" && provider=true
+          test -f "$RUNNER_TEMP/publish/security-live.json" && live=true
+          test -f "$RUNNER_TEMP/iam.pass" && iam=true
+          status=FAIL; if $regression && $preflight && $cloud && $provider && $live && $iam; then status=PASS; fi
+          export REGRESSION="$regression" PREFLIGHT="$preflight" CLOUD="$cloud" PROVIDER="$provider" LIVE="$live" IAM="$iam" STATUS="$status"
+          mkdir -p control/hackathon/security-live-control
+          python - <<'PY'
+          import json,os
+          x={'schema':'healthia-security-live-control/v4','status':os.environ['STATUS'],'candidate_sha':os.environ['CANDIDATE_SHA'],'run_id':os.environ['RUN_ID'],'evidence':{'remote_regression':os.environ['REGRESSION']=='true','permission_preflight':os.environ['PREFLIGHT']=='true','cloud_strict_proof':os.environ['CLOUD']=='true','provider_exact_sha':os.environ['PROVIDER']=='true','live_boundaries':os.environ['LIVE']=='true','minimum_iam':os.environ['IAM']=='true'}}
+          open('control/hackathon/security-live-control/latest.json','w').write(json.dumps(x,indent=2))
+          PY
+          cp "$RUNNER_TEMP/publish/security-live.json" control/hackathon/security-live-control/security-live.json 2>/dev/null || true
+          cp "$RUNNER_TEMP/publish/iam-roles.txt" control/hackathon/security-live-control/iam-roles.txt 2>/dev/null || true
+          cd control; git config user.name 'KIRA Security Gate'; git config user.email 'actions@users.noreply.github.com'; git add hackathon/security-live-control; git commit -m "evidence: publish v4 security verdict $RUN_ID" || true; git push origin HEAD:kira/security-live-proof-control
