@@ -34,7 +34,7 @@ The prepared/published copy includes the required hashtag `#AllThingsAgenticHack
 
 Canonical final demo URL:
 
-https://youtu.be/v7SJUkzzRxw
+https://youtu.be/44LfVn9pPdU
 
 Publication was confirmed by the project owner with the public status URL on 2026-08-17. The repository records this precisely as owner-confirmed publication rather than claiming an independent third-party content fetch of the X body.
 
@@ -116,7 +116,7 @@ Describe Veo as an **implemented and LIVE-proven HealthIA ONE bonus integration 
 ## Canonical links
 
 - Final judge entry point: https://github.com/arisnachy/healthia-one/blob/main/JUDGES_START_HERE.md
-- Official YouTube demo: https://youtu.be/v7SJUkzzRxw
+- Official YouTube demo: https://youtu.be/44LfVn9pPdU
 - Public build article: https://github.com/arisnachy/healthia-one/issues/93
 - Public X post: https://x.com/i/status/2089481967821545835
 - Veo implementation / LIVE proof lineage: https://github.com/arisnachy/healthia-one/pull/43
