@@ -1,0 +1,25 @@
+# HealthIA ONE release-direct dependency constraints
+# Captured from GitHub Actions verification run 32531082271 on 2026-08-21.
+# Purpose: keep the frozen hackathon candidate reproducible while pyproject.toml
+# retains compatible ranges for normal development. Transitive dependencies are
+# still resolved by pip under these known-good direct package versions.
+
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-multipart==0.0.32
+google-adk==2.7.1
+google-auth==2.56.3
+google-genai==2.19.0
+google-cloud-firestore==2.28.1
+google-cloud-secret-manager==2.30.0
+google-cloud-storage==3.13.1
+google-cloud-modelarmor==0.7.1
+opentelemetry-api==1.42.1
+opentelemetry-sdk==1.42.1
+opentelemetry-exporter-gcp-trace==1.15.0
+httpx==0.28.1
+pytest==8.4.2
+pytest-asyncio==1.4.0
+playwright==1.62.0
