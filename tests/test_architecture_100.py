@@ -9,6 +9,7 @@ import pytest
 from healthia_one.config import Settings
 from healthia_one.distributed_events import FirestoreEventBroker
 from healthia_one.fcm_registration import FirestoreFCMRegistrationStore, build_fcm_registration_store
+from healthia_one.models import PatientState
 from healthia_one.pairing import DevicePairingManager, PairingError, PairingSession, utc_now
 from healthia_one.pairing_backends import FirestorePairingBackend
 from healthia_one.runtime_architecture import build_pairing_manager, build_service, runtime_readiness
@@ -51,7 +52,7 @@ class SharedDurablePairingBackend:
             if session.claimed:
                 if session.device_id != device_id:
                     raise PairingError("El código ya fue utilizado por otro dispositivo.")
-                raise PairingError("El código ya fue consumido. Genera uno nuevo para volver a vincular.")
+                return replace(session)
             session.claimed = True
             session.device_id = device_id
             session.display_name = display_name
@@ -70,6 +71,14 @@ def _clear_cloud_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "GOOGLE_APPLICATION_CREDENTIALS",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+def _cloud_test_settings(monkeypatch: pytest.MonkeyPatch, *, store_backend: str = "memory") -> Settings:
+    _clear_cloud_env(monkeypatch)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "healthia-architecture-test")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("HEALTHIA_DEVICE_TOKEN_SECRET", "d" * 64)
+    return Settings(env="cloud", store_backend=store_backend, llm_backend="mock")
 
 
 def test_cloud_runtime_construction_is_network_lazy_and_multi_instance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,6 +116,7 @@ async def test_local_readiness_is_live_bounded_and_zero_ai_spend(monkeypatch: py
     payload = await runtime_readiness(service, settings, pairing, fcm, timeout_seconds=0.5, force=True)
 
     assert payload["ready"] is True
+    assert payload["startup"] == {"ready": True, "mode": "startup_complete"}
     assert payload["store"] == {"ready": True, "mode": "live_read"}
     assert payload["evidence"]["ready"] is True
     assert payload["ai_probe_performed"] is False
@@ -115,11 +125,7 @@ async def test_local_readiness_is_live_bounded_and_zero_ai_spend(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_cloud_liveness_survives_dependency_startup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    _clear_cloud_env(monkeypatch)
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "healthia-architecture-test")
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
-    monkeypatch.setenv("HEALTHIA_DEVICE_TOKEN_SECRET", "d" * 64)
-    settings = Settings(env="cloud", store_backend="memory", llm_backend="mock")
+    settings = _cloud_test_settings(monkeypatch)
     service = build_service(settings)
 
     class FailingStore:
@@ -137,8 +143,42 @@ async def test_cloud_liveness_survives_dependency_startup_failure(monkeypatch: p
     fcm = build_fcm_registration_store(settings)
     payload = await runtime_readiness(service, settings, pairing, fcm, timeout_seconds=0.1, force=True)
     assert payload["ready"] is False
+    assert payload["startup"]["ready"] is False
     assert payload["store"]["ready"] is False
     assert payload["store"]["error"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_readiness_retries_full_startup_before_recovering(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _cloud_test_settings(monkeypatch)
+    service = build_service(settings)
+
+    class RecoveringStore:
+        def __init__(self) -> None:
+            self.loads = 0
+
+        async def load(self):
+            self.loads += 1
+            if self.loads == 1:
+                raise RuntimeError("first boot dependency loss")
+            return PatientState()
+
+        async def save(self, _state):
+            return None
+
+    store = RecoveringStore()
+    service.store = store
+    await service.initialize()
+    assert service.startup_error == "RuntimeError"
+
+    pairing = build_pairing_manager(settings)
+    fcm = build_fcm_registration_store(settings)
+    payload = await runtime_readiness(service, settings, pairing, fcm, timeout_seconds=0.5, force=True)
+
+    assert payload["ready"] is True
+    assert payload["startup"] == {"ready": True, "mode": "startup_retry_recovered"}
+    assert service.startup_error is None
+    assert store.loads >= 3  # failed boot, recovery init, then independent live read
 
 
 def test_pairing_survives_instance_replacement_and_rejects_double_claim() -> None:
@@ -155,6 +195,11 @@ def test_pairing_survives_instance_replacement_and_rejects_double_claim() -> Non
     assert claim["session_persistence"] == "test_durable_shared"
     assert replacement_instance.validate(claim["access_token"], "phone-100") is True
 
+    # Simulate a lost first HTTP response: the same phone can retry the exact
+    # claim and receive a fresh signed bearer without reopening ownership.
+    replay = replacement_instance.claim(session["code"], "phone-100", "Phone 100")
+    assert instance_a.validate(replay["access_token"], "phone-100") is True
+
     with pytest.raises(PairingError, match="otro dispositivo"):
         instance_a.claim(session["code"], "phone-200", "Phone 200")
 
@@ -165,6 +210,7 @@ def test_firestore_pairing_backend_uses_atomic_claim_and_snapshot_wait() -> None
     assert "txn.set(ref" in source
     assert ".on_snapshot(on_snapshot)" in source
     assert "ttl_at" in source
+    assert "same device may safely retry" in source
 
 
 def test_production_entrypoint_uses_truthful_readiness_and_distributed_runtime() -> None:
