@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from healthia_one.auth import patient_scope
 from healthia_one.bp_followup_guardian import MISSION_TYPE as BP_FOLLOWUP_MISSION_TYPE
 from healthia_one.control import audit
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 from healthia_one.models import ChatMessage, MissionStatus, RiskLevel, SourceRef, VitalRecord
 
 
@@ -61,12 +62,11 @@ class MemoryGuardianEmailThreadStore:
         self._values[(link.patient_id, link.thread_id)] = link.model_copy(deep=True)
 
 
-class FirestoreGuardianEmailThreadStore:
+class FirestoreGuardianEmailThreadStore(LazyFirestoreClient):
     COLLECTION = "healthia_guardian_email_threads"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _ref(self, patient_id: str, thread_id: str):
         return (
