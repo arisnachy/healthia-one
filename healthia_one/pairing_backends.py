@@ -11,7 +11,9 @@ class FirestorePairingBackend:
 
     Pairing codes are created with Firestore's create precondition and claimed in
     a transaction, so two Cloud Run instances cannot consume the same code for
-    different devices. Waiting uses Firestore's snapshot listener rather than
+    different devices. A retry from the already-committed device is idempotent,
+    which closes the failure window where the transaction commits but the HTTP
+    response is lost. Waiting uses Firestore's snapshot listener rather than
     process-local Events or browser polling.
     """
 
@@ -124,7 +126,10 @@ class FirestorePairingBackend:
             if session.claimed:
                 if session.device_id != device_id:
                     raise PairingError("El código ya fue utilizado por otro dispositivo.")
-                raise PairingError("El código ya fue consumido. Genera uno nuevo para volver a vincular.")
+                # The same device may safely retry if the transaction committed
+                # but its first HTTP response was lost. The manager reissues a
+                # fresh signed bearer; no second device can cross this boundary.
+                return session
             session.claimed = True
             session.device_id = device_id
             session.display_name = display_name
