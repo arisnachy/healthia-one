@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
@@ -24,11 +25,21 @@ class FirestoreEventBroker:
     """
 
     COLLECTION = "healthia_event_streams"
+    EVENT_COLLECTION = "healthia_stream_events"
     persistence = "firestore_snapshot_listener"
 
-    def __init__(self, project: str | None = None, *, retention_minutes: int = 15) -> None:
+    def __init__(
+        self,
+        project: str | None = None,
+        *,
+        retention_minutes: int = 15,
+        replay_window_seconds: int = 5,
+    ) -> None:
         self.project = project
         self.retention_minutes = max(5, min(int(retention_minutes), 60))
+        # A tiny replay overlap closes the bootstrap -> listener race. SSE events
+        # are hints to refresh canonical state, so replaying one is safe.
+        self.replay_window_seconds = max(1, min(int(replay_window_seconds), 30))
         self._firestore = None
         self._client = None
 
@@ -56,7 +67,11 @@ class FirestoreEventBroker:
         return hashlib.sha256(patient_id.encode("utf-8")).hexdigest()
 
     def _events(self, patient_id: str):
-        return self.client.collection(self.COLLECTION).document(self._stream_id(patient_id)).collection("events")
+        return (
+            self.client.collection(self.COLLECTION)
+            .document(self._stream_id(patient_id))
+            .collection(self.EVENT_COLLECTION)
+        )
 
     async def publish(self, payload: dict, patient_id: str | None = None) -> None:
         target_patient = patient_id or current_patient_id()
@@ -66,9 +81,8 @@ class FirestoreEventBroker:
             "event_id": event_id,
             "payload": payload,
             "created_at": created_at,
-            # Configure this field as a Firestore TTL policy. Correctness never
-            # depends on deletion because subscribers ignore pre-subscription
-            # events and canonical state is stored elsewhere.
+            # The canonical deployment enables Firestore TTL on this field for
+            # the unique healthia_stream_events collection group.
             "expires_at": created_at + timedelta(minutes=self.retention_minutes),
         }
         await asyncio.to_thread(self._events(target_patient).document(event_id).create, record)
@@ -77,12 +91,17 @@ class FirestoreEventBroker:
         target_patient = patient_id or current_patient_id()
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=100)
-        started_at = utc_now()
+        replay_after = utc_now() - timedelta(seconds=self.replay_window_seconds)
+        seen_order: deque[str] = deque(maxlen=5000)
         seen: set[str] = set()
 
         def enqueue(event_id: str, payload: dict) -> None:
             if event_id in seen:
                 return
+            if len(seen_order) == seen_order.maxlen:
+                oldest = seen_order.popleft()
+                seen.discard(oldest)
+            seen_order.append(event_id)
             seen.add(event_id)
             if queue.full():
                 try:
@@ -102,7 +121,7 @@ class FirestoreEventBroker:
                 created_at = data.get("created_at")
                 if isinstance(created_at, datetime):
                     created_at = created_at.astimezone(timezone.utc)
-                    if created_at < started_at:
+                    if created_at < replay_after:
                         continue
                 payload = data.get("payload")
                 if not isinstance(payload, dict):
