@@ -1,125 +1,116 @@
-# HealthIA ONE — canonical 3:55 judge demo
+# HealthIA ONE — canonical V5 judge demo (~3:17)
 
 > **Your health never starts over.**
 
-This file describes the **current submission video only**. Historical demo recordings remain available in repository history for provenance, but they are **not** submission assets and must not be presented to judges as the final demo.
+This file describes the **current judge-facing V5 demo**. Historical 3:55 and 2:47 masters remain preserved as proof lineage, but they are not the current submission entry point.
 
-## Canonical submission assets
+## Canonical judge entry
 
-- **Official Devpost / YouTube demo (3:55):** https://youtu.be/v7SJUkzzRxw
-- **Byte-verifiable ONE SAFETY master:** https://github.com/arisnachy/healthia-one/releases/download/healthia-one-autonomous-winner-demo-2026/HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4
-- **Release tag:** `healthia-one-autonomous-winner-demo-2026`
-- **Duration:** `235.0 s` / `3:55`
-- **Resolution:** `1600x900`
-- **Frame rate:** `25 fps`
-- **Enhanced master SHA-256:** `2c82929888c613960cb44ba7cb0c111b22e8a205cf38643d3199f3a1c5e542cf`
-- **Narration:** Google Cloud Text-to-Speech, `en-US-Chirp3-HD-Charon`
-- **Final proof:** [`hackathon/evidence/one_safety_final_proof.json`](../hackathon/evidence/one_safety_final_proof.json)
-- **Judge entry point:** [`JUDGES_START_HERE.md`](../JUDGES_START_HERE.md)
+- **Official live product demo (~3:17):** https://youtu.be/44LfVn9pPdU
+- **Public Judge Mode:** https://healthia-one-judge-1038180719788.us-central1.run.app
+- **Judge guide:** [`JUDGES_START_HERE.md`](../JUDGES_START_HERE.md)
+- **Canonical Devpost package:** [`docs/DEVPOST_SUBMISSION.md`](DEVPOST_SUBMISSION.md)
+- **ONE SAFETY proof lineage:** [`hackathon/evidence/one_safety_final_proof.json`](../hackathon/evidence/one_safety_final_proof.json)
+- **Submission video proof manifest:** [`hackathon/evidence/public_judge_video_proof.json`](../hackathon/evidence/public_judge_video_proof.json)
 
-The YouTube demo and Release master are intended to represent the same final judging package.
+V5 is the current judge-facing film. The exact-byte 3:55 ONE SAFETY master remains useful evidence, but it must be described as historical proof lineage rather than the current Devpost demo.
 
-## Judge story — what the 3:55 proves
+## V5 story
 
-The video is a continuous real-application demonstration with synthetic data. It is not a slide-deck demo and does not rely on mocked external actions.
+All patient data shown in the demo is synthetic.
 
-### 0:00 — A living health system
+### Result Guardian — longitudinal evidence creates work
 
-The demo opens on the real Living System with the product promise visible: **“A health system that remembers and acts.”** The evaluator surface fails closed, then an isolated synthetic patient is unlocked without exposing the capability.
+A clinician-confirmed losartan treatment already exists in the Patient Twin. A renal-function result containing creatinine arrives through the real Results workspace. HealthIA sees that relevant potassium evidence is still missing and opens a durable treatment-aware mission **without a new chat prompt**.
 
-Authorized signals advance the versioned Patient Twin and durable replay to `10 / 14`, where HealthIA stops at `WAITING FOR HUMAN`. A synthetic human-entered repeat measurement produces a persisted receipt, resumes the **same** chain, reaches `14 / 14`, advances the Twin to `v3`, and verifies with zero model calls in the deterministic safety loop.
+When potassium evidence later arrives, HealthIA links it to the same mission and closes the mission from durable evidence. HealthIA does not diagnose kidney disease and does not change medication.
 
-**Judge takeaway:** autonomy is durable, observable, and bounded by human authority.
+**Judge takeaway:** the patient story itself can create and close durable work.
 
-### ~0:55 — Exact Google Cloud candidate
+### Appointment Guardian — the Twin prepares the visit
 
-The same continuous recording enters the real application. Runtime readiness proves:
+A family-medicine appointment requires recent results, an active medication list and insurance. HealthIA verifies what the longitudinal record already contains, identifies the missing insurance evidence and creates an appointment-preparation mission.
 
-- Cloud Run;
-- Gemini **3.5 Flash**;
-- Google **Agent Development Kit (ADK)**;
-- Firestore durable state;
-- private Google Cloud Storage evidence.
+When the insurance document is uploaded through the real Documents workspace, the same mission closes from persisted evidence.
 
-**Judge takeaway:** this is the exact running Google Cloud application, not a local mock or slide.
+**Judge takeaway:** continuity is driven by canonical state, not prompt memory.
 
-### ~1:10 — Health signal before the prompt
+### Post-Visit Guardian — continuity survives the encounter
 
-A synthetic Health Connect event enters before the patient asks anything. Only authorized metrics are accepted; source and time are preserved and the longitudinal record changes.
+When an appointment becomes completed but no attributable consultation or discharge document exists, HealthIA opens a post-visit continuity mission instead of inventing what happened.
 
-**Judge takeaway:** HealthIA can react because the patient story changed, not only because a chat prompt arrived.
+When the consultation note arrives, the same mission closes from durable evidence.
 
-### ~1:25 — Consent is an execution boundary
+**Judge takeaway:** missing evidence remains missing until the system can prove otherwise.
 
-The patient asks for an autism support center near Santiago de los Caballeros. HealthIA creates a durable mission but performs **zero Google Places searches** before mission-scoped location consent.
+### Live Gemini 3.5 Flash + Google ADK
 
-After the patient authorizes location, the **same mission** resumes and performs a real bounded Google Places lookup with visible candidates, addresses and Google Maps links.
+Inside the real HealthIA Chat, Gemini 3.5 Flash generates a bounded adaptive interview. The recording gate requires a live `gemini_dynamic` response with exactly five case-specific questions before the scene is accepted.
 
-The patient says **“The second one.”** Deterministic policy selects candidate #2 without spending another model call.
+Google ADK coordinates the clinical capability surface while the Patient Twin remains the durable continuity layer underneath the conversation.
 
-**Judge takeaway:** HealthIA distinguishes AI reasoning, deterministic exactness, and human authority.
+**Judge takeaway:** AI reasoning is used where interpretation adds value; it is not the source of truth.
 
-### ~2:15 — Evidence first, interpretation second
+### Real autonomous external follow-up
 
-A synthetic clinical document enters the product. Original bytes are preserved first in private Cloud Storage; Gemini performs bounded multimodal extraction; Firestore links the structured result back to the source.
-
-**Judge takeaway:** the model cannot erase provenance and unreliable evidence fails closed.
-
-### ~2:40 — Continuity survives the session
-
-The patient signs out and returns. Device signals, evidence, longitudinal timeline, selected resource and unfinished work remain present.
-
-**Judge takeaway:** this is durable patient state, not prompt memory.
-
-### ~2:55 — One patient workspace
-
-The Patient Twin, persisted evidence, active missions, autonomous receipts and human decisions appear together in the real patient workspace. The demo then displays the exact candidate SHA, Cloud Run revision, Gemini model, ADK readiness, Firestore state and GCS evidence backend.
-
-**Judge takeaway:** HealthIA ONE is one coherent system, not a collection of disconnected prototypes.
-
-### ~3:15 — ONE SAFETY
-
-The final master adds the validated ONE SAFETY proof layer: guarded real-world execution, one-use `HealthActionTicket`, durable connector receipt, prompt-injection boundary and Google Cloud Trace correlation.
-
-The exact enhanced Cloud proof ties:
+The strongest Taskmaster path continues outside chat:
 
 ```text
-Cloud Trace eec691300b7bb1c1c0564e95fb090e4f
-  → HealthActionTicket hat_021b1b6b1b4542e2
-  → maps.search_nearby
-  → receipt receipt_95ba26286e6f4e15
-  → completed
+no new chat prompt
+→ overdue blood-pressure mission
+→ Eventarc wakes a private worker
+→ real Gmail message
+→ controlled patient reply in the same thread
+→ Gmail users.watch
+→ authenticated Pub/Sub
+→ VitalRecord 128/80 with source_type=patient_email_reply
+→ the same durable mission becomes COMPLETED
 ```
 
-**Judge takeaway:** authorization is not confused with proof that the outside world changed.
+Completion comes from durable external evidence. A model-generated success message cannot make an outside-world mutation true.
 
-### ~3:30 — The system acts without another prompt
+**Judge takeaway:** HealthIA carries unfinished work forward even when the chat window is no longer driving the interaction.
 
-The closing Judge Mode shows the event-driven continuity proof for an opted-in synthetic patient: HealthIA notices an overdue blood-pressure follow-up without a new chat prompt, creates durable work, uses bounded Google infrastructure and correlates the result back to the same mission.
+## ONE SAFETY truth boundary
 
-**Final idea:**
+HealthIA separates three decision modes:
 
-> HealthIA ONE does not wait for another prompt. It carries health forward, so the patient never starts over.
+1. **AI reasoning** for interpretation, multimodal extraction and adaptive questioning.
+2. **Deterministic policy** for exact state transitions, idempotency and safety invariants.
+3. **Human authority** for consent and clinically sensitive decisions.
+
+Protected external actions follow:
+
+```text
+intent
+→ deterministic authorization boundary
+→ ONE SAFETY
+→ one-use HealthActionTicket
+→ real connector
+→ durable receipt
+→ mission outcome
+```
+
+Authorization is not execution evidence. A connector attempt without durable outcome does not become `COMPLETED`.
 
 ## Required truth boundary
 
-The video proves tested software behavior using synthetic data. Do **not** claim autonomous diagnosis, autonomous prescribing, clinical sensor validation, regulatory approval, universal clinical efficacy, or universal security certification.
+Do not claim:
 
-## Recording / publication contract
+- autonomous diagnosis;
+- autonomous prescribing or medication changes;
+- validated clinical sensor performance;
+- clinical efficacy;
+- regulatory approval or clearance;
+- universal security certification;
+- a public-host visibility state or byte identity that has not actually been independently verified.
 
-Any future replacement is allowed only if it is strictly stronger than this master and passes the same competition gates:
+The demo proves tested software behavior with synthetic data. It does not prove clinical effectiveness or replace professional or emergency care.
 
-1. real application only;
-2. exact candidate on Google Cloud;
-3. Gemini 3.5 Flash and Google ADK visibly identified;
-4. real persisted records, missions and connector evidence;
-5. consent and human-authority boundaries visible;
-6. no secrets or credentials on screen;
-7. synthetic data only;
-8. browser console/page errors = zero;
-9. final duration `<= 240 s`;
-10. CUTLOCK and byte-level publication proof pass.
+## Historical proof lineage
 
-## Historical recordings
+The 3:55 `HealthIA-ONE-Autonomous-Taskmaster-Charon-ONE-SAFETY.mp4` master remains the strongest exact-byte ONE SAFETY artifact lineage and preserves Trace → HealthActionTicket → receipt evidence.
 
-The older `HealthIA-ONE-final-judge-demo.webm` / approximately `290 s` artifact is **archived historical evidence only**. It is not the current submission video, it is not the Devpost demo, and it must not be labeled “Final submission URL.”
+The older approximately 290-second `HealthIA-ONE-final-judge-demo.webm` is also archived historical evidence. Neither artifact is the current V5 Devpost demo.
+
+Any future replacement of V5 must be strictly stronger and must not lower the existing truth, consent, safety, reproducibility or publication gates.
