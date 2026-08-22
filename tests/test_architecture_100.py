@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
 from pathlib import Path
 from threading import Lock
@@ -9,6 +10,7 @@ import pytest
 from healthia_one.config import Settings
 from healthia_one.distributed_events import FirestoreEventBroker
 from healthia_one.fcm_registration import FirestoreFCMRegistrationStore, build_fcm_registration_store
+from healthia_one.google_constellation_runtime import _stores as build_google_stores
 from healthia_one.models import PatientState
 from healthia_one.pairing import DevicePairingManager, PairingError, PairingSession, utc_now
 from healthia_one.pairing_backends import FirestorePairingBackend
@@ -81,6 +83,29 @@ def _cloud_test_settings(monkeypatch: pytest.MonkeyPatch, *, store_backend: str 
     return Settings(env="cloud", store_backend=store_backend, llm_backend="mock")
 
 
+def _is_firestore_client_call(node: ast.Call) -> bool:
+    function = node.func
+    return (
+        isinstance(function, ast.Attribute)
+        and function.attr in {"Client", "AsyncClient"}
+        and isinstance(function.value, ast.Name)
+        and function.value.id == "firestore"
+    )
+
+
+def test_no_firestore_client_is_constructed_inside_any_init() -> None:
+    violations: list[str] = []
+    for path in sorted(Path("healthia_one").glob("*.py")):
+        tree = ast.parse(path.read_text("utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != "__init__":
+                continue
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call) and _is_firestore_client_call(child):
+                    violations.append(f"{path}:{child.lineno}")
+    assert violations == [], f"Eager Firestore clients in constructors: {violations}"
+
+
 def test_cloud_runtime_construction_is_network_lazy_and_multi_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_cloud_env(monkeypatch)
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "healthia-architecture-test")
@@ -91,6 +116,7 @@ def test_cloud_runtime_construction_is_network_lazy_and_multi_instance(monkeypat
     service = build_service(settings)
     pairing = build_pairing_manager(settings)
     fcm = build_fcm_registration_store(settings)
+    google_stores = build_google_stores(settings)
 
     assert isinstance(service.store, FirestoreStore)
     assert service.store.client_initialized is False
@@ -102,6 +128,8 @@ def test_cloud_runtime_construction_is_network_lazy_and_multi_instance(monkeypat
     assert pairing.credential_persistence == "restart_safe"
     assert isinstance(fcm, FirestoreFCMRegistrationStore)
     assert fcm.client_initialized is False
+    assert len(google_stores) == 6
+    assert all(getattr(store, "client_initialized", False) is False for store in google_stores)
 
 
 @pytest.mark.asyncio
