@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from typing import Protocol
 
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 from healthia_one.opportunity_autopilot import OpportunityVault, utc_now
 
 
@@ -69,13 +70,11 @@ class JsonOpportunityStore:
             temporary.replace(self.path)
 
 
-class FirestoreOpportunityStore:
+class FirestoreOpportunityStore(LazyFirestoreClient):
     COLLECTION = "healthia_opportunity_vaults"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def load(self, patient_id: str) -> OpportunityVault:
         snapshot = self.client.collection(self.COLLECTION).document(patient_id).get()

@@ -133,7 +133,10 @@ def test_cloud_demo_is_vertex_native_scale_to_zero_and_easy_to_destroy() -> None
     deploy = (ROOT / "deployment/deploy-cloud-demo.ps1").read_text(encoding="utf-8")
     remove = (ROOT / "deployment/remove-cloud-demo.ps1").read_text(encoding="utf-8")
     assert '"--min-instances", "0"' in deploy
-    assert '"--max-instances", "1"' in deploy
+    # The resilient runtime is now explicitly multi-instance: durable pairing
+    # and event fan-out no longer depend on a single Cloud Run process.
+    assert '"--max-instances", "3"' in deploy
+    assert '"--max-instances", "1"' not in deploy
     assert '"--min", "0"' not in deploy
     assert '"--max", "1"' not in deploy
     assert "HEALTHIA_COST_MODE=cloud_demo" in deploy

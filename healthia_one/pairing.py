@@ -9,6 +9,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock
+from typing import Protocol
 
 
 _PROCESS_TOKEN_SECRET = secrets.token_bytes(32)
@@ -43,8 +44,24 @@ class PairingSession:
     display_name: str = ""
 
 
+class PairingSessionBackend(Protocol):
+    persistence: str
+
+    def create(self, session: PairingSession) -> bool: ...
+    def get(self, code: str) -> PairingSession | None: ...
+    def delete(self, code: str) -> None: ...
+    def claim(self, code: str, device_id: str, display_name: str) -> PairingSession: ...
+    def wait_for_claim(self, code: str, timeout_seconds: float) -> PairingSession | None: ...
+
+
 class DevicePairingManager:
-    """Event-driven pairing plus restart-safe, patient-bound signed credentials."""
+    """Event-driven pairing plus restart-safe, patient-bound signed credentials.
+
+    Local/test mode keeps the original in-process implementation. Production can
+    inject a durable backend (Firestore in the canonical Cloud Run deployment),
+    allowing pairing creation, claim and wait to survive process replacement and
+    operate correctly across multiple instances.
+    """
 
     def __init__(
         self,
@@ -52,9 +69,11 @@ class DevicePairingManager:
         *,
         token_secret: str | bytes | None = None,
         token_ttl_days: int = 30,
+        backend: PairingSessionBackend | None = None,
     ) -> None:
         self.ttl_minutes = ttl_minutes
         self.token_ttl_days = max(1, int(token_ttl_days))
+        self.backend = backend
         configured = token_secret or os.getenv("HEALTHIA_DEVICE_TOKEN_SECRET", "")
         if isinstance(configured, str):
             configured_bytes = configured.encode("utf-8")
@@ -65,6 +84,8 @@ class DevicePairingManager:
         # the same pairing bearer even in local/test mode. The fallback remains
         # process-local and is never persisted or emitted.
         self._token_secret = configured_bytes if self._secret_is_persistent else _PROCESS_TOKEN_SECRET
+        # Preserve the original memory backend for local/test behavior and for
+        # compatibility with the existing white-box expiry test.
         self._sessions: dict[str, PairingSession] = {}
         self._claim_events: dict[str, Event] = {}
         self._lock = Lock()
@@ -72,6 +93,10 @@ class DevicePairingManager:
     @property
     def credential_persistence(self) -> str:
         return "restart_safe" if self._secret_is_persistent else "process_local_secret"
+
+    @property
+    def session_persistence(self) -> str:
+        return self.backend.persistence if self.backend is not None else "process_local"
 
     @staticmethod
     def _b64_encode(data: bytes) -> str:
@@ -138,10 +163,36 @@ class DevicePairingManager:
                 event.set()
 
     def _cleanup(self) -> None:
+        if self.backend is not None:
+            return
         with self._lock:
             self._cleanup_unlocked()
 
+    @staticmethod
+    def _status_unlocked(session: PairingSession) -> dict:
+        return {
+            "code": session.code,
+            "expires_at": session.expires_at.isoformat(),
+            "claimed": session.claimed,
+            "device_id": session.device_id,
+            "display_name": session.display_name,
+            "connection_id": session.connection_id,
+            "patient_id": session.patient_id,
+        }
+
     def create(self, patient_id: str = "patient_demo") -> dict:
+        if self.backend is not None:
+            for _ in range(20):
+                session = PairingSession(
+                    code=f"{secrets.randbelow(100_000_000):08d}",
+                    expires_at=utc_now() + timedelta(minutes=self.ttl_minutes),
+                    patient_id=patient_id,
+                    connection_id=f"hc_{secrets.token_hex(8)}",
+                )
+                if self.backend.create(session):
+                    return self._status_unlocked(session)
+            raise PairingError("No se pudo generar un código de conexión.")
+
         with self._lock:
             self._cleanup_unlocked()
             for _ in range(20):
@@ -160,19 +211,13 @@ class DevicePairingManager:
             self._claim_events[code] = Event()
             return self._status_unlocked(session)
 
-    @staticmethod
-    def _status_unlocked(session: PairingSession) -> dict:
-        return {
-            "code": session.code,
-            "expires_at": session.expires_at.isoformat(),
-            "claimed": session.claimed,
-            "device_id": session.device_id,
-            "display_name": session.display_name,
-            "connection_id": session.connection_id,
-            "patient_id": session.patient_id,
-        }
-
     def status(self, code: str) -> dict:
+        if self.backend is not None:
+            session = self.backend.get(code)
+            if session is None:
+                raise PairingError("El código no existe o expiró.")
+            return self._status_unlocked(session)
+
         with self._lock:
             self._cleanup_unlocked()
             session = self._sessions.get(code)
@@ -180,10 +225,40 @@ class DevicePairingManager:
                 raise PairingError("El código no existe o expiró.")
             return self._status_unlocked(session)
 
+    def _claim_payload(self, session: PairingSession) -> dict:
+        issued_at = utc_now()
+        principal = DevicePrincipal(
+            patient_id=session.patient_id,
+            connection_id=session.connection_id,
+            device_id=session.device_id,
+            display_name=session.display_name,
+            issued_at=issued_at,
+            expires_at=issued_at + timedelta(days=self.token_ttl_days),
+        )
+        token = self._issue_token(principal)
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "device_id": session.device_id,
+            "display_name": session.display_name,
+            "connection_id": session.connection_id,
+            "patient_id": session.patient_id,
+            "pairing_expires_at": session.expires_at.isoformat(),
+            "credential_expires_at": principal.expires_at.isoformat(),
+            "credential_persistence": self.credential_persistence,
+            "session_persistence": self.session_persistence,
+        }
+
     def claim(self, code: str, device_id: str, display_name: str) -> dict:
         clean_device_id = str(device_id or "").strip()
         if len(clean_device_id) < 3:
             raise PairingError("La identidad del dispositivo no es válida.")
+        clean_display_name = (display_name or "Android Health Connect").strip()[:160]
+
+        if self.backend is not None:
+            session = self.backend.claim(code, clean_device_id, clean_display_name)
+            return self._claim_payload(session)
+
         with self._lock:
             self._cleanup_unlocked()
             session = self._sessions.get(code)
@@ -195,33 +270,26 @@ class DevicePairingManager:
                 raise PairingError("El código ya fue consumido. Genera uno nuevo para volver a vincular.")
             session.claimed = True
             session.device_id = clean_device_id
-            session.display_name = (display_name or "Android Health Connect").strip()[:160]
-            issued_at = utc_now()
-            principal = DevicePrincipal(
-                patient_id=session.patient_id,
-                connection_id=session.connection_id,
-                device_id=session.device_id,
-                display_name=session.display_name,
-                issued_at=issued_at,
-                expires_at=issued_at + timedelta(days=self.token_ttl_days),
-            )
-            token = self._issue_token(principal)
+            session.display_name = clean_display_name
             event = self._claim_events.get(code)
             if event is not None:
                 event.set()
-            return {
-                "access_token": token,
-                "token_type": "bearer",
-                "device_id": session.device_id,
-                "display_name": session.display_name,
-                "connection_id": session.connection_id,
-                "patient_id": session.patient_id,
-                "pairing_expires_at": session.expires_at.isoformat(),
-                "credential_expires_at": principal.expires_at.isoformat(),
-                "credential_persistence": self.credential_persistence,
-            }
+            return self._claim_payload(session)
 
     def wait_for_claim(self, code: str, timeout_seconds: float | None = None) -> dict:
+        if self.backend is not None:
+            initial = self.backend.get(code)
+            if initial is None:
+                raise PairingError("El código no existe o expiró.")
+            remaining = max(0.0, (initial.expires_at - utc_now()).total_seconds())
+            timeout = remaining if timeout_seconds is None else min(max(timeout_seconds, 0.0), remaining)
+            session = self.backend.wait_for_claim(code, timeout)
+            if session is None:
+                return {"code": code, "claimed": False, "expired": True}
+            payload = self._status_unlocked(session)
+            payload["expired"] = False
+            return payload
+
         with self._lock:
             self._cleanup_unlocked()
             session = self._sessions.get(code)

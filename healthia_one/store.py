@@ -136,13 +136,29 @@ class JsonStore(StateStore):
 
 
 class FirestoreStore(StateStore):
-    """Patient-scoped Firestore adapter selected from the authenticated principal."""
+    """Patient-scoped Firestore adapter selected from the authenticated principal.
+
+    Client construction is deliberately lazy. Importing the ASGI application must
+    never require ADC, DNS or a live Google endpoint; cloud dependencies are first
+    touched during lifespan initialization or an explicit readiness probe.
+    """
 
     def __init__(self, project: str | None = None, *, autonomous_enabled: bool | None = None) -> None:
         super().__init__(autonomous_enabled=autonomous_enabled)
-        from google.cloud import firestore
+        self.project = project
+        self._client = None
 
-        self.client = firestore.AsyncClient(project=project)
+    @property
+    def client(self):
+        if self._client is None:
+            from google.cloud import firestore
+
+            self._client = firestore.AsyncClient(project=self.project)
+        return self._client
+
+    @property
+    def client_initialized(self) -> bool:
+        return self._client is not None
 
     def _ref(self):
         patient_id = current_patient_id()

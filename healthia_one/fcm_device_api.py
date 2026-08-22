@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Header, HTTPException
 
 from healthia_one.auth import patient_scope
@@ -35,6 +37,10 @@ def build_fcm_device_router(
     only a disabled tombstone so automatic token refreshes cannot silently opt in.
     Delivery evidence contains a short synthetic proof id, visible-notification
     boolean and timestamp, never notification content or raw registration tokens.
+
+    The Firestore registration adapter is intentionally synchronous because it is
+    also used by worker code. API handlers move those calls to a worker thread so
+    a slow Firestore round trip never stalls the ASGI event loop.
     """
 
     verifier = pairing_manager or DevicePairingManager()
@@ -76,8 +82,8 @@ def build_fcm_device_router(
     ) -> dict:
         principal = await active_principal(authorization, payload.device_id)
         candidate = registration_for(principal, payload.registration_token)
-        registrations.save(candidate)
-        current = registrations.load(principal.patient_id, principal.connection_id)
+        await asyncio.to_thread(registrations.save, candidate)
+        current = await asyncio.to_thread(registrations.load, principal.patient_id, principal.connection_id)
         usable = bool(current and current.usable())
         return {
             "registered": usable,
@@ -97,8 +103,8 @@ def build_fcm_device_router(
     ) -> dict:
         principal = await active_principal(authorization, payload.device_id)
         candidate = registration_for(principal, payload.registration_token)
-        registrations.save(candidate, allow_reenable=True)
-        current = registrations.load(principal.patient_id, principal.connection_id)
+        await asyncio.to_thread(registrations.save, candidate, allow_reenable=True)
+        current = await asyncio.to_thread(registrations.load, principal.patient_id, principal.connection_id)
         if current is None or not current.usable():
             raise HTTPException(status_code=409, detail="No se pudo reactivar el registro FCM.")
         return {
@@ -118,7 +124,8 @@ def build_fcm_device_router(
         authorization: str | None = Header(default=None),
     ) -> dict:
         principal = await active_principal(authorization, payload.device_id)
-        registration = registrations.acknowledge(
+        registration = await asyncio.to_thread(
+            registrations.acknowledge,
             principal.patient_id,
             principal.connection_id,
             payload.proof_id,
@@ -144,7 +151,11 @@ def build_fcm_device_router(
         authorization: str | None = Header(default=None),
     ) -> dict:
         principal = await active_principal(authorization, device_id)
-        disabled = registrations.disable_connection(principal.patient_id, principal.connection_id)
+        disabled = await asyncio.to_thread(
+            registrations.disable_connection,
+            principal.patient_id,
+            principal.connection_id,
+        )
         return {
             "unregistered": bool(disabled),
             "notifications_enabled": False,
@@ -161,7 +172,11 @@ def build_fcm_device_router(
         authorization: str | None = Header(default=None),
     ) -> dict:
         principal = await active_principal(authorization, device_id)
-        registration = registrations.load(principal.patient_id, principal.connection_id)
+        registration = await asyncio.to_thread(
+            registrations.load,
+            principal.patient_id,
+            principal.connection_id,
+        )
         usable = bool(registration and registration.usable())
         return {
             "registered": usable,
