@@ -47,7 +47,7 @@ def test_production_entrypoint_imports_without_optional_cloud_credentials() -> N
     code = r'''
 import app.main as main
 assert main.app.title == "HealthIA ONE"
-routes = {route.path for route in main.app.routes}
+routes = {getattr(route, "path", None) for route in main.app.routes}
 for required in ("/", "/healthz", "/api/readiness", "/api/chat", "/api/bootstrap"):
     assert required in routes, required
 assert main.settings.llm_backend == "mock"
