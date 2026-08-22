@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from typing import Any
 
 from healthia_one.auth import patient_scope
 from healthia_one.distributed_events import FirestoreEventBroker
-from healthia_one.evidence_store import configured_bucket, evidence_backend
+from healthia_one.evidence_store import configured_bucket
 from healthia_one.pairing import DevicePairingManager
 from healthia_one.pairing_backends import FirestorePairingBackend
 from healthia_one.service import HealthIAService
@@ -59,8 +58,9 @@ def build_pairing_manager(settings) -> DevicePairingManager:
 async def _probe_state_store(service: HealthIAService, timeout_seconds: float) -> dict:
     try:
         # A non-mutating read through the exact production adapter proves ADC,
-        # project routing, Firestore reachability and datastore permissions.
-        with patient_scope("__healthia_readiness__"):
+        # project routing, Firestore reachability and datastore permissions. The
+        # id obeys the same patient-scope format contract as real principals.
+        with patient_scope("patient_readiness_probe"):
             await asyncio.wait_for(service.store.load(), timeout=timeout_seconds)
         return {"ready": True, "mode": "live_read"}
     except Exception as exc:
