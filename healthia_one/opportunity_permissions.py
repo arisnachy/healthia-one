@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 # only the deterministic mission entry phrases; the existing Google mission
 # consent/policy/runtime continues to own every actual external action.
 from healthia_one import wave4_resource_routing as _wave4_resource_routing  # noqa: F401
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 
 
 def utc_now() -> datetime:
@@ -79,13 +80,11 @@ class JsonRadarPermissionStore:
             temporary.replace(self.path)
 
 
-class FirestoreRadarPermissionStore:
+class FirestoreRadarPermissionStore(LazyFirestoreClient):
     COLLECTION = "healthia_opportunity_permissions"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def load(self, patient_id: str) -> RadarPermissions:
         snapshot = self.client.collection(self.COLLECTION).document(patient_id).get()
