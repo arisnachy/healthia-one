@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from healthia_one.google_constellation import GoogleAction, GoogleActionRequest, GoogleGrant
 from healthia_one.google_connector_runtime import ConnectorResult, GoogleActionExecutor
+from healthia_one.lazy_google_clients import LazyFirestoreClient
+
 from healthia_one.google_mission_actions import (
     calendar_event_payload,
     followup_task_payload,
@@ -130,13 +132,11 @@ class MemoryMissionStore:
         self._values[(mission.patient_id, mission.id)] = mission.model_copy(deep=True)
 
 
-class FirestoreMissionStore:
+class FirestoreMissionStore(LazyFirestoreClient):
     COLLECTION = "healthia_google_missions"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _doc(self, patient_id: str, mission_id: str):
         return (
