@@ -14,6 +14,7 @@ from healthia_one.google_constellation import (
     GoogleGrant,
     new_id,
 )
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 
 
 def utc_now() -> datetime:
@@ -130,12 +131,11 @@ class MemoryGoogleAuthorizationStore:
         return value.model_copy(deep=True)
 
 
-class FirestoreGoogleGrantStore:
+class FirestoreGoogleGrantStore(LazyFirestoreClient):
     COLLECTION = "healthia_google_grants"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _collection(self, patient_id: str):
         return self.client.collection(self.COLLECTION).document(patient_id).collection("grants")
@@ -152,12 +152,11 @@ class FirestoreGoogleGrantStore:
         self._collection(grant.patient_id).document(grant.id).set(grant.model_dump(mode="json"))
 
 
-class FirestoreGoogleReceiptStore:
+class FirestoreGoogleReceiptStore(LazyFirestoreClient):
     COLLECTION = "healthia_google_action_receipts"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _doc(self, patient_id: str, idempotency_key: str):
         return self.client.collection(self.COLLECTION).document(patient_id).collection("receipts").document(idempotency_key)
@@ -170,13 +169,11 @@ class FirestoreGoogleReceiptStore:
         self._doc(receipt.patient_id, receipt.idempotency_key).set(receipt.model_dump(mode="json"))
 
 
-class FirestoreGoogleAuthorizationStore:
+class FirestoreGoogleAuthorizationStore(LazyFirestoreClient):
     COLLECTION = "healthia_google_action_authorizations"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.firestore = firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _doc(self, patient_id: str, authorization_id: str):
         return self.client.collection(self.COLLECTION).document(patient_id).collection("authorizations").document(authorization_id)
