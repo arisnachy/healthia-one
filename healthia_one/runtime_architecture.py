@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from typing import Any
 
@@ -22,7 +23,7 @@ class ResilientHealthIAService(HealthIAService):
     Local/test startup remains fail-fast. In cloud mode a transient dependency
     outage is recorded instead of killing the ASGI process, allowing `/healthz`
     to remain a pure liveness signal while `/api/readiness` fails closed until
-    dependencies recover.
+    the complete startup contract succeeds on a later retry.
     """
 
     def __init__(self, settings) -> None:
@@ -43,6 +44,16 @@ class ResilientHealthIAService(HealthIAService):
             # distinguish dependency categories while traces retain internals.
             self.startup_error = type(exc).__name__
 
+    async def recover_startup(self) -> bool:
+        """Retry the full initialization contract after a degraded cloud start."""
+        try:
+            await super().initialize()
+        except Exception as exc:
+            self.startup_error = type(exc).__name__
+            return False
+        self.startup_error = None
+        return True
+
 
 def build_service(settings) -> ResilientHealthIAService:
     return ResilientHealthIAService(settings)
@@ -53,6 +64,19 @@ def build_pairing_manager(settings) -> DevicePairingManager:
         backend = FirestorePairingBackend(project=settings.google_cloud_project or None)
         return DevicePairingManager(backend=backend)
     return DevicePairingManager()
+
+
+async def _probe_startup_recovery(service: ResilientHealthIAService, timeout_seconds: float) -> dict:
+    if service.startup_error is None:
+        return {"ready": True, "mode": "startup_complete"}
+    try:
+        recovered = await asyncio.wait_for(service.recover_startup(), timeout=timeout_seconds)
+    except Exception as exc:
+        service.startup_error = type(exc).__name__
+        return {"ready": False, "mode": "startup_retry", "error": type(exc).__name__}
+    if not recovered:
+        return {"ready": False, "mode": "startup_retry", "error": service.startup_error}
+    return {"ready": True, "mode": "startup_retry_recovered"}
 
 
 async def _probe_state_store(service: HealthIAService, timeout_seconds: float) -> dict:
@@ -129,15 +153,17 @@ async def runtime_readiness(
     now = time.monotonic()
     cached = _READINESS_CACHE.get("payload")
     if not force and cached is not None and now - float(_READINESS_CACHE.get("at") or 0.0) < _READINESS_CACHE_SECONDS:
-        return dict(cached)
+        return copy.deepcopy(cached)
 
     config = _configuration_checks(service, settings, pairing_manager, fcm_registration_store)
+    startup = await _probe_startup_recovery(service, timeout_seconds)
     store = await _probe_state_store(service, timeout_seconds)
     evidence = await _probe_evidence_store(settings, timeout_seconds)
-    ready = bool(config["ready"] and store["ready"] and evidence["ready"])
+    ready = bool(config["ready"] and startup["ready"] and store["ready"] and evidence["ready"])
     payload = {
         "ready": ready,
         "startup_error": service.startup_error,
+        "startup": startup,
         "store": store,
         "evidence": evidence,
         "runtime": config,
@@ -145,8 +171,6 @@ async def runtime_readiness(
         "ai_probe_performed": False,
         "ai_spend": "zero",
     }
-    if ready:
-        service.startup_error = None
     _READINESS_CACHE["at"] = now
-    _READINESS_CACHE["payload"] = dict(payload)
+    _READINESS_CACHE["payload"] = copy.deepcopy(payload)
     return payload
