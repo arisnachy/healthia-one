@@ -57,8 +57,19 @@ def test_documentation_does_not_reference_deleted_version_layers() -> None:
     content = "\n".join(path.read_text(encoding="utf-8") for path in checked)
     for version in range(2, 8):
         assert f"ui-v{version}" not in content
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_ci_validates_current_semantic_frontend_modules() -> None:
+    """Keep executable frontend validation coupled to CI, not README prose.
+
+    README is judge/user documentation and may legitimately be simplified. The
+    actual contract is that every canonical semantic frontend module exists and
+    is syntax-checked by the verification workflow.
+    """
+
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     for script in (
+        "i18n.js",
         "app.js",
         "patient-record.js",
         "family-documents.js",
@@ -66,5 +77,13 @@ def test_documentation_does_not_reference_deleted_version_layers() -> None:
         "privacy-controls.js",
         "profile-devices.js",
         "icons.js",
+        "runtime-integrations.js",
+        "provider-integrations.js",
+        "clinical-council.js",
+        "account.js",
+        "auth.js",
+        "cost-control.js",
+        "opportunities-ui.js",
     ):
-        assert f"node --check web/{script}" in readme
+        assert (WEB / script).is_file(), f"missing canonical frontend module: {script}"
+        assert f"node --check web/{script}" in workflow
