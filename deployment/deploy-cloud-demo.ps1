@@ -171,6 +171,26 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) { throw "No se pudo crear Firestore (default)." }
 }
 
+# Ephemeral multi-instance coordination documents have explicit retention.
+# Firestore TTL activation is asynchronous and can take several minutes, but the
+# policy update command itself must be accepted before this deployment proceeds.
+foreach ($ttlPolicy in @(
+    @{ Field = "ttl_at"; Collection = "healthia_device_pairings" },
+    @{ Field = "expires_at"; Collection = "healthia_stream_events" }
+)) {
+    Write-Host "Asegurando TTL Firestore: $($ttlPolicy.Collection).$($ttlPolicy.Field)..." -ForegroundColor Cyan
+    & gcloud firestore fields ttls update $ttlPolicy.Field `
+        --collection-group=$($ttlPolicy.Collection) `
+        --database="(default)" `
+        --project $ProjectId `
+        --enable-ttl `
+        --async `
+        --quiet | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "No se pudo asegurar TTL para $($ttlPolicy.Collection).$($ttlPolicy.Field)."
+    }
+}
+
 & gcloud storage buckets describe "gs://$BucketName" --project $ProjectId --format "value(name)" 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Creando bucket privado de evidencia..." -ForegroundColor Cyan
