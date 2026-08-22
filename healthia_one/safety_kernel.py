@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from healthia_one.google_constellation import ACTION_POLICIES, GoogleAction, GoogleActionRequest, new_id
 from healthia_one.google_constellation_store import build_action_intent_key
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 
 
 def utc_now() -> datetime:
@@ -102,14 +103,11 @@ class MemoryHealthActionTicketStore:
         return items[: max(1, min(int(limit), 100))]
 
 
-class FirestoreHealthActionTicketStore:
+class FirestoreHealthActionTicketStore(LazyFirestoreClient):
     COLLECTION = "healthia_action_tickets"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-
-        self.firestore = firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _collection(self, patient_id: str):
         return self.client.collection(self.COLLECTION).document(patient_id).collection("tickets")
