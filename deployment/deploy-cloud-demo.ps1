@@ -100,7 +100,7 @@ Write-Host "Firestore: (default) ($FirestoreLocation)" -ForegroundColor White
 Write-Host "Evidencia clinica: gs://$BucketName ($BucketLocation)" -ForegroundColor White
 Write-Host "Build SA: $BuildServiceAccountEmail" -ForegroundColor White
 Write-Host "Runtime SA: $RuntimeServiceAccountEmail" -ForegroundColor White
-Write-Host "Cloud Run: min 0, max 1; agentes a demanda y proactive=false." -ForegroundColor Green
+Write-Host "Cloud Run: min 0, max 3; estado, pairing y eventos distribuidos; proactive=false." -ForegroundColor Green
 Write-Host "Google AI: maximo $RequestLimit solicitudes por proceso y $MaxOutputTokens tokens de salida." -ForegroundColor Green
 Write-Host "No se inyecta GEMINI_API_KEY: Cloud Run usa su service account para Vertex AI." -ForegroundColor Green
 
@@ -216,7 +216,7 @@ $args = @(
     "--region", $Region,
     "--service-account", $RuntimeServiceAccountEmail,
     "--min-instances", "0",
-    "--max-instances", "1",
+    "--max-instances", "3",
     "--concurrency", "20",
     "--cpu", "1",
     "--memory", "512Mi",

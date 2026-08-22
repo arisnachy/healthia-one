@@ -47,11 +47,12 @@ from healthia_one.result_ai import analyze_uploaded_result, apply_multimodal_ana
 from healthia_one.result_capabilities import UnsupportedClinicalFormat, capability_manifest, validate_clinical_upload
 from healthia_one.results import explain_result, parse_result_file
 from healthia_one.pairing import DevicePairingManager, PairingError
+from healthia_one.runtime_architecture import build_pairing_manager, build_service, runtime_readiness
 from healthia_one.service import HealthIAService
 from healthia_one.twin import clinical_twin_summary
 
-service = HealthIAService(settings)
-pairing_manager = DevicePairingManager()
+service = build_service(settings)
+pairing_manager = build_pairing_manager(settings)
 fcm_registration_store = build_fcm_registration_store(settings)
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
@@ -108,9 +109,24 @@ def _require_evaluation_capability(access_key: str | None) -> None:
 
 
 @app.get("/api/readiness")
-async def readiness() -> dict:
-    return {
-        "ready": True,
+async def readiness():
+    dependency_readiness = await runtime_readiness(
+        service,
+        settings,
+        pairing_manager,
+        fcm_registration_store,
+    )
+    cloud = settings.env.strip().lower() == "cloud"
+    patient_sessions_ready = (not cloud) or account_manager.credential_persistence == "restart_safe"
+    runtime_checks = dependency_readiness["runtime"]["checks"]
+    runtime_checks["patient_sessions_restart_safe"] = patient_sessions_ready
+    dependency_readiness["runtime"]["ready"] = all(runtime_checks.values())
+    dependency_readiness["ready"] = bool(
+        dependency_readiness["ready"] and dependency_readiness["runtime"]["ready"]
+    )
+
+    payload = {
+        "ready": dependency_readiness["ready"],
         "llm_backend": settings.llm_backend,
         "model": settings.model,
         "adk_ready": settings.adk_ready,
@@ -126,6 +142,7 @@ async def readiness() -> dict:
         "patient_session_persistence": account_manager.credential_persistence,
         "patient_state_scope": "authenticated_patient" if settings.auth_required else "demo_patient",
         "cost_control": service.gemini.cost_status(),
+        "dependency_readiness": dependency_readiness,
         "capabilities": [
             "chat",
             "gemini_adaptive_clinical_interview",
@@ -163,12 +180,18 @@ async def readiness() -> dict:
             "device_medication_cross_check",
             "cloud_cost_guard",
             "bounded_living_system_evaluation",
+            "multi_instance_pairing",
+            "distributed_event_fanout",
+            "truthful_dependency_readiness",
         ],
         "truth_boundary": (
             "Patient continuity system. It does not confirm diagnoses, prescribe, change medication, "
             "or replace emergency and professional care."
         ),
     }
+    if not payload["ready"]:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 @app.get("/api/cost-control")
@@ -309,7 +332,7 @@ async def disconnect_device(connection_id: str) -> dict:
 @app.post("/api/devices/pairing")
 async def create_device_pairing(request: Request) -> dict:
     patient_id = (await service.snapshot()).profile.id
-    payload = pairing_manager.create(patient_id=patient_id)
+    payload = await asyncio.to_thread(pairing_manager.create, patient_id)
     payload["backend_url"] = str(request.base_url).rstrip("/")
     return payload
 
@@ -317,7 +340,7 @@ async def create_device_pairing(request: Request) -> dict:
 @app.get("/api/devices/pairing/{code}")
 async def device_pairing_status(code: str) -> dict:
     try:
-        payload = pairing_manager.status(code)
+        payload = await asyncio.to_thread(pairing_manager.status, code)
     except PairingError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if payload.get("patient_id") != current_patient_id():
@@ -329,7 +352,7 @@ async def device_pairing_status(code: str) -> dict:
 async def wait_device_pairing(code: str) -> dict:
     """Hold one request until the pairing is claimed or expires; no browser polling."""
     try:
-        initial = pairing_manager.status(code)
+        initial = await asyncio.to_thread(pairing_manager.status, code)
         if initial.get("patient_id") != current_patient_id():
             raise HTTPException(status_code=404, detail="Conexión no encontrada.")
         return await asyncio.to_thread(pairing_manager.wait_for_claim, code, 600)
@@ -340,7 +363,7 @@ async def wait_device_pairing(code: str) -> dict:
 @app.post("/api/devices/pairing/claim")
 async def claim_device_pairing(claim: DevicePairingClaim) -> dict:
     try:
-        return pairing_manager.claim(claim.code, claim.device_id, claim.display_name)
+        return await asyncio.to_thread(pairing_manager.claim, claim.code, claim.device_id, claim.display_name)
     except PairingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
