@@ -8,6 +8,8 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
+from healthia_one.lazy_google_clients import LazyFirestoreClient
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -176,14 +178,11 @@ class JsonEventClaimStore:
             return EventClaim.model_validate(raw) if raw else None
 
 
-class FirestoreEventClaimStore:
+class FirestoreEventClaimStore(LazyFirestoreClient):
     COLLECTION = "healthia_autopilot_claims"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-
-        self.firestore = firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _doc(self, patient_id: str, claim_id: str):
         return (
