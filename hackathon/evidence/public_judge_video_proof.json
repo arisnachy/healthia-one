@@ -1,9 +1,20 @@
 {
-  "schema_version": 2,
-  "updated_at": "2026-08-18",
-  "status": "CANONICAL_CURRENT_SUBMISSION",
+  "schema_version": 3,
+  "updated_at": "2026-08-21",
+  "status": "CURRENT_JUDGE_ENTRY_WITH_HISTORICAL_BYTE_PROOF",
   "synthetic_only": true,
+  "current_judge_submission": {
+    "youtube_url": "https://youtu.be/44LfVn9pPdU",
+    "duration": "~3:17",
+    "label": "V5",
+    "current_judge_entry_point": true,
+    "byte_identity_proven_by_this_file": false,
+    "note": "README.md, JUDGES_START_HERE.md and docs/DEVPOST_SUBMISSION.md identify V5 as the current judge-facing demo. This manifest does not invent a byte hash or anonymous YouTube visibility proof that it has not independently verified."
+  },
   "canonical_submission": {
+    "backward_compatibility_name": true,
+    "current_submission": false,
+    "historical_proof_lineage": true,
     "youtube_url": "https://youtu.be/v7SJUkzzRxw",
     "duration_seconds": 235.0,
     "release_tag": "healthia-one-autonomous-winner-demo-2026",
@@ -19,7 +30,7 @@
     "enhanced_artifact_id": 9296123186,
     "enhanced_artifact_zip_sha256": "253a474e7a8bd7fce373f3ff1f5697e0522f27810fe76d33dd4a902366cd9365"
   },
-  "machine_verified_current_master": {
+  "machine_verified_historical_master": {
     "artifact_downloaded_from_github_actions": true,
     "duration_matches_final_proof": true,
     "video_stream_present": true,
@@ -28,8 +39,8 @@
     "one_safety_overlay_present": true
   },
   "external_host_visibility": {
-    "youtube_public_privacy_state": "NOT_ASSERTED_BY_THIS_MACHINE_PROOF",
-    "note": "The canonical YouTube URL is recorded here, but YouTube privacy state must be confirmed from YouTube/anonymous browser access; this evidence file does not fabricate that assertion."
+    "current_youtube_public_privacy_state": "NOT_ASSERTED_BY_THIS_MACHINE_PROOF",
+    "note": "The current V5 YouTube URL is recorded from the synchronized judge-facing package, but this evidence file does not fabricate an independent YouTube privacy-state assertion."
   },
   "historical_public_video": {
     "archived": true,
@@ -43,5 +54,5 @@
     "duration_seconds": 290.16,
     "historical_anonymous_download_verified": true
   },
-  "truth_boundary": "Current canonical judging video is the 3:55 ONE SAFETY master. The archived 290.16-second WebM is provenance only and must not be presented as the final submission. This proof establishes software/artifact facts and does not claim clinical efficacy, regulatory approval, autonomous prescribing, universal security certification, or a YouTube privacy state it cannot independently observe."
+  "truth_boundary": "V5 (~3:17) is the current judge-facing entry point. The byte-verified 3:55 ONE SAFETY master and older 290.16-second WebM are historical proof lineage, not the current submission video. This file preserves exact historical artifact proofs while refusing to invent a V5 byte hash, YouTube privacy state, clinical efficacy, regulatory approval, autonomous prescribing, or universal security certification."
 }
