@@ -8,6 +8,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from healthia_one.lazy_google_clients import LazyFirestoreClient
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -99,13 +101,11 @@ class JsonAutopilotReceiptStore:
         return values[: max(1, min(limit, 100))]
 
 
-class FirestoreAutopilotReceiptStore:
+class FirestoreAutopilotReceiptStore(LazyFirestoreClient):
     COLLECTION = "healthia_autopilot_receipts"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _document(self, patient_id: str, receipt_id: str):
         return (
@@ -123,13 +123,11 @@ class FirestoreAutopilotReceiptStore:
         self._document(receipt.patient_id, receipt.id).set(receipt.model_dump(mode="json"))
 
     def list_recent(self, patient_id: str, limit: int = 20) -> list[AutopilotReceipt]:
-        from google.cloud import firestore
-
         query = (
             self.client.collection(self.COLLECTION)
             .document(patient_id)
             .collection("receipts")
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .order_by("created_at", direction=self.firestore.Query.DESCENDING)
             .limit(max(1, min(limit, 100)))
         )
         return [AutopilotReceipt.model_validate(item.to_dict()) for item in query.stream()]
