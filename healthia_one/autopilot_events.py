@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, Field
 
 from healthia_one.autopilot_runtime import AutopilotEvent
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 
 
 def utc_now() -> datetime:
@@ -138,15 +139,13 @@ class JsonEventOutboxStore:
         return self._mark(event_id, "failed", error)
 
 
-class FirestoreEventOutboxStore:
+class FirestoreEventOutboxStore(LazyFirestoreClient):
     """Top-level collection intentionally shaped for a direct Eventarc trigger."""
 
     COLLECTION = "healthia_autopilot_events"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _ref(self, event_id: str):
         return self.client.collection(self.COLLECTION).document(event_id)
@@ -155,9 +154,7 @@ class FirestoreEventOutboxStore:
         ref = self._ref(event.id)
         transaction = self.client.transaction()
 
-        from google.cloud import firestore
-
-        @firestore.transactional
+        @self.firestore.transactional
         def transact(txn):
             snapshot = ref.get(transaction=txn)
             if snapshot.exists:
