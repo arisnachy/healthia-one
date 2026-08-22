@@ -50,7 +50,7 @@ def test_judges_start_here_is_locked_to_current_v5_truth() -> None:
         "no new chat prompt",
         "VitalRecord 128/80",
         "the same durable mission becomes COMPLETED",
-        "Authorization is not execution evidence",
+        "authorization is not execution evidence",
         "synthetic",
     ):
         assert marker in doc
