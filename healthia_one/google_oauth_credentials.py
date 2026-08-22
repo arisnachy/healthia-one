@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from healthia_one.google_constellation import GoogleService, new_id
 from healthia_one.google_connector_runtime import AccessTokenProvider, GoogleConnectorError
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 
 
 def utc_now() -> datetime:
@@ -44,12 +45,11 @@ class MemoryOAuthConnectionStore:
         self._values[connection.patient_id] = connection.model_copy(deep=True)
 
 
-class FirestoreOAuthConnectionStore:
+class FirestoreOAuthConnectionStore(LazyFirestoreClient):
     COLLECTION = "healthia_google_oauth_connections"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def load(self, patient_id: str) -> GoogleOAuthConnection | None:
         snapshot = self.client.collection(self.COLLECTION).document(patient_id).get()
