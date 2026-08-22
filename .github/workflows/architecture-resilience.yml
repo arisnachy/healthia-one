@@ -43,20 +43,28 @@ jobs:
         run: |
           python - <<'PY'
           import app.main as main
+          from healthia_one.google_constellation_runtime import _stores
           assert main.service.store.client_initialized is False
           assert main.service.broker.client_initialized is False
           assert main.pairing_manager.backend.client_initialized is False
           assert main.fcm_registration_store.client_initialized is False
+          assert all(store.client_initialized is False for store in _stores(main.settings))
           print('HEALTHIA_IMPORT_WITHOUT_CLOUD_IO_PASS')
           PY
-      - name: Multi-instance deployment contract
+      - name: Multi-instance and TTL deployment contract
         run: |
           python - <<'PY'
           from pathlib import Path
           deploy = Path('deployment/deploy-cloud-demo.ps1').read_text('utf-8')
           assert '"--max-instances", "3"' in deploy
           assert 'estado, pairing y eventos distribuidos' in deploy
-          print('HEALTHIA_MULTI_INSTANCE_DEPLOYMENT_PASS')
+          assert 'gcloud firestore fields ttls update' in deploy
+          assert 'Collection = "healthia_device_pairings"' in deploy
+          assert 'Field = "ttl_at"' in deploy
+          assert 'Collection = "healthia_stream_events"' in deploy
+          assert 'Field = "expires_at"' in deploy
+          assert '--enable-ttl' in deploy
+          print('HEALTHIA_MULTI_INSTANCE_TTL_DEPLOYMENT_PASS')
           PY
       - name: Existing crash recovery contract
         run: |
