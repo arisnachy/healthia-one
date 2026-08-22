@@ -158,10 +158,27 @@ class FirestoreFCMRegistrationStore:
     COLLECTION = "healthia_fcm_registrations"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
+        self.project = project
+        self._firestore = None
+        self._client = None
 
-        self.firestore = firestore
-        self.client = firestore.Client(project=project)
+    @property
+    def firestore(self):
+        if self._firestore is None:
+            from google.cloud import firestore
+
+            self._firestore = firestore
+        return self._firestore
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = self.firestore.Client(project=self.project)
+        return self._client
+
+    @property
+    def client_initialized(self) -> bool:
+        return self._client is not None
 
     def _devices(self, patient_id: str):
         return self.client.collection(self.COLLECTION).document(patient_id).collection("devices")
