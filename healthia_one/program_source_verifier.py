@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from healthia_one.google_ai_transport import build_google_ai_client
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 from healthia_one.opportunity_autopilot import AssistanceProgram, ProgramRequirement, RequiredDocument
 from healthia_one.research_radar import OFFICIAL_RESOURCE_DOMAINS, _extract_json_object, _host_allowed
 
@@ -132,12 +133,11 @@ class JsonProgramVerificationStore:
             temporary.replace(self.path)
 
 
-class FirestoreProgramVerificationStore:
+class FirestoreProgramVerificationStore(LazyFirestoreClient):
     COLLECTION = "healthia_program_verifications"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def _doc(self, patient_id: str, program_id: str):
         return self.client.collection(self.COLLECTION).document(patient_id).collection("programs").document(program_id)
