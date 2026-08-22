@@ -18,6 +18,7 @@ from healthia_one.google_mission_runtime import (
     MissionState,
     OfferedSlot,
 )
+from healthia_one.lazy_google_clients import LazyFirestoreClient
 
 
 def utc_now() -> datetime:
@@ -71,12 +72,11 @@ class MemoryGmailWatchStore:
         self._values[state.patient_id] = state.model_copy(deep=True)
 
 
-class FirestoreGmailWatchStore:
+class FirestoreGmailWatchStore(LazyFirestoreClient):
     COLLECTION = "healthia_gmail_watch_state"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def load(self, patient_id: str) -> GmailWatchState | None:
         snapshot = self.client.collection(self.COLLECTION).document(patient_id).get()
@@ -86,12 +86,11 @@ class FirestoreGmailWatchStore:
         self.client.collection(self.COLLECTION).document(state.patient_id).set(state.model_dump(mode="json"))
 
 
-class FirestoreMissionResolver:
+class FirestoreMissionResolver(LazyFirestoreClient):
     COLLECTION = "healthia_google_missions"
 
     def __init__(self, project: str | None = None) -> None:
-        from google.cloud import firestore
-        self.client = firestore.Client(project=project)
+        self._configure_firestore(project)
 
     def waiting_by_thread(self, patient_id: str, thread_id: str) -> GoogleHealthMission | None:
         query = (
