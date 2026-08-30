@@ -4,10 +4,9 @@ This is the judge-facing source of truth for what HealthIA ONE has actually prov
 
 ## Current Living System candidate
 
-The judge-facing runtime is `https://healthia-one-demo-tkuxk5r6rq-uc.a.run.app/living`.
-It is a public UI backed by an isolated synthetic evaluator namespace; mutation
-requires the private evaluation capability and never grants access to patient
-records.
+The current public judge entry point is `https://healthia-one-judge-1038180719788.us-central1.run.app`.
+The historical `/living` deployment documented below remains evidence lineage, but it is not the current judge entry point.
+The current Judge Mode is a public UI backed by an isolated synthetic evaluator namespace; mutation requires the private evaluation capability and never grants access to patient records.
 
 The authoritative identity for the current submission is not a hand-edited SHA
 in this document. It is the machine-readable evidence published after the build:
